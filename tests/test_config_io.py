@@ -286,7 +286,7 @@ def test_example_configs_load():
         assert len(cfg.device.stack.interfaces) == 0
         assert cfg.device.Lx / cfg.simulation.grid.nx == pytest.approx(1.5625e-9)
         assert cfg.device.Ly / cfg.simulation.grid.ny == pytest.approx(1.5625e-9)
-        assert cfg.device.Lz / cfg.simulation.grid.nz == pytest.approx(0.2e-9)
+        assert cfg.device.Lz / cfg.simulation.grid.nz == pytest.approx(0.1e-9)
         # 缺陷段两个示例同构：高斯能级与界面富集的参数都预置好，改 mode 即可启用
         assert cfg.defects.level.sigma > 0.0
         assert cfg.defects.spatial.enrichment > 1.0

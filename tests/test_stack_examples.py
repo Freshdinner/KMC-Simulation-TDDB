@@ -40,7 +40,7 @@ T2_NM = (0, 2, 4)
 # 退化用例跑的小配置：缺陷来自配置（N=60），只把网格与事件数压下来
 _DEGENERACY_SIM = SimulationConfig(
     voltage=3.0, temperature=298.15, n_events=200, burn_in_fraction=0.2, seed=12345,
-    grid=GridConfig(16, 16, 40),  # hz = 8/40 = 0.2 nm，层厚仍然对齐
+    grid=GridConfig(16, 16, 80),  # hz = 8/80 = 0.1 nm，层厚仍然对齐
 )
 
 

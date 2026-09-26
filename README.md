@@ -224,7 +224,7 @@ simulation:
   n_events: 20000
   burn_in_fraction: 0.2
   seed: 12345                 # 只在没有 ensemble 段时生效
-  grid: {nx: 32, ny: 32, nz: 40}   # hx = Lx/nx，格点数必须跟着器件尺寸走
+  grid: {nx: 32, ny: 32, nz: 80}   # hx = Lx/nx，格点数必须跟着器件尺寸走
 
 sweep:                          # 整段省略则用默认范围
   voltage_V:     {start: 1.0, stop: 4.0, step: 0.2}    # 默认 I-V：16 点
@@ -266,8 +266,8 @@ interfaces:             # 数量 = 层数−1（三层 → 两个界面），按
 改层厚时有两条硬约束，违反会在构造泊松求解器时直接报错：
 
 - **每层 `thickness_nm` 必须是 hz = Lz/nz 的整数倍**（变 κ 泊松要求界面落在网格节点上）。
-  默认 nz=40、Lz=8 nm，hz = 0.2 nm，所以 4/0/4、3/2/3、2/4/2 这几组都对齐；t₂ 取奇数时
-  t₁=t₃=3.5、2.5 nm 对不上，所以系列只取偶数 t₂。选层厚前先确认能被 hz 整除
+  默认 nz=80、Lz=8 nm，hz = 0.1 nm，所以 4/0/4、3/2/3、2/4/2 这几组都对齐。
+  选层厚前先确认能被 hz 整除
 - **改总厚 Lz 时 `grid.nz` 要跟着改**——`hz = Lz/nz` 由厚度和格点个数推出，固定 nz 改
   总厚会改变 hz 和 CIC 自作用势（∝ 1/h），测到的就成了网格假象（见"几个约定"与
   `docs/physics_model.md`）

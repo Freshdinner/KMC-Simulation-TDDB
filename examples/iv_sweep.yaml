@@ -59,10 +59,10 @@ simulation:
   burn_in_fraction: 0.2
   seed: 12345             # 有 ensemble 段时被随机抽取的种子逐个覆盖，仅作占位
   grid:
-    # 格点数跟随器件尺寸，保持 hx = hy = 1.5625 nm、hz = 0.2 nm
+    # 格点数跟随器件尺寸，保持 hx = hy = 1.5625 nm、hz = 0.1 nm
     nx: 32
     ny: 32
-    nz: 40
+    nz: 80
 
 sweep:
   voltage_V:

@@ -7,6 +7,15 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **z 向网格加密：hz 从 0.2 nm 改为 0.1 nm（nz 从 40 改为 80）**（改 `examples/` 下全部 6 份配置的
+  `grid.nz`，同步 `docs/physics_model.md`"已确认"一节的默认网格、README 的配置示例与层厚约束
+  说明）。按用户要求执行。层厚现在只需是 0.1 nm 的整数倍，上一条里"t₂ 取奇数对不上网格"的
+  限制不再成立（系列仍保持 {0,2,4}）；`stack_t2_2nm_custom.yaml` 的 2.5/2/3.5 nm 现在已对齐，
+  可以直接运行。CIC 自作用势 ∝ 1/h 会随 hz 变化，但 KMC 引擎按静电耦合矩阵对角元整项扣除，
+  不需要额外处理。机时方面，单实现静电预计算从 0.24 s 增加到 0.50 s，每个事件的耗时在噪声
+  范围内不变（2000 事件实测）。无 R 编号。`pytest tests/ -v` 215 passed（在只含本次改动的
+  暂存区快照上运行；工作区里 `stack_t2_2nm.yaml` 另有未提交的用户改动，未纳入本次提交）。
+
 - **默认器件总厚改为 8 nm、网格 nz=40（hz=0.2 nm）；t₂ 系列同步改为总厚 8 nm、t₂ ∈ {0,2,4} nm**
   （改 `examples/single_run.yaml`、`iv_sweep.yaml`、`stack_t2_0nm.yaml`；`stack_t2_2nm.yaml`
   改为 3/2/3 nm，缺陷与扫描参数回到系列口径；`stack_t2_3nm.yaml` 改名为 `stack_t2_4nm.yaml`，

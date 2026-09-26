@@ -9,9 +9,8 @@
 # （io 拒绝 0 厚层，所以这里写成只含一个 layer，而不是 thickness_nm: 0）。
 # 器件与缺陷参数与 examples/single_run.yaml 完全一致。
 #
-# 层厚必须是 hz = Lz/nz = 8/40 = 0.2 nm 的整数倍（变 κ 泊松要求界面落在
-# 网格节点上，ADR-011）：4/0/4、3/2/3、2/4/2 三组都对齐。t₂ 取奇数（1、3 nm）
-# 时 t₁=t₃=3.5、2.5 nm 对不上 0.2 nm 网格，所以系列只取偶数 t₂。
+# 层厚必须是 hz = Lz/nz = 8/80 = 0.1 nm 的整数倍（变 κ 泊松要求界面落在
+# 网格节点上，ADR-011）：4/0/4、3/2/3、2/4/2 三组都对齐。
 
 materials:
   ZrO2:
@@ -65,10 +64,10 @@ simulation:
   burn_in_fraction: 0.2
   seed: 12345             # 有 ensemble 段时被随机抽取的种子逐个覆盖
   grid:
-    # hz = 8/40 = 0.2 nm，层厚必须是它的整数倍；hx = hy = 1.5625 nm
+    # hz = 8/80 = 0.1 nm，层厚必须是它的整数倍；hx = hy = 1.5625 nm
     nx: 32
     ny: 32
-    nz: 40
+    nz: 80
 
 sweep:
   voltage_V:
