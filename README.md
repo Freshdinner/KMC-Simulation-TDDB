@@ -13,13 +13,12 @@
 ## 环境
 
 - Python 3.8
-- numpy ≤ 1.24.x、scipy ≤ 1.10.x（1.25 / 1.11 起不再支持 3.8，`pyproject.toml`
-  里锁了上界，不要让依赖自动升级）
-- 其余：matplotlib、typer、PyYAML；测试用 pytest
+- numpy ≤ 1.24.x、scipy ≤ 1.10.x、pytest ≤ 8.3.x（1.25 / 1.11 / 8.4 起不再支持
+  3.8，`pyproject.toml` 里锁了上界，不要让依赖自动升级）
+- 其余：matplotlib、typer、PyYAML；pytest 作为基础依赖一并安装
 
 ```bash
-pip install -e .          # 在 Python 3.8 环境下
-pip install -e ".[test]"  # 附带 pytest
+pip install -e .          # 在 Python 3.8 环境下，含 pytest
 ```
 
 > **在更新的解释器上开发时**：`pyproject.toml` 的版本上界是按 3.8 锁的，如果本机

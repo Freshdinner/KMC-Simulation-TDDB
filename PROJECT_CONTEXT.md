@@ -24,7 +24,8 @@
   及以下（1.11 起不再支持 3.8）——写进 pyproject.toml 的版本约束里，不要
   让依赖自动升级到不兼容版本
 - 依赖用 pyproject.toml 管理
-- 核心库：numpy, scipy, matplotlib；CLI 用 typer；测试用 pytest
+- 核心库：numpy, scipy, matplotlib；CLI 用 typer；测试用 pytest（列在基础
+  依赖里，固定在 8.3.x 及以下，8.4 起不再支持 3.8）
 
 ## 单位约定
 - 内部计算全部用 SI 单位（J, m, K, C, s）

@@ -7,6 +7,16 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **pytest 从可选依赖 `[test]` 移入基础依赖，锁 `pytest>=7.0,<8.4`**（改 `pyproject.toml`；
+  同步 `README.md` 环境一节与 `PROJECT_CONTEXT.md`）。原先 `pip install -e .` 不装 pytest，
+  项目 `.venv` 里一直没有（review 2026-09-15 记录过"未能执行"），"合并前必须跑通
+  `pytest tests/ -v`"这条要求在项目环境里落不了地。上界同 numpy/scipy 的理由：pytest 8.4
+  起不再支持 Python 3.8。无 R 编号；项目 `.venv`（Python 3.8.4、numpy 1.24.4、pytest 8.3.5）
+  下 `pytest tests/ -v` 224 passed、1 failed，失败为已知的
+  `test_stack_examples.py::test_t2_series_differs_only_in_layer_structure`（见下条），与本次无关；
+  上条在 numpy 2.x 下失败的 `test_expected_depth_density_conserves_count_and_tracks_profile`
+  在项目环境下通过。
+
 - **验证状态新增"批次间电流一致"硬门槛（批次均值法）**（改 `kmc.py`：新增纯函数
   `batch_relative_error`，主循环把测量窗口按事件数等分成 10 批、分批累计缺陷通量与时长，
   `_validate_result` 在相对标准误 > 0.05 时判未通过；新增 `tests/test_current_validation.py`
