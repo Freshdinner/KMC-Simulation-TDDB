@@ -44,7 +44,8 @@ class BandProfile:
         """
         if np.size(self.interface_z) == 0:
             return self.z, self.E_C, self.E_V
-        idx = np.searchsorted(self.z, self.interface_z, side="left")
+        # 界面节点坐标可能比层边界小 1 ulp，减容差保证下侧值插在界面节点之前
+        idx = np.searchsorted(self.z, self.interface_z - 1e-9 * self.z[-1], side="left")
         return (
             np.insert(self.z, idx, self.interface_z),
             np.insert(self.E_C, idx, self.E_C_lower),

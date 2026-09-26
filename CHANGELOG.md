@@ -7,6 +7,25 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **默认器件总厚改为 8 nm、网格 nz=40（hz=0.2 nm）；t₂ 系列同步改为总厚 8 nm、t₂ ∈ {0,2,4} nm**
+  （改 `examples/single_run.yaml`、`iv_sweep.yaml`、`stack_t2_0nm.yaml`；`stack_t2_2nm.yaml`
+  改为 3/2/3 nm，缺陷与扫描参数回到系列口径；`stack_t2_3nm.yaml` 改名为 `stack_t2_4nm.yaml`，
+  层厚 2/4/2 nm；删除 `stack_t2_1nm.yaml`）。按用户要求调整默认器件。t₂ 取奇数时
+  t₁=t₃=3.5、2.5 nm 不是 0.2 nm 的整数倍，界面对不上网格（ADR-011），所以系列只取偶数 t₂。
+  原 `stack_t2_2nm.yaml` 的自定义版本（1e19 cm⁻³、富集因子 10、阴极侧 2.5 nm 不对称等）
+  另存为 `examples/stack_t2_2nm_custom.yaml`，不纳入系列测试。它的层厚目前不是 0.2 nm 的
+  整数倍，运行前需要调整。缺陷数从 68 变为 60。
+  **顺带修复界面节点归属的浮点舍入问题**（改 `config.py::DielectricStack.layer_indices_of` /
+  `layer_index_of`、`bands.py::BandProfile.stepped`）：在 8 nm/nz=40 网格下，界面节点坐标
+  k·hz 会比层厚累加值小 1 ulp（例如 3e-9 < 3.0000000000000004e-9），节点因此落回下侧层。
+  `kmc._band_on_path_steps` 默认界面节点取的是上侧 E_C，会把 ΔE_C 叠加两次，导致分段 WKB 的
+  势垒剖面出错。修法是比较时加 Lz·1e-9 的容差。9 nm/nz=36 下舍入方向碰巧有利，所以一直没有
+  暴露，结果不受影响。涉及 ADR-011/012、`docs/physics_model.md` 的器件默认值（已同步），
+  README 同步命令、配置示例与 t₂ 系列说明；9 nm 下实测的耗时与系综标准误数字保留，并注明
+  是 9 nm 实测。新增 `test_stack_physics.py::test_interface_nodes_belong_to_upper_layer_despite_rounding`
+  （修复前 2/4/2 用例失败）。`pytest tests/ -v` 215 passed。原先失败的
+  `test_t2_series_differs_only_in_layer_structure` 随 t₂=2 配置回到系列口径后通过。
+
 - **I-V / I-T 曲线图只画总电流，不再画 TAT 与 PF 分机制曲线**（改 `visualization.py`：
   `plot_iv_curves` / `plot_it_curves` 去掉 `by_mechanism` 参数，删除 `_Component`、
   `_components`、`_COMPONENT_STYLES`、`_log_safe` 与两段式图例；行序仍按 Blues 色系深浅区分。

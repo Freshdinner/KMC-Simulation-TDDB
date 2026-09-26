@@ -51,10 +51,10 @@ python -m kmc_leakage sweep --config examples/iv_sweep.yaml --out results.csv --
 python -m kmc_leakage plot --config examples/single_run.yaml --kind defects --out defects.png
 python -m kmc_leakage plot --config examples/single_run.yaml --kind bands   --out bands.png
 
-# ZrO₂/Al₂O₃/ZrO₂ 叠层的 t₂ 结构对照：固定总厚 9 nm，t₂ ∈ {0,1,2,3} nm 各一份
-# 配置，逐份跑同一条 sweep 命令再比对四个 CSV（t₂=0 是单层退化点）
-python -m kmc_leakage sweep --config examples/stack_t2_1nm.yaml --out t2_1nm.csv
-python -m kmc_leakage plot  --config examples/stack_t2_1nm.yaml --kind bands --out t2_1nm_bands.png
+# ZrO₂/Al₂O₃/ZrO₂ 叠层的 t₂ 结构对照：固定总厚 8 nm，t₂ ∈ {0,2,4} nm 各一份
+# 配置，逐份跑同一条 sweep 命令再比对三个 CSV（t₂=0 是单层退化点）
+python -m kmc_leakage sweep --config examples/stack_t2_2nm.yaml --out t2_2nm.csv
+python -m kmc_leakage plot  --config examples/stack_t2_2nm.yaml --kind bands --out t2_2nm_bands.png
 ```
 
 `run` 的输出长这样（示例配置带 `ensemble` 段，逐个实现跑完再取算术平均）：
@@ -78,7 +78,8 @@ U = 2.00 V, T = 25.0 °C   系综：5 个缺陷实现
 去掉 `ensemble` 段就退回单实现的详细报告——多出按缺陷位置的分解与三个估计量的
 交叉检验，那些量是单次实现才有的。
 
-**耗时参考**（默认 50×50×9 nm、3×10¹⁸ cm⁻³ → 68 个缺陷，`grid` = 32/32/36）：
+**耗时参考**（在改成 8 nm 默认之前的 50×50×9 nm 器件上实测：3×10¹⁸ cm⁻³ → 68 个缺陷，
+`grid` = 32/32/36；现默认 50×50×8 nm 为 60 个缺陷，未重测）：
 每个 KMC 事件约 1.9 ms，外加每个实现 0.2 s 的静电预计算（N+1 次泊松求解）。
 
 | 跑什么 | 单个实现 | 5 个实现 |
@@ -190,7 +191,7 @@ materials:                     # 材料库，按名字典；layers 按名引用
 
 layers:                        # 有序介质层；Lz = 各层 thickness_nm 之和
   - material: reference-preset  # 引用 materials 里的材料名
-    thickness_nm: 9.0
+    thickness_nm: 8.0
     defects:                   # 该层体缺陷（单层退化：只有这一层）
       concentration_cm3: 3.0e18
       charge_state_Z: 1.0
@@ -223,7 +224,7 @@ simulation:
   n_events: 20000
   burn_in_fraction: 0.2
   seed: 12345                 # 只在没有 ensemble 段时生效
-  grid: {nx: 32, ny: 32, nz: 36}   # hx = Lx/nx，格点数必须跟着器件尺寸走
+  grid: {nx: 32, ny: 32, nz: 40}   # hx = Lx/nx，格点数必须跟着器件尺寸走
 
 sweep:                          # 整段省略则用默认范围
   voltage_V:     {start: 1.0, stop: 4.0, step: 0.2}    # 默认 I-V：16 点
@@ -239,20 +240,20 @@ ensemble:                       # 整段省略则退化为 simulation.seed 一�
 **总厚 Lz = 各层 thickness_nm 之和**（不再有独立的 `device.Lz_nm`）。要换叠层结构，
 改的就是层数、每层引用哪种材料、以及各层的 `thickness_nm`。
 
-`examples/stack_t2_{0,1,2,3}nm.yaml` 是一组现成的 ZrO₂/Al₂O₃/ZrO₂ 结构对照：**固定
-总厚 9 nm，中间 Al₂O₃ 层厚 t₂ ∈ {0,1,2,3} nm，两侧 ZrO₂ 对称补偿 t₁=t₃=(9−t₂)/2**。
-四份配置只有层结构不同，材料、缺陷、器件、扫描范围、系综全部相同，所以比对四份结果
+`examples/stack_t2_{0,2,4}nm.yaml` 是一组现成的 ZrO₂/Al₂O₃/ZrO₂ 结构对照：**固定
+总厚 8 nm，中间 Al₂O₃ 层厚 t₂ ∈ {0,2,4} nm，两侧 ZrO₂ 对称补偿 t₁=t₃=(8−t₂)/2**。
+三份配置只有层结构不同，材料、缺陷、器件、扫描范围、系综全部相同，所以比对三份结果
 就是在看 t₂ 这一个变量的影响。要自己设别的层厚，照这组改 `thickness_nm` 即可：
 
 ```yaml
 layers:
-  - material: ZrO2      # 阴极侧 ZrO₂，t₁ = (9−t₂)/2
-    thickness_nm: 3.5
+  - material: ZrO2      # 阴极侧 ZrO₂，t₁ = (8−t₂)/2
+    thickness_nm: 3.0
     defects: {...}      # 体缺陷挂在层上
   - material: Al2O3     # 阻挡层：不配 defects 段即体相无缺陷
     thickness_nm: 2.0
   - material: ZrO2      # 阳极侧 ZrO₂，t₃ = t₁
-    thickness_nm: 3.5
+    thickness_nm: 3.0
     defects: {...}
 
 interfaces:             # 数量 = 层数−1（三层 → 两个界面），按 z 从小到大
@@ -265,14 +266,14 @@ interfaces:             # 数量 = 层数−1（三层 → 两个界面），按
 改层厚时有两条硬约束，违反会在构造泊松求解器时直接报错：
 
 - **每层 `thickness_nm` 必须是 hz = Lz/nz 的整数倍**（变 κ 泊松要求界面落在网格节点上）。
-  默认 nz=36、Lz=9 nm，hz = 0.25 nm，所以 4.5/0/4.5、4/1/4、3.5/2/3.5、3/3/3 这几组
-  都对齐。选层厚前先确认能被 hz 整除
+  默认 nz=40、Lz=8 nm，hz = 0.2 nm，所以 4/0/4、3/2/3、2/4/2 这几组都对齐；t₂ 取奇数时
+  t₁=t₃=3.5、2.5 nm 对不上，所以系列只取偶数 t₂。选层厚前先确认能被 hz 整除
 - **改总厚 Lz 时 `grid.nz` 要跟着改**——`hz = Lz/nz` 由厚度和格点个数推出，固定 nz 改
   总厚会改变 hz 和 CIC 自作用势（∝ 1/h），测到的就成了网格假象（见"几个约定"与
   `docs/physics_model.md`）
 
 **单层退化**：`layers` 只写一个元素、不写 `interfaces` 段即可（`io` 拒绝 0 厚层，
-所以 t₂=0 那份是写成单层 9 nm ZrO₂，而不是留一个 `thickness_nm: 0` 的层）。单层时
+所以 t₂=0 那份是写成单层 8 nm ZrO₂，而不是留一个 `thickness_nm: 0` 的层）。单层时
 所有叠层专属逻辑（分段 WKB、界面台阶、界面缺陷）逐位退回单层口径。
 
 设好每份配置后，下面三件事都指向同一个 `--config`，换配置就是换叠层：
@@ -284,10 +285,9 @@ interfaces:             # 数量 = 层数−1（三层 → 两个界面），按
 # 单份：写 CSV，同时落 t2_2nm_iv.png（横轴电压）与 t2_2nm_it.png（横轴温度）
 python -m kmc_leakage sweep --config examples/stack_t2_2nm.yaml --out t2_2nm.csv --plot-prefix t2_2nm
 
-# 四份逐个跑同一条命令，再比对四个 CSV / 四组曲线看 t₂ 的影响（t2_0nm 是单层退化点）
+# 三份逐个跑同一条命令，再比对三个 CSV / 三组曲线看 t₂ 的影响（t2_0nm 是单层退化点）
 python -m kmc_leakage sweep --config examples/stack_t2_0nm.yaml --out t2_0nm.csv --plot-prefix t2_0nm
-python -m kmc_leakage sweep --config examples/stack_t2_1nm.yaml --out t2_1nm.csv --plot-prefix t2_1nm
-python -m kmc_leakage sweep --config examples/stack_t2_3nm.yaml --out t2_3nm.csv --plot-prefix t2_3nm
+python -m kmc_leakage sweep --config examples/stack_t2_4nm.yaml --out t2_4nm.csv --plot-prefix t2_4nm
 ```
 
 曲线图上只画总电流（深浅分行），不画误差棒；机制分解看 CSV，标准误走
@@ -474,8 +474,8 @@ ensemble:
 而单实现机时正好差 3.8 倍。
 
 内存上原先扩面积也是 O(N²)（`pair_distances` 的 (N,N,3) 与静电耦合的 (3,N,N) 都是
-稠密矩阵），陷阱间跃迁改成近邻表之后只剩静电耦合一项。**当前默认取 50×50×9 nm
-（N=68），涨落靠种子压**；要用更大的侧向尺寸，先看静电耦合矩阵的 24N² 字节
+稠密矩阵），陷阱间跃迁改成近邻表之后只剩静电耦合一项。**当前默认取 50×50×8 nm
+（N=60），涨落靠种子压**；要用更大的侧向尺寸，先看静电耦合矩阵的 24N² 字节
 （N=2700 时 222 MiB）够不够，那是现在唯一的 O(N²) 内存项。
 
 实测的实现间散布（16 个实现，n_events=2000，参考预设，Lz=8 nm）：
@@ -486,7 +486,7 @@ ensemble:
 | 100 × 100 nm | 240 | 16.9% | 0.080 | 27.9% | 0.138 |
 
 缺陷数翻 4 倍把 σ 砍掉约一半，正是 σ ∝ 1/√N；两种尺寸的均值在各自标准误内一致
-（2 V 差 8%，4 V 差 0.8%），侧向尺寸没有引入系统性偏移。当前默认的 50×50×9 nm
+（2 V 差 8%，4 V 差 0.8%），侧向尺寸没有引入系统性偏移。改成 8 nm 默认之前的 50×50×9 nm
 （N=68，20000 事件）实测 M=5 给出 2 V 下 11.7% 的相对标准误、σ(log₁₀J)=0.128。
 
 ### 几个约定
@@ -623,7 +623,7 @@ pytest tests/ -v      # 218 个测试，约 72 s
 | `test_stack_rates.py` | **分段 WKB + 按材料取速率参数 + 分段 G_ab + 截断重推**（Phase 4）：WKB 逐段 m_di、界面双值台阶不插斜坡、R1 势垒顶落在 Al₂O₃、分段 G_ab 同质退回闭式且跨层用 Al₂O₃ 低质量（路径传播质量，F08）、ZAZ 里 R7 正反细致平衡（F02 事件能量差不变）、截断半径按最慢材料推（ADR-013/F05）、R8 逐缺陷取 ε_opt/ν、**三层同材料 + ΔE_C=0 的速率表（rtol ≤ 1e-12）与轨迹（rtol ≤ 1e-9）退回单层**（ADR-018） |
 | `test_pf_collection.py` | **F03 PF 收集概率**（Phase 5）：带偏压 Al₂O₃ 势垒（矩形/梯形/三角）的 WKB 与解析闭式一致、0≤P_A≤1 且随偏压单调、阻挡层检测、**位置感知**（阴极侧穿层 P_A<1、阳极侧立即收集 P_A=1，界面缺陷按宿主侧判定）、反偏收集电极翻转、R8_eff=P_A·R8 折进事件表、单层 P_A≡1 逐位退回 |
 | `test_current_validation.py` | **F04 三估计量与验证 + 分层归因**（Phase 5）：全局电荷守恒 (I_C−I_A)Δt=q·ΔN_inside、正向充分点判通过验证 / 零偏压判未通过验证 / R1-only 判通过、by_layer 单层与 ZAZ（层0/层2/界面0/界面1 各一栏）闭合 Σ=TAT+PF、贯通到 sweep/ensemble/CSV、块 4 确认 R8_eff 沿用界面单侧场 |
-| `test_stack_examples.py` | **t₂ 结构对照配置与退化用例全套**（Phase 6，ADR-006/018/019）：四份示例固定总厚 9 nm、ZrO₂ 两侧对称、层厚对齐到 hz 整数倍、除层结构外逐项相同；t₂>0 有阻挡层 + Al₂O₃ 体内为空 + 两界面各 25 个界面缺陷；**t₂=0 与单层基准 `single_run.yaml` 同一器件且数值逐位退回**（速率表 / R1 / φ / E_C(z) rtol ≤ 1e-12，同种子轨迹 rtol ≤ 1e-9）、三层同材料 + ΔE_C=0 的场量退回单层 |
+| `test_stack_examples.py` | **t₂ 结构对照配置与退化用例全套**（Phase 6，ADR-006/018/019）：三份示例（t₂ ∈ {0,2,4} nm）固定总厚 8 nm、ZrO₂ 两侧对称、层厚对齐到 hz 整数倍、除层结构外逐项相同；t₂>0 有阻挡层 + Al₂O₃ 体内为空 + 两界面各 25 个界面缺陷；**t₂=0 与单层基准 `single_run.yaml` 同一器件且数值逐位退回**（速率表 / R1 / φ / E_C(z) rtol ≤ 1e-12，同种子轨迹 rtol ≤ 1e-9）、三层同材料 + ΔE_C=0 的场量退回单层 |
 | `test_master_equation.py` | **条件通量的独立主方程基准**（Phase 5，ADR-021 F04）：复现 review 4 态反例（条件通量比真实稳态低 25%）、单陷阱下条件通量 = 真实稳态、π 是合法分布且 πQ=0、长 KMC 轨迹的条件通量收敛到主方程期望 |
 | `test_numerics_convergence.py` | `kmc.py` 里各积分点数的收敛性依据 |
 | `test_ensemble.py` | 平均确实是**算术平均**、每个种子确实换了一整套缺陷、M=1 退化为普通单点仿真、标准误 = σ/√M、**R1 分量在系综里零散布**（按构造与缺陷无关）、CSV 保留各实现原始值 |
@@ -641,7 +641,7 @@ pytest tests/ -v      # 218 个测试，约 72 s
 - **PF 发射没有反向通道**（导带→陷阱俘获未在机制表里），零场下 R8 = ν·exp(−E_D/k_BT)
   仍非零，留下一个伪零偏压电流。实测比工作点电流小约 14 个数量级，已写进测试钉住量级
 - **系综平均已落地**（`ensemble.py`）：`ensemble.count` 指定实现个数 M，每次运行随机
-  抽取 M 个种子、各跑一次独立实现，取算术平均。当前默认的 50×50×9 nm（N=68）实测 M=5 在 2 V 给出 11.7% 的相对标准误；
+  抽取 M 个种子、各跑一次独立实现，取算术平均。改成 8 nm 默认之前的 50×50×9 nm（N=68）实测 M=5 在 2 V 给出 11.7% 的相对标准误；
   100×100 nm（N=240）下实现间 σ/mean = 16.9%（2 V）至 27.9%（4 V），M=5 对应
   8%–13%。侧向尺寸每翻 4 倍把 σ 砍掉约一半（σ ∝ 1/√N），均值在标准误内不变
 - **陷阱间跃迁按近邻表存储**：R6/R7 的几何因子在同质材料里 e 折长度只有 r_D/2（参考
@@ -682,8 +682,8 @@ src/kmc_leakage/
   ensemble.py          多个缺陷实现的算术平均 + CSV 输出
   visualization.py     缺陷分布、能带结构、I-V / I-T 曲线（只返回 Figure）
   __main__.py          命令行入口
-tests/                 218 个测试
-examples/              single_run.yaml、iv_sweep.yaml、stack_t2_{0,1,2,3}nm.yaml（t₂ 结构对照）
+tests/                 215 个测试
+examples/              single_run.yaml、iv_sweep.yaml、stack_t2_{0,2,4}nm.yaml（t₂ 结构对照）、stack_t2_2nm_custom.yaml（不对称自定义算例）
 docs/                  物理规格（改 rates/ 或 electrostatics.py 前先读）
 ```
 

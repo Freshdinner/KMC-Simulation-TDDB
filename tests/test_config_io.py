@@ -276,17 +276,17 @@ def test_example_configs_load():
         assert cfg.device.Lz > 0.0
         assert cfg.defects.concentration > 0.0
         assert cfg.sweep is not None
-        # 两个示例都按系综平均配置：5 个实现，50×50×9 nm 且格点与尺寸配套
+        # 两个示例都按系综平均配置：5 个实现，50×50×8 nm 且格点与尺寸配套
         assert len(cfg.seeds) == 5
         assert cfg.device.Lx == pytest.approx(50e-9)
         assert cfg.device.Ly == pytest.approx(50e-9)
-        assert cfg.device.Lz == pytest.approx(9e-9)
+        assert cfg.device.Lz == pytest.approx(8e-9)
         # 单层退化：只含一个 layer、无内部界面
         assert len(cfg.device.stack.layers) == 1
         assert len(cfg.device.stack.interfaces) == 0
         assert cfg.device.Lx / cfg.simulation.grid.nx == pytest.approx(1.5625e-9)
         assert cfg.device.Ly / cfg.simulation.grid.ny == pytest.approx(1.5625e-9)
-        assert cfg.device.Lz / cfg.simulation.grid.nz == pytest.approx(0.25e-9)
+        assert cfg.device.Lz / cfg.simulation.grid.nz == pytest.approx(0.2e-9)
         # 缺陷段两个示例同构：高斯能级与界面富集的参数都预置好，改 mode 即可启用
         assert cfg.defects.level.sigma > 0.0
         assert cfg.defects.spatial.enrichment > 1.0

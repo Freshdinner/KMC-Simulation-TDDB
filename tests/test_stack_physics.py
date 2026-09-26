@@ -228,6 +228,20 @@ def test_conduction_band_has_real_steps():
     assert np.interp(5.5e-9, z, E_C) == pytest.approx(1.74)
 
 
+@pytest.mark.parametrize("t1, t2", [(3e-9, 2e-9), (2e-9, 4e-9)])
+def test_interface_nodes_belong_to_upper_layer_despite_rounding(t1, t2):
+    """界面节点归上侧层，不受 k·hz 与层厚累加值 1 ulp 舍入差的影响。
+
+    8 nm / nz=40 下 z₁₅ = 3e-9 而层边界累加成 3.0000000000000004e-9，不加容差时
+    界面节点落回下侧层，KMC 的界面台阶插值（`_band_on_path_steps`）会把 ΔE_C 叠两次。
+    """
+    device = _zaz_device(t1=t1, t2=t2, t3=t1)
+    solver = PoissonSolver(device, GridConfig(8, 8, 40))
+    nodes = np.rint(device.stack.interface_positions / solver.hz).astype(int)
+    assert list(device.stack.layer_indices_of(solver.z[nodes])) == [1, 2]
+    assert [device.stack.layer_index_of(z) for z in solver.z[nodes]] == [1, 2]
+
+
 def test_explicit_delta_ec_override_enters_band_and_vbi():
     """显式 ΔE_C 覆盖进入 B_ℓ 累积与 V_bi 关系（不只画在能带图上，review §4.1）。"""
     device = _zaz_device(interfaces=(Interface(delta_Ec=1.0 * EV), Interface(delta_Ec=-0.4 * EV)))

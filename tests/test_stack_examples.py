@@ -1,8 +1,8 @@
 """t₂ 结构对照配置与退化用例全套（Phase 6 = ADR-006/018/019）。
 
 这一批盯住 Phase 6 的配置交付与退化判据：
-- 四份 t₂ 示例配置（ADR-006/019）：固定总厚 9 nm、ZrO₂ 两侧对称、层厚对齐到
-  hz 的整数倍，四份之间只有层结构不同；
+- 三份 t₂ 示例配置（ADR-006/019）：固定总厚 8 nm、ZrO₂ 两侧对称、层厚对齐到
+  hz 的整数倍，三份之间只有层结构不同；
 - t₂=0 是单层退化点：无 Al₂O₃、无 ZA 界面、界面缺陷同时关闭，且与单层基准
   配置 `examples/single_run.yaml` **逐位相同**（ADR-006 的"兼作回归校验"）；
 - 退化用例两级判据（ADR-018）：确定性量（φ、E_C(z)、固定组态下完整速率表、
@@ -35,12 +35,12 @@ from kmc_leakage.kmc import MECHANISMS, KMCSimulation, _blocking_layer_indices
 EV = constants.electron_volt
 M_E = constants.electron_mass
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-T2_NM = (0, 1, 2, 3)
+T2_NM = (0, 2, 4)
 
-# 退化用例跑的小配置：缺陷来自配置（N=68），只把网格与事件数压下来
+# 退化用例跑的小配置：缺陷来自配置（N=60），只把网格与事件数压下来
 _DEGENERACY_SIM = SimulationConfig(
     voltage=3.0, temperature=298.15, n_events=200, burn_in_fraction=0.2, seed=12345,
-    grid=GridConfig(16, 16, 36),  # hz = 9/36 = 0.25 nm，层厚仍然对齐
+    grid=GridConfig(16, 16, 40),  # hz = 8/40 = 0.2 nm，层厚仍然对齐
 )
 
 
@@ -58,30 +58,30 @@ def _with_small_sim(config):
 
 
 # --------------------------------------------------------------------------
-# 四份 t₂ 配置的结构（ADR-006/019）
+# 三份 t₂ 配置的结构（ADR-006/019）
 # --------------------------------------------------------------------------
 def test_t2_series_fixes_total_thickness_and_keeps_zro2_symmetric(configs):
-    """固定总厚 9 nm、ZrO₂ 两侧对称 t₁=t₃=(9−t₂)/2，层厚都是 hz 的整数倍。"""
+    """固定总厚 8 nm、ZrO₂ 两侧对称 t₁=t₃=(8−t₂)/2，层厚都是 hz 的整数倍。"""
     for t2, config in configs.items():
         layers = config.device.stack.layers
         thickness_nm = np.array([layer.thickness for layer in layers]) / constants.nano
-        assert config.device.Lz == pytest.approx(9e-9)
-        assert thickness_nm.sum() == pytest.approx(9.0)
+        assert config.device.Lz == pytest.approx(8e-9)
+        assert thickness_nm.sum() == pytest.approx(8.0)
         if t2 == 0:
             assert thickness_nm.size == 1  # 单层退化：没有 Al₂O₃ 也就没有第二、三层
         else:
             assert thickness_nm.size == 3
             assert thickness_nm[1] == pytest.approx(float(t2))
             assert thickness_nm[0] == pytest.approx(thickness_nm[2])  # 两侧对称
-            assert thickness_nm[0] == pytest.approx((9.0 - t2) / 2.0)
+            assert thickness_nm[0] == pytest.approx((8.0 - t2) / 2.0)
         # 层厚是 hz 的整数倍（变 κ 泊松要求界面落在网格节点上，ADR-011）
-        hz_nm = 9.0 / config.simulation.grid.nz
+        hz_nm = 8.0 / config.simulation.grid.nz
         assert np.allclose(thickness_nm / hz_nm, np.rint(thickness_nm / hz_nm))
         PoissonSolver(config.device, config.simulation.grid)  # 界面对齐校验不报错
 
 
 def test_t2_series_differs_only_in_layer_structure(configs):
-    """四份配置除层结构外完全一致：材料、体缺陷、器件、电极、扫描范围、事件数。"""
+    """三份配置除层结构外完全一致：材料、体缺陷、器件、电极、扫描范围、事件数。"""
     reference = configs[0]
     for config in configs.values():
         assert config.device.stack.materials["ZrO2"] == reference.device.stack.materials["ZrO2"]
@@ -110,7 +110,7 @@ def test_t2_zero_turns_off_al2o3_interfaces_and_interface_defects(configs):
     assert np.all(defects.layer_id == 0)
 
 
-@pytest.mark.parametrize("t2", [1, 2, 3])
+@pytest.mark.parametrize("t2", [2, 4])
 def test_positive_t2_has_blocking_layer_empty_al2o3_and_interface_defects(configs, t2):
     """t₂>0：ZrO₂/Al₂O₃/ZrO₂ + 两个对称界面，Al₂O₃ 体内无缺陷（ADR-005/008）。"""
     device = configs[t2].device
@@ -200,22 +200,22 @@ def test_uniform_three_layer_potential_and_band_edge_match_single_layer():
     """三层同材料 + ΔE_C=0 的 φ(z) 与 E_C(z) 逐位退回单层（rtol ≤ 1e-12）。
 
     同一用例的固定组态速率表与同种子轨迹见 `test_stack_rates.py`；这里补的是
-    ADR-018 确定性量里的场量一栏，用 t₂=1 那份配置的材料与器件参数。
+    ADR-018 确定性量里的场量一栏，用 t₂=2 那份配置的材料与器件参数。
     """
-    reference = _load(1).device
+    reference = _load(2).device
     zro2 = reference.stack.materials["ZrO2"]
     electrode = reference.cathode
     grid = _DEGENERACY_SIM.grid
 
     single = DeviceConfig(
         reference.Lx, reference.Ly, electrode, electrode,
-        DielectricStack.single(zro2, 9e-9), barrier_height=reference.barrier_height,
+        DielectricStack.single(zro2, 8e-9), barrier_height=reference.barrier_height,
     )
     layered = DeviceConfig(
         reference.Lx, reference.Ly, electrode, electrode,
         DielectricStack(
             materials={"ZrO2": zro2},
-            layers=(Layer("L0", "ZrO2", 4e-9), Layer("L1", "ZrO2", 1e-9), Layer("L2", "ZrO2", 4e-9)),
+            layers=(Layer("L0", "ZrO2", 3e-9), Layer("L1", "ZrO2", 2e-9), Layer("L2", "ZrO2", 3e-9)),
             interfaces=(Interface(delta_Ec=0.0), Interface(delta_Ec=0.0)),
         ),
         barrier_height=reference.barrier_height,

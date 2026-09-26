@@ -60,7 +60,7 @@ def defects():
     return generate_defects(make_device(), np.random.default_rng(0))
 
 
-def _stack_scene(t2=1, voltage=3.0):
+def _stack_scene(t2=2, voltage=3.0):
     """一份 t₂ 叠层示例的（器件, 缺陷, 能带剖面, 缺陷能级）——只算数据、不出图。"""
     config = load_config(str(ROOT / "examples" / "stack_t2_{}nm.yaml".format(t2)))
     grid = dataclasses.replace(config.simulation.grid, nx=8, ny=8)  # hz 不变，界面仍对齐
@@ -206,7 +206,7 @@ def test_stack_band_diagram_draws_true_steps_not_ramps():
     assert x[below] == x[above]
     assert y[above] - y[below] == pytest.approx(delta_Ec, rel=1e-9)
     # 两侧的值分别是各自层的导带底 B_ℓ − eφ(z₁)，不是插值出来的居中值
-    node = int(np.searchsorted(profile.z, device.stack.interface_positions[0]))
+    node = int(np.rint(device.stack.interface_positions[0] / (profile.z[1] - profile.z[0])))
     assert y[below] == pytest.approx(profile.E_C_lower[0] / EV, rel=1e-12)
     assert y[above] == pytest.approx(profile.E_C[node] / EV, rel=1e-12)
     # 价带顶同样有台阶（带隙也跳变），界面位置另画一条参考线

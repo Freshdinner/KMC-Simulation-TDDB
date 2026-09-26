@@ -4,7 +4,7 @@
 # ensemble 两段。扫描范围如果整段省略，默认就是 docs/physics_model.md 里的
 # I-V 1–4 V 步长 0.2 V（16 点）与 I-T 0–125 °C 步长 25 °C（6 点）。
 #
-# 50×50×9 nm、3×10^18 cm^-3 → 68 个缺陷。要完整曲线时把 sweep 段整个删掉
+# 50×50×8 nm、3×10^18 cm^-3 → 60 个缺陷。要完整曲线时把 sweep 段整个删掉
 # （走默认范围）或按需改写，实现个数由 ensemble.count 控制。
 
 materials:
@@ -20,11 +20,11 @@ materials:
     huang_rhys_S: 1.0
     attempt_frequency_s: 1.0e13
 
-# 单层退化：layers 只含一个元素，Lz = 9 nm。缺陷段与 single_run.yaml 完全同构：
+# 单层退化：layers 只含一个元素，Lz = 8 nm。缺陷段与 single_run.yaml 完全同构：
 # 能级和空间分布的模式在扫描里一样生效，一个实现的缺陷按此生成一次、扫遍所有工作点。
 layers:
   - material: reference-preset
-    thickness_nm: 9.0
+    thickness_nm: 8.0
     defects:
       concentration_cm3: 3.0e18
       charge_state_Z: 1.0          # 施主型，未占据时 +1，不可双占据
@@ -59,10 +59,10 @@ simulation:
   burn_in_fraction: 0.2
   seed: 12345             # 有 ensemble 段时被随机抽取的种子逐个覆盖，仅作占位
   grid:
-    # 格点数跟随器件尺寸，保持 hx = hy = 1.5625 nm、hz = 0.25 nm
+    # 格点数跟随器件尺寸，保持 hx = hy = 1.5625 nm、hz = 0.2 nm
     nx: 32
     ny: 32
-    nz: 36
+    nz: 40
 
 sweep:
   voltage_V:

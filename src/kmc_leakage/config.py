@@ -206,17 +206,20 @@ class DielectricStack:
 
     def layer_index_of(self, z: float) -> int:
         """z 落在第几层（半开区间 [edge_i, edge_{i+1})，两端夹住）。"""
-        idx = int(np.searchsorted(self.layer_edges, z, side="right") - 1)
-        return min(max(idx, 0), len(self.layers) - 1)
+        return int(self.layer_indices_of(np.asarray([z]))[0])
 
     def layer_indices_of(self, z: np.ndarray) -> np.ndarray:
         """向量化的 `layer_index_of`：逐个 z 落在第几层（半开区间，两端夹住）。
 
         变 κ 泊松（按单元取 κ）、分段能带（按位置取 B_ℓ / Eg）共用同一套按位置
         查询，不再各写一份。界面对齐到网格节点后，单元中心不会落在界面上，归属
-        唯一。
+        唯一。界面节点按约定归上侧层；节点坐标 k·hz 与层厚累加值可能差 1 ulp
+        （如 8 nm/nz=40 下 z₁₅ = 3e-9 < 3.0000000000000004e-9），所以比较前加
+        Lz·1e-9 的容差，避免界面节点因舍入落回下侧层。
         """
-        idx = np.searchsorted(self.layer_edges, np.asarray(z, dtype=float), side="right") - 1
+        edges = self.layer_edges
+        z = np.asarray(z, dtype=float) + 1e-9 * edges[-1]
+        idx = np.searchsorted(edges, z, side="right") - 1
         return np.clip(idx, 0, len(self.layers) - 1)
 
     def kappa_at(self, z: np.ndarray) -> np.ndarray:

@@ -38,7 +38,7 @@ EV = constants.electron_volt
 M_E = constants.electron_mass
 Q = constants.elementary_charge
 
-# 参考预设 + 默认器件（与 examples/single_run.yaml 同口径），复核报告即用此配置
+# 参考预设 + 复核报告当时的默认器件（9 nm 单层），复核报告即用此配置
 _DIELECTRIC = DielectricMaterial(
     name="reference-preset",
     kappa=38.0,

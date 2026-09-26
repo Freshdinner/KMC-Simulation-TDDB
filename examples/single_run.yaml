@@ -7,7 +7,7 @@
 # 给 thickness_nm、配 defects）+ 可选 interfaces（数量 = 层数-1）。Lz 由层厚求和。
 # 本例是单层退化：layers 只含一个元素，回到单层 ZrO₂。
 #
-# 50×50×9 nm、3×10^18 cm^-3 → 68 个缺陷；5 个实现取算术平均。
+# 50×50×8 nm、3×10^18 cm^-3 → 60 个缺陷；5 个实现取算术平均。
 
 materials:
   reference-preset:
@@ -23,9 +23,9 @@ materials:
     attempt_frequency_s: 1.0e13  # ν0，R6/R7/R8 共用
 
 layers:
-  # 单层退化：只含一个元素。Lz = 各层 thickness_nm 求和 = 9 nm
+  # 单层退化：只含一个元素。Lz = 各层 thickness_nm 求和 = 8 nm
   - material: reference-preset    # 引用 materials 里的材料名
-    thickness_nm: 9.0
+    thickness_nm: 8.0
     defects:
       concentration_cm3: 3.0e18
       charge_state_Z: 1.0          # 施主型，未占据时 +1，不可双占据
@@ -63,10 +63,10 @@ simulation:
   grid:
     # hx = Lx/nx，格点数必须跟着器件尺寸走：固定 nx 改 Lx 会改变横向网格步长
     # 与 CIC 自作用势（∝ 1/h），测到的就成了网格假象。这里
-    # hx = hy = 1.5625 nm、hz = 0.25 nm
+    # hx = hy = 1.5625 nm、hz = 0.2 nm
     nx: 32
     ny: 32
-    nz: 36
+    nz: 40
 
 # 系综平均：每个种子跑一次独立的缺陷实现，最后取算术平均。
 # count = 实现个数 M，每次运行随机抽取 count 个互异种子；抽到的种子随 CLI
