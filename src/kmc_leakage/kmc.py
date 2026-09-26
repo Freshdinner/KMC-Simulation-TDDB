@@ -102,6 +102,10 @@ _MIN_MEASURED_EVENTS = 100  # 测量窗口至少要有这么多事件才算采�
 _MEAN_FIELD_TOL = 0.1  # KMC 占据与条件稳态 p̂ 的平均偏差上限（局部稳态/条件通量成立的前提）
 _COUNTS_SUFFICIENT = 50  # 阳极事件数达到此值，净计数交叉校验才纳入硬门槛（否则统计为空、跳过）
 _COUNTS_REL_TOL = 0.5  # 计数够用时 |J_counts+R1 − J_cond| 相对 |J_cond| 的上限（计数本身仍噪声大）
+_N_BATCHES = 10  # 测量窗口按事件数等分的批次数，批次均值法估计电流的统计误差
+# 批次均值法给出的电流相对标准误上限。实测正常点 ≤0.001（条件稳态估计量很平滑），
+# 跃迁供给通路偶尔被填充造成的尖峰为 0.19–0.26（t2_2nm 叠层、seed 243366264）
+_BATCH_REL_TOL = 0.05
 
 # 事件块：每块长度 N，块内索引即缺陷编号。前四块是俘获，后五块是逃逸/发射。
 _B_R2C, _B_R2A, _B_R4C, _B_R4A, _B_R3C, _B_R3A, _B_R5C, _B_R5A, _B_R8 = range(9)
@@ -169,6 +173,27 @@ def by_layer_attribution(defects: DefectEnsemble, defect_flux: np.ndarray) -> Di
     return out
 
 
+def batch_relative_error(charge: np.ndarray, duration: np.ndarray, current: float) -> float:
+    """批次均值法估计的电流相对标准误。
+
+    `charge[k]`、`duration[k]` 是第 k 个批次内缺陷通量的时间积分与批次时长，
+    电流取比值估计 ΣQ/ΣT，标准误按比值估计量的方差公式
+    SE = √[K/(K−1)·Σ(Q_k − Ī·T_k)²] / ΣT，Ī = ΣQ/ΣT，再除以总电流 `current`
+    （含 R1，确定性部分不贡献误差）。批次间一致时误差小；某个低频事件（如一条
+    跃迁供给通路偶尔被填充）只落在一两个批次里并主导电流时误差大。有效批次
+    不足 2 个或总电流为 0 时返回 0（无从估计）。
+    """
+    used = duration > 0.0
+    q, t = charge[used], duration[used]
+    k = q.size
+    if k < 2 or current == 0.0:
+        return 0.0
+    total_t = t.sum()
+    mean_current = q.sum() / total_t
+    se = np.sqrt(k / (k - 1) * np.sum((q - mean_current * t) ** 2)) / total_t
+    return float(se / abs(current))
+
+
 def _validate_result(
     n_defects: int,
     forward: bool,
@@ -178,14 +203,16 @@ def _validate_result(
     n_anode_events: int,
     current: float,
     current_counts_total: float,
+    batch_rel_error: float,
 ) -> Tuple[bool, Tuple[str, ...]]:
     """按 ADR-021 F04 判定单点是否通过验证，返回 (validated, 原因列表)。
 
     硬门槛用可靠可算的判据：正向收集（U+V_bi>0）、测量窗口充分、KMC 占据与条件
-    稳态 p̂ 接近（局部稳态/条件通量成立的前提）、机制分量闭合（构造保证）。净事件
-    计数交叉校验 ΔJ=J_cond−(J_counts+R1) 噪声大，只有阳极事件数足够（统计非空）时
-    才纳入门槛，否则作诊断记录、不判失败（Q1 口径）。全器件无缺陷（R1-only）没有
-    统计估计量要验证、R1 是确定性解，直接通过。
+    稳态 p̂ 接近（局部稳态/条件通量成立的前提）、批次均值法给出的电流相对标准误
+    不超限（测量窗口内电流统计收敛）、机制分量闭合（构造保证）。净事件计数交叉
+    校验 ΔJ=J_cond−(J_counts+R1) 噪声大，只有阳极事件数足够（统计非空）时才纳入
+    门槛，否则作诊断记录、不判失败（Q1 口径）。全器件无缺陷（R1-only）没有统计
+    估计量要验证、R1 是确定性解，直接通过。
     """
     if n_defects == 0:
         return True, ()
@@ -196,6 +223,8 @@ def _validate_result(
         notes.append("测量窗口不足（events={}）".format(measured_events))
     if occ_mean_abs_dev >= _MEAN_FIELD_TOL:
         notes.append("占据与条件稳态 p̂ 偏差过大（{:.3f}≥{}）".format(occ_mean_abs_dev, _MEAN_FIELD_TOL))
+    if batch_rel_error > _BATCH_REL_TOL:
+        notes.append("批次间电流不一致，相对标准误 {:.2f}>{}".format(batch_rel_error, _BATCH_REL_TOL))
     if n_anode_events >= _COUNTS_SUFFICIENT and current != 0.0:
         rel = abs(current_counts_total - current) / abs(current)
         if rel > _COUNTS_REL_TOL:
@@ -750,6 +779,10 @@ class KMCSimulation:
         n_inside_start = 0  # 测量开始时器件内电子数（初始全空 = 0）
         measuring = burn_in <= 0
         mask = np.empty((_N_BLOCKS, n))
+        # 批次均值法：测量窗口按事件数等分成 _N_BATCHES 段，分段累计通量与时长
+        batch_events = max(1, -(-(sim.n_events - burn_in) // _N_BATCHES))
+        batch_charge = np.zeros(_N_BATCHES)
+        batch_time = np.zeros(_N_BATCHES)
 
         for step in range(sim.n_events):
             blocks, hop = self._rates(occ)
@@ -779,6 +812,9 @@ class KMCSimulation:
                 mech_flux["tat"] += tat.sum() * dt
                 mech_flux["pf"] += pf.sum() * dt
                 direct_flux += (_ANODE_SIGN[:, None] * event_blocks).sum() * dt
+                batch = min(measured_events // batch_events, _N_BATCHES - 1)
+                batch_charge[batch] += (tat.sum() + pf.sum()) * dt
+                batch_time[batch] += dt
 
             # 选择并执行事件
             flat = np.concatenate([event_blocks.ravel(), event_hop])
@@ -828,9 +864,12 @@ class KMCSimulation:
         current_counts = float(counts * scale)
         current_counts_total = current_counts + r1_tunnel + r1_thermionic
         delta_n_inside = int(occ.sum()) - n_inside_start
+        batch_rel_error = batch_relative_error(
+            constants.elementary_charge * batch_charge, batch_time, current
+        )
         validated, validation_notes = _validate_result(
             n, self._pf_forward, elapsed, measured_events, occ_dev,
-            n_anode_events, current, current_counts_total,
+            n_anode_events, current, current_counts_total, batch_rel_error,
         )
         return SimulationResult(
             voltage=sim.voltage,

@@ -7,6 +7,29 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **验证状态新增"批次间电流一致"硬门槛（批次均值法）**（改 `kmc.py`：新增纯函数
+  `batch_relative_error`，主循环把测量窗口按事件数等分成 10 批、分批累计缺陷通量与时长，
+  `_validate_result` 在相对标准误 > 0.05 时判未通过；新增 `tests/test_current_validation.py`
+  里 4 个测试；同步 `README.md` 与 `docs/glossary.md` 的验证判据描述）。
+
+  **问题**：`t2_2nm` 叠层 seed 243366264 的 I-V 扫描在 2.0/3.3/3.7/4.0 V 出现电流尖峰
+  （如 3.3 V 为 5.6e-4 A/cm²，相邻点约 2e-5），却全部判"通过验证"。诊断表明尖峰来自
+  采样不足：阴极→缺陷 65→97→界面缺陷 24→阳极这条陷阱间跃迁供给通路，只在 97 被占据时
+  导电，而 4000 事件的测量窗口只有约 0.3 μs（事件预算被与电流无关的快速电极往返占掉），
+  窗口里该通路被填充 0 次或 1 次——0 次时漏算，1 次时高估。固定缺陷、只换轨迹随机数，
+  3.3 V 在 5.7e-4 与 2.3e-5 之间跳变。条件稳态估计量只解析平均了单个陷阱自身的占据，
+  跃迁供给依赖 KMC 采到的邻居占据；原判据里占据偏差取全部缺陷的平均值、一两个缺陷偏离
+  被平均掉，净计数校验又因阳极事件不足 50 次被跳过，所以拦不住。
+
+  **标定**：正常点（叠层与单层默认配置各若干）相对标准误 ≤ 0.001，尖峰点 0.19–0.26，
+  阈值取 0.05。**局限**：窗口里从未被填充的情况没有迹象，这一条查不出来（那些点偏低），
+  需要延长物理时长或减少无关快事件，另行处理。无 R 编号（统计/估计量，ADR-021 F04）；
+  `pytest tests/ -v`（Python 3.14 环境）223 passed、2 failed，两个失败在本次改动前即存在、
+  与本次无关：`test_defects.py::test_expected_depth_density_conserves_count_and_tracks_profile`
+  （该环境 numpy 为 2.x，与项目要求的 ≤1.24 不符）、`test_stack_examples.py::
+  test_t2_series_differs_only_in_layer_structure`（`examples/stack_t2_2nm.yaml` 的缺陷浓度与
+  空间分布与 t₂ 系列其余三份不一致）。
+
 - **缺陷深度直方图取消解析轮廓叠画与图例**（改 `visualization.plot_defect_distribution`：
   删掉 `expected_depth_density` 叠画的黑色虚线、柱子的 `sampled (M=)` 标签与 `axes.legend`，
   只留柱状图；相应更新单层与汇总两个测试的断言）。图面回归纯直方图。`expected_depth_density`

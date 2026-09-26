@@ -2,6 +2,7 @@
 
 - 全局电荷守恒 (I_C−I_A)Δt = q·ΔN_inside（构造精确，捕获计数 bug）；
 - 验证状态：正向且窗口/局部稳态达标 → validated；非正向收集 → 未通过验证；
+  批次均值法相对标准误超限（批次间电流不一致）→ 未通过验证；
 - 分层归因闭合 Σ_{ℓ,Γ} I_{ℓ,Γ} = I_TAT+I_PF，I_total = Σ I_{ℓ,Γ} + I_R1；
 - 界面缺陷单独且只计一次、R1 单列；贯通到 sweep / ensemble / CSV；
 - 块 4：R8_eff 沿用 Phase 3 的界面单侧场（不另取场）。
@@ -15,7 +16,13 @@ from scipy import constants
 
 from conftest import make_config, make_defect_config, make_device
 from kmc_leakage.config import GridConfig, SweepConfig
-from kmc_leakage.kmc import MECHANISMS, KMCSimulation
+from kmc_leakage.kmc import (
+    _BATCH_REL_TOL,
+    MECHANISMS,
+    KMCSimulation,
+    _validate_result,
+    batch_relative_error,
+)
 from test_pf_collection import _zaz_device, _zaz_ensemble
 
 # ZAZ 4/1/4 nm 的界面在 4、5 nm，需 hz=0.25 nm（nz=36）才对齐到节点（ADR-011）
@@ -60,6 +67,46 @@ def test_zero_bias_is_not_validated():
     result = _run(voltage=0.0, n_events=800, seed=7)
     assert result.validated is False
     assert any("正向收集" in note for note in result.validation_notes)
+
+
+def test_batch_relative_error_is_zero_for_steady_current():
+    """各批次电流相同（Q_k ∝ T_k）→ 批次均值法相对标准误为 0。"""
+    duration = np.array([1.0, 2.0, 0.5, 3.0])
+    charge = 7.0 * duration
+    assert batch_relative_error(charge, duration, 7.0) == pytest.approx(0.0, abs=1e-15)
+
+
+def test_batch_relative_error_flags_single_batch_spike():
+    """一个批次的电流是其余的 100 倍（低频通路只在一段里被填充）→ 相对标准误大。
+
+    10 个等时长批次，9 个电流为 1、1 个为 100：Ī = 10.9，
+    SE = √[10/9·(9·9.9² + 89.1²)]/10 = 9.9，相对标准误 = 9.9/10.9 ≈ 0.908。
+    """
+    duration = np.ones(10)
+    charge = np.ones(10)
+    charge[4] = 100.0
+    mean = charge.sum() / duration.sum()
+    rel = batch_relative_error(charge, duration, mean)
+    assert rel == pytest.approx(9.9 / 10.9, rel=1e-12)
+    assert rel > _BATCH_REL_TOL
+
+
+def test_batch_relative_error_needs_two_batches():
+    """有效批次（时长 > 0）不足 2 个时无从估计，返回 0。"""
+    assert batch_relative_error(np.array([3.0, 0.0]), np.array([1.0, 0.0]), 3.0) == 0.0
+
+
+def test_batch_inconsistency_fails_validation():
+    """批次相对标准误超过上限 → 未通过验证并给出原因；其余判据达标时仅此一条。"""
+    args = dict(
+        n_defects=10, forward=True, elapsed=1e-6, measured_events=3200,
+        occ_mean_abs_dev=0.0, n_anode_events=0, current=1e-15, current_counts_total=0.0,
+    )
+    ok, notes = _validate_result(batch_rel_error=0.5 * _BATCH_REL_TOL, **args)
+    assert ok is True and notes == ()
+    ok, notes = _validate_result(batch_rel_error=2.0 * _BATCH_REL_TOL, **args)
+    assert ok is False
+    assert len(notes) == 1 and "批次间电流不一致" in notes[0]
 
 
 def test_r1_only_device_is_validated():
