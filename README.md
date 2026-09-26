@@ -44,7 +44,7 @@ python -m kmc_leakage sweep --config examples/iv_sweep.yaml --out results.csv
 
 # 扫描顺手出曲线图：<前缀>_iv.png（横轴电压，一条曲线一个温度）
 #                  <前缀>_it.png（横轴温度，一条曲线一个电压）
-# 两张图上都同时画出总电流、TAT 与 PF 三族曲线
+# 两张图上都只画总电流
 python -m kmc_leakage sweep --config examples/iv_sweep.yaml --out results.csv --plot-prefix scan
 
 # 出图：缺陷分布 / 能带结构
@@ -290,7 +290,7 @@ python -m kmc_leakage sweep --config examples/stack_t2_1nm.yaml --out t2_1nm.csv
 python -m kmc_leakage sweep --config examples/stack_t2_3nm.yaml --out t2_3nm.csv --plot-prefix t2_3nm
 ```
 
-曲线图上同时画总电流、TAT、PF 三族（颜色分机制、深浅分行），不画误差棒；标准误走
+曲线图上只画总电流（深浅分行），不画误差棒；机制分解看 CSV，标准误走
 CSV 的 `J_sem_A_cm2` 一列。
 
 **② 缺陷分布图**——三维散点（按能级着色）+ 沿 z 的数密度直方图；叠层时两幅都叠画
@@ -627,7 +627,7 @@ pytest tests/ -v      # 218 个测试，约 72 s
 | `test_master_equation.py` | **条件通量的独立主方程基准**（Phase 5，ADR-021 F04）：复现 review 4 态反例（条件通量比真实稳态低 25%）、单陷阱下条件通量 = 真实稳态、π 是合法分布且 πQ=0、长 KMC 轨迹的条件通量收敛到主方程期望 |
 | `test_numerics_convergence.py` | `kmc.py` 里各积分点数的收敛性依据 |
 | `test_ensemble.py` | 平均确实是**算术平均**、每个种子确实换了一整套缺陷、M=1 退化为普通单点仿真、标准误 = σ/√M、**R1 分量在系综里零散布**（按构造与缺陷无关）、CSV 保留各实现原始值 |
-| `test_sweep.py` / `test_visualization.py` | 扫描形状与单调性、缺陷实现复用、**高斯能级与界面富集在扫描里同样生效**（扫描用的缺陷与按同一配置同一种子直接生成的逐位相同）、CSV 往返、`--plot-prefix` 落两张图；绘图只返回 Figure、不落盘不 show，I-V/I-T 曲线的数据换算（A/cm²、°C）、**不带误差棒**、**TAT 与 PF 画在同一张图上**（分量数值、I-T 侧跟着转置、每个机制一个色系、行序逐行变深且最浅档仍可见、色系不随行数漂、两段式图例、R1 两项不上图、分量为 0 时留 nan 断点）；**叠层叠画**（ADR-016 ①②）：缺陷图两幅都叠层边界与界面位置、界面缺陷单独标色且柱子只统计体缺陷，能带图界面双值台阶（高度 = ΔE_C、两侧值就是各层 B_ℓ−eφ），单层两幅图逐位退回 |
+| `test_sweep.py` / `test_visualization.py` | 扫描形状与单调性、缺陷实现复用、**高斯能级与界面富集在扫描里同样生效**（扫描用的缺陷与按同一配置同一种子直接生成的逐位相同）、CSV 往返、`--plot-prefix` 落两张图；绘图只返回 Figure、不落盘不 show，I-V/I-T 曲线的数据换算（A/cm²、°C）、**不带误差棒**、**只画总电流**（不接受机制分解参数、图例无机制条目、行序在蓝色系里逐行变深且最浅档仍可见）；**叠层叠画**（ADR-016 ①②）：缺陷图两幅都叠层边界与界面位置、界面缺陷单独标色且柱子只统计体缺陷，能带图界面双值台阶（高度 = ΔE_C、两侧值就是各层 B_ℓ−eφ），单层两幅图逐位退回 |
 
 ---
 
@@ -697,12 +697,11 @@ docs/                  物理规格（改 rates/ 或 electrostatics.py 前先读
 |---|---|---|
 | `plot_defect_distribution` | 三维缺陷散点（按能级着色，画代表实现）+ 沿 z 的数密度直方图（汇总系综 M 个实现除以 M，横轴只画可采样窗口）；叠层时两幅都叠画层边界与界面位置、界面缺陷单独标色 | `DeviceConfig`、`DefectEnsemble`、可选 `realizations`（系综 M 个实现） |
 | `plot_band_diagram` | 沿 z 的能带剖面（不画镜像力圆化）；叠层时导带/价带在界面处画真实台阶（界面双值，不连斜坡） | `BandProfile`，可选缺陷 z 与能级 |
-| `plot_iv_curves` | I-V：横轴电压，一条曲线一个温度；总电流 + TAT + PF | 电压 [V]、温度 [K]、J 矩阵 [A/m²]，可选机制分解 |
-| `plot_it_curves` | I-T：横轴温度（°C），一条曲线一个电压；总电流 + TAT + PF | 同上（同一份数据按电压切） |
+| `plot_iv_curves` | I-V：横轴电压，一条曲线一个温度；只画总电流 | 电压 [V]、温度 [K]、J 矩阵 [A/m²] |
+| `plot_it_curves` | I-T：横轴温度（°C），一条曲线一个电压；只画总电流 | 同上（同一份数据按电压切） |
 
 两条曲线函数吃的就是 `SweepResult` / `EnsembleSweepResult` 的
-`voltages`、`temperatures`、`current_density`、`by_mechanism`（矩阵形状
-`(温度点数, 电压点数)`）：
+`voltages`、`temperatures`、`current_density`（矩阵形状 `(温度点数, 电压点数)`）：
 
 ```python
 from kmc_leakage.ensemble import run_ensemble_sweep
@@ -713,7 +712,6 @@ figure = plot_iv_curves(
     result.voltages,
     result.temperatures,
     result.current_density,
-    result.by_mechanism,      # 同一张图上多出 TAT 与 PF 两族曲线
 )
 figure.savefig("iv.png", dpi=150)
 ```
@@ -723,23 +721,13 @@ figure.savefig("iv.png", dpi=150)
 - 纵轴取对数（漏电流跨几个数量级）
 - **不画误差棒**。系综的标准误 σ/√M 仍然照算，只是走数字而不走图：CLI 摘要里逐点
   打印，CSV 有 `J_sem_A_cm2` 一列，`EnsembleSweepResult.current_density_sem` 也还在
-- 第四个参数传机制分解时，**TAT 与 PF 画进同一张图**。两个维度分到两个通道：
-  **颜色分机制**（总电流蓝、TAT 橙、PF 绿），**深浅分行**（同一色系里浅 = 低温/低压、
-  深 = 高温/高压）。线型与标记同样跟机制走（总电流实线圆点、TAT 虚线方点、PF 点线
-  三角），是冗余的第二通道——色觉障碍与黑白打印下也能认出机制。图例相应分成
-  "温度/电压"与"total / TAT / PF"两段。分量在某工作点上可以恰好是 0（统计窗口内没有
-  该类事件），对数轴画不出，就换成 nan 在曲线上留一个断点
-- 配色取三条单色系（`Blues` / `Oranges` / `Greens`）在 0.50–0.95 区间上按行数等分。
-  下限 0.50 是为了最浅那档在白底上仍有 2.1:1 以上的对比度；上限 0.95 是为了最深那档
-  不糊成黑色。三个色系中点（`#2777b8` / `#de4e05` / `#29914a`，即只画一行时用的颜色，
-  也是图例代理的颜色）作为分类色通过了色觉障碍分离度检验（全配对最差
-  ΔE 8.4 deutan、常视 20.4，白底对比度均 ≥ 3:1）；每条色系的 5 档深浅也通过了
-  单色渐变检验（亮度单调、相邻 ΔL ≥ 0.06）。**行数超过 5 档时深浅分辨会变紧**
+- **只画总电流**，不画分机制的电流曲线；四项机制分解看 CSV
+- 行（温度 / 电压）用 `Blues` 色系在 0.50–0.95 区间上按行数等分的深浅区分（浅 =
+  低温/低压、深 = 高温/高压）。下限 0.50 是为了最浅那档在白底上仍有 2.1:1 以上的
+  对比度；上限 0.95 是为了最深那档不糊成黑色。**行数超过 5 档时深浅分辨会变紧**
   ——默认 I-T 图是 11 个电压点，靠图例与"越深越高"的单调方向读，相邻两档本身分不开
-- **只画 TAT 与 PF**，不画 R1 的 `direct_fn` / `thermionic`：那两项比总电流小 7–15 个
-  数量级，画进同一张对数图会把纵轴拉开十几个十倍程。四项完整分解看 CSV
 - CLI 里 `sweep --plot-prefix scan` 就是这两个函数加一次 `savefig`，落
-  `scan_iv.png` 与 `scan_it.png`，机制分解一律带上
+  `scan_iv.png` 与 `scan_it.png`
 - **叠层的两处叠画**（ADR-016，函数签名不变，靠传进来的 `DeviceConfig` /
   `BandProfile` 自己认出层结构）：缺陷图在三维盒子上把每个界面画成一圈虚线、
   在深度剖面上画层边界竖线与层材料名，**界面缺陷单独标色**（深色菱形 + 界面处

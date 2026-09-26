@@ -41,25 +41,11 @@ INTERFACE_DEFECT_COLOR = "#c00000"
 VOLTAGES = np.array([2.0, 3.0, 4.0])
 TEMPERATURES = np.array([298.15, 398.15])
 DENSITY = np.array([[1e-4, 3e-4, 9e-4], [2e-3, 6e-3, 1.8e-2]])  # [A/m^2]
-# 配套的机制分解：TAT 与 PF 撑起总电流，R1 两项小到可以忽略（实测差 7 个数量级以上）
-BY_MECHANISM = {
-    "direct_fn": 1e-9 * DENSITY,
-    "thermionic": 1e-11 * DENSITY,
-    "tat": 0.7 * DENSITY,
-    "pf": 0.3 * DENSITY,
-}
-# 每行画 3 条曲线，顺序是总电流、TAT、PF
-CURVES_PER_ROW = 3
 
 
 def _scatters(axes):
     """散点（scatter）产生 PathCollection，hlines 产生 LineCollection，这里只数前者。"""
     return sum(isinstance(item, PathCollection) for item in axes.collections)
-
-
-def _row_lines(axes, row):
-    """一行（一个温度或一个电压）的三条曲线：总电流、TAT、PF。"""
-    return axes.lines[row * CURVES_PER_ROW : (row + 1) * CURVES_PER_ROW]
 
 
 def _luminance(line):
@@ -256,8 +242,8 @@ def test_plot_functions_do_not_touch_the_filesystem(tmp_path, monkeypatch, defec
     monkeypatch.setattr(plt, "show", fail)
     monkeypatch.setattr(Figure, "savefig", fail)
     plot_defect_distribution(make_device(), defects)
-    plot_iv_curves(VOLTAGES, TEMPERATURES, DENSITY, BY_MECHANISM)
-    plot_it_curves(VOLTAGES, TEMPERATURES, DENSITY, BY_MECHANISM)
+    plot_iv_curves(VOLTAGES, TEMPERATURES, DENSITY)
+    plot_it_curves(VOLTAGES, TEMPERATURES, DENSITY)
     assert not list(tmp_path.iterdir())
 
 
@@ -289,10 +275,9 @@ def test_it_curves_slice_the_same_data_by_voltage():
 
 
 @pytest.mark.parametrize("plot", [plot_iv_curves, plot_it_curves])
-@pytest.mark.parametrize("mechanism", [None, BY_MECHANISM])
-def test_curves_carry_no_error_bars(plot, mechanism):
+def test_curves_carry_no_error_bars(plot):
     """不画误差棒：曲线是纯 Line2D，没有 ErrorbarContainer、没有竖线段集合。"""
-    axes = plot(VOLTAGES, TEMPERATURES, DENSITY, mechanism).axes[0]
+    axes = plot(VOLTAGES, TEMPERATURES, DENSITY).axes[0]
     assert axes.lines  # 曲线本身还在
     assert len(axes.containers) == 0  # errorbar 会留下 ErrorbarContainer
     assert len(axes.collections) == 0  # 误差棒的竖线与端帽是 LineCollection
@@ -305,110 +290,24 @@ def test_curves_work_with_a_single_point():
         assert len(figure.axes[0].lines) == 1
 
 
-def test_iv_curves_show_tat_and_pf_on_the_same_axes():
-    """PF 与 TAT 画在总电流那张图上：一张 axes，每个温度 3 条曲线。"""
-    figure = plot_iv_curves(VOLTAGES, TEMPERATURES, DENSITY, BY_MECHANISM)
-    assert len(figure.axes) == 1
-    axes = figure.axes[0]
-    assert len(axes.lines) == TEMPERATURES.size * CURVES_PER_ROW
-    for it in range(TEMPERATURES.size):
-        total, tat, pf = _row_lines(axes, it)
-        assert np.allclose(total.get_ydata(), DENSITY[it] * PER_CM2, rtol=1e-12)
-        assert np.allclose(tat.get_ydata(), 0.7 * DENSITY[it] * PER_CM2, rtol=1e-12)
-        assert np.allclose(pf.get_ydata(), 0.3 * DENSITY[it] * PER_CM2, rtol=1e-12)
-
-
-def test_it_curves_transpose_the_mechanism_components_too():
-    """I-T 按电压切，机制分量矩阵必须跟着转置——漏掉 .T 这条就翻。"""
-    axes = plot_it_curves(VOLTAGES, TEMPERATURES, DENSITY, BY_MECHANISM).axes[0]
-    assert len(axes.lines) == VOLTAGES.size * CURVES_PER_ROW
-    for iv in range(VOLTAGES.size):
-        total, tat, pf = _row_lines(axes, iv)
-        assert np.allclose(total.get_xdata(), TEMPERATURES - constants.zero_Celsius)
-        assert np.allclose(total.get_ydata(), DENSITY[:, iv] * PER_CM2, rtol=1e-12)
-        assert np.allclose(tat.get_ydata(), 0.7 * DENSITY[:, iv] * PER_CM2, rtol=1e-12)
-        assert np.allclose(pf.get_ydata(), 0.3 * DENSITY[:, iv] * PER_CM2, rtol=1e-12)
-
-
-@pytest.mark.parametrize(
-    "plot, rows",
-    [
-        (plot_iv_curves, ["T = 25.0 °C", "T = 125.0 °C"]),
-        (plot_it_curves, ["U = 2.00 V", "U = 3.00 V", "U = 4.00 V"]),
-    ],
-)
-def test_mechanism_legend_splits_rows_from_components(plot, rows):
-    """图例分两段：先温度/电压（深浅），再 total/TAT/PF（色系 + 线型）。"""
-    axes = plot(VOLTAGES, TEMPERATURES, DENSITY, BY_MECHANISM).axes[0]
+@pytest.mark.parametrize("plot", [plot_iv_curves, plot_it_curves])
+def test_curves_show_only_the_total_current(plot):
+    """只画总电流：每行（温度 / 电压）一条曲线，图例里没有分机制条目。"""
+    with pytest.raises(TypeError):
+        plot(VOLTAGES, TEMPERATURES, DENSITY, {"tat": DENSITY, "pf": DENSITY})
+    axes = plot(VOLTAGES, TEMPERATURES, DENSITY).axes[0]
     labels = [text.get_text() for text in axes.get_legend().get_texts()]
-    assert labels == rows + ["total", "TAT", "PF"]
+    assert len(axes.lines) == len(labels)
+    assert not any(name in label for label in labels for name in ("total", "TAT", "PF"))
 
 
 @pytest.mark.parametrize("plot", [plot_iv_curves, plot_it_curves])
-def test_r1_components_are_left_off_the_curves(plot):
-    """只画 TAT 与 PF：R1 两项比总电流小 7 个数量级以上，会把对数轴拉爆。"""
-    axes = plot(VOLTAGES, TEMPERATURES, DENSITY, BY_MECHANISM).axes[0]
-    drawn = np.concatenate([line.get_ydata() for line in axes.lines])
-    assert np.all(drawn > 1e-4 * DENSITY.min() * PER_CM2)  # R1 量级（1e-9·J）不在图上
-    labels = [text.get_text() for text in axes.get_legend().get_texts()]
-    assert not any("FN" in label or "thermionic" in label for label in labels)
-
-
-@pytest.mark.parametrize("plot", [plot_iv_curves, plot_it_curves])
-def test_zero_component_becomes_a_gap_on_the_log_axis(plot):
-    """统计窗口内没有 PF 事件时分量恰为 0，对数轴画不出——留 nan 断点，
-    总电流曲线不受影响。"""
-    mechanism = dict(BY_MECHANISM, pf=BY_MECHANISM["pf"].copy())
-    mechanism["pf"][0, 0] = 0.0
-    axes = plot(VOLTAGES, TEMPERATURES, DENSITY, mechanism).axes[0]
-    assert sum(np.isnan(line.get_ydata()).sum() for line in axes.lines) == 1
-    for line in axes.lines[::CURVES_PER_ROW]:
-        assert not np.any(np.isnan(line.get_ydata()))
-
-
-@pytest.mark.parametrize("plot", [plot_iv_curves, plot_it_curves])
-def test_each_mechanism_gets_its_own_hue(plot):
-    """总电流、TAT、PF 三者颜色不同：各占一个色系（蓝 / 橙 / 绿）。
-
-    同一行的三条线颜色互不相同，且同一机制在所有行里都留在自己的色系里
-    ——判据取 RGB 三通道里哪个最大，蓝 / 橙 / 绿分别落在 B / R / G 上。
-    """
-    axes = plot(VOLTAGES, TEMPERATURES, DENSITY, BY_MECHANISM).axes[0]
-    n_rows = len(axes.lines) // CURVES_PER_ROW
-    dominant = {0: 2, 1: 0, 2: 1}  # total→蓝(B)、TAT→橙(R)、PF→绿(G)
-    for row in range(n_rows):
-        lines = _row_lines(axes, row)
-        assert len({line.get_color() for line in lines}) == CURVES_PER_ROW
-        for k, line in enumerate(lines):
-            rgb = to_rgb(line.get_color())
-            assert int(np.argmax(rgb)) == dominant[k], (row, k, rgb)
-
-
-@pytest.mark.parametrize("plot", [plot_iv_curves, plot_it_curves])
-def test_rows_are_shaded_light_to_dark_inside_each_hue(plot):
-    """行序（温度 / 电压）改由深浅承担：同一机制内逐行变深，浅 = 低、深 = 高。"""
-    axes = plot(VOLTAGES, TEMPERATURES, DENSITY, BY_MECHANISM).axes[0]
-    n_rows = len(axes.lines) // CURVES_PER_ROW
-    for k in range(CURVES_PER_ROW):
-        shades = [_luminance(axes.lines[row * CURVES_PER_ROW + k]) for row in range(n_rows)]
-        assert np.all(np.diff(shades) < 0.0), shades  # 逐行变暗
-        # 最浅那档在白底上仍看得见（对比度 ≥ 2:1 对应相对亮度 ≤ 0.475）
-        assert shades[0] <= 0.475
-
-
-def test_mechanism_hue_does_not_depend_on_the_row_count():
-    """颜色跟着机制走，不跟着行数/行序漂：少画几个温度点，色系不变。"""
-    full = plot_iv_curves(VOLTAGES, TEMPERATURES, DENSITY, BY_MECHANISM).axes[0]
-    one = plot_iv_curves(
-        VOLTAGES,
-        TEMPERATURES[:1],
-        DENSITY[:1],
-        {name: value[:1] for name, value in BY_MECHANISM.items()},
-    ).axes[0]
-    for k in range(CURVES_PER_ROW):
-        assert np.argmax(to_rgb(full.lines[k].get_color())) == np.argmax(
-            to_rgb(one.lines[k].get_color())
-        )
-    # 单行取色系中点，与图例代理同一档
-    legend_colors = [handle.get_color() for handle in one.get_legend().legend_handles[-3:]]
-    assert [one.lines[k].get_color() for k in range(CURVES_PER_ROW)] == legend_colors
+def test_rows_are_shaded_light_to_dark_in_blue(plot):
+    """行序（温度 / 电压）由 Blues 色系的深浅承担：逐行变深，浅 = 低、深 = 高。"""
+    axes = plot(VOLTAGES, TEMPERATURES, DENSITY).axes[0]
+    for line in axes.lines:
+        assert int(np.argmax(to_rgb(line.get_color()))) == 2  # 蓝通道最大
+    shades = [_luminance(line) for line in axes.lines]
+    assert np.all(np.diff(shades) < 0.0), shades  # 逐行变暗
+    # 最浅那档在白底上仍看得见（对比度 ≥ 2:1 对应相对亮度 ≤ 0.475）
+    assert shades[0] <= 0.475

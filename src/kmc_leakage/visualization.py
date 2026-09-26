@@ -13,14 +13,13 @@ matplotlib 的 `Figure`，内部不调用 `plt.show()`——保存还是显示�
 方框，这里不去改全局 rcParams，也就不依赖任何字体。
 """
 
-from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 from matplotlib.backends.backend_agg import FigureCanvasAgg
-from matplotlib.cm import Blues, Greens, Oranges
+from matplotlib.cm import Blues
 from matplotlib.colors import Colormap
 from matplotlib.figure import Figure
-from matplotlib.lines import Line2D
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  注册 3d 投影
 from scipy import constants
 
@@ -32,17 +31,9 @@ _NM = constants.nano
 _EV = constants.electron_volt
 _PER_CM2 = constants.centi ** 2  # A/m^2 -> A/cm^2
 
-# I-V / I-T 图上画哪几条曲线，以及各自的色系、线型、标记。
-#
-# **颜色分机制**（总电流蓝、TAT 橙、PF 绿），行（I-V 的温度 / I-T 的电压）
-# 取同一色系里的深浅——两个维度分到两个通道上。线型与标记同样跟机制走，
-# 是冗余的第二通道：识别机制不必只靠颜色（色觉障碍、黑白打印下仍可读）。
-#
-# 只画 TAT 与 PF 两个机制分量。R1 的两个分量（直接/FN 隧穿、热电子发射）
-# 比总电流小 7–15 个数量级，画进同一张对数图会把纵轴拉开十几个十倍程，
-# 反而看不清 TAT 与 PF 的相对关系；四项完整分解看 CSV。
-_TOTAL_STYLE = ("total", Blues, "-", "o")
-_COMPONENT_STYLES = (("tat", "TAT", Oranges, "--", "s"), ("pf", "PF", Greens, ":", "^"))
+# I-V / I-T 图只画总电流，行（I-V 的温度 / I-T 的电压）取 Blues 色系里的深浅。
+# 分机制的电流不上图，完整分解看 CSV。
+_TOTAL_CMAP = Blues
 
 # 行序在色系里的取样区间：浅 = 低温/低压，深 = 高温/高压。下限 0.50 是为了
 # 让最浅那档在白底上仍有 2.1:1 以上的对比度（再浅就快看不见了），上限留在
@@ -233,94 +224,37 @@ def plot_band_diagram(
     return figure
 
 
-class _Component(NamedTuple):
-    """总电流之外画在同一张图上的机制分量，行布局与总电流矩阵一致。"""
-
-    label: str
-    cmap: Colormap
-    linestyle: str
-    marker: str
-    rows: np.ndarray  # [A/m^2]
-
-
-def _components(
-    by_mechanism: Optional[Dict[str, np.ndarray]], transpose: bool
-) -> Tuple[_Component, ...]:
-    """从机制分解字典里挑出要画的分量；`transpose` 给 I-T 的行布局用。
-
-    输入就是 `SweepResult` / `EnsembleSweepResult` 的 `by_mechanism`
-    （形状 (温度点数, 电压点数) 的矩阵字典），传 None 表示不画分量。
-    """
-    if by_mechanism is None:
-        return ()
-    out = []
-    for name, label, cmap, linestyle, marker in _COMPONENT_STYLES:
-        rows = np.asarray(by_mechanism[name], dtype=float)
-        out.append(_Component(label, cmap, linestyle, marker, rows.T if transpose else rows))
-    return tuple(out)
-
-
-def _log_safe(values: np.ndarray) -> np.ndarray:
-    """把非正值换成 nan——对数轴画不出 J ≤ 0。
-
-    总电流恒为正（R1 按构造非零），但 TAT / PF 分量在统计窗口内没有对应
-    事件时恰好是 0。留成 nan 会在曲线上断开，比让 matplotlib 静默丢点更
-    容易看出"这个工作点上没有这个机制"。
-    """
-    out = np.array(values, dtype=float)
-    out[~(out > 0.0)] = np.nan
-    return out
-
-
 def _current_curves(
     x: np.ndarray,
     rows: np.ndarray,
     labels: Sequence[str],
     x_label: str,
     title: str,
-    components: Sequence[_Component] = (),
 ) -> Figure:
-    """一族电流密度曲线：`rows` 的每一行画一条，纵轴取对数、换算成 A/cm²。
+    """一族总电流密度曲线：`rows` 的每一行画一条，纵轴取对数、换算成 A/cm²。
 
-    `components` 非空时每个分量在**同一张图**上再画一族曲线。颜色分机制
-    （总电流蓝、TAT 橙、PF 绿），行序在各自色系里取深浅，见 `_SHADE_RANGE`。
-    图例分两段——先各行的温度/电压（画成总电流那条线，深浅即行序），再拿
-    三条 `Line2D` 代理标出机制的颜色与线型，否则 行数 × 3 条曲线会把图例
-    胀成一整块。
+    行序在 Blues 色系里取深浅（浅 = 低温/低压、深 = 高温/高压），见 `_SHADE_RANGE`。
     """
     figure = _new_figure((7.0, 5.0))
     axes = figure.add_subplot(1, 1, 1)
-    n = len(labels)
-    _, total_cmap, total_linestyle, total_marker = _TOTAL_STYLE
-    palettes = [_shades(cmap, n) for cmap in (total_cmap,) + tuple(c.cmap for c in components)]
+    palette = _shades(_TOTAL_CMAP, len(labels))
     for i, label in enumerate(labels):
-        series = [(rows[i], total_linestyle, total_marker, label)]
-        series += [(c.rows[i], c.linestyle, c.marker, "_nolegend_") for c in components]
-        for (values, linestyle, marker, entry), palette in zip(series, palettes):
-            axes.plot(
-                x,
-                _log_safe(np.asarray(values, dtype=float) * _PER_CM2),
-                label=entry,
-                color=palette[i],
-                linestyle=linestyle,
-                marker=marker,
-                ms=4.0,
-                lw=1.5,
-            )
+        axes.plot(
+            x,
+            np.asarray(rows[i], dtype=float) * _PER_CM2,
+            label=label,
+            color=palette[i],
+            linestyle="-",
+            marker="o",
+            ms=4.0,
+            lw=1.5,
+        )
     axes.set_yscale("log")
     axes.set_xlabel(x_label)
     axes.set_ylabel(r"J (A/cm$^2$)")
     axes.set_title(title)
     axes.grid(True, which="both", ls=":", lw=0.5, alpha=0.6)
-    handles = list(axes.get_legend_handles_labels()[0])
-    if components:
-        styles = [_TOTAL_STYLE] + [(c.label, c.cmap, c.linestyle, c.marker) for c in components]
-        handles += [
-            # 图例代理取色系中点，与只有一行时实际画的颜色是同一档
-            Line2D([], [], color=_shades(cmap, 1)[0], ls=ls, marker=marker, ms=4.0, label=name)
-            for name, cmap, ls, marker in styles
-        ]
-    axes.legend(handles=handles, loc="best", fontsize=9, ncol=2 if len(handles) > 6 else 1)
+    axes.legend(loc="best", fontsize=9, ncol=2 if len(labels) > 6 else 1)
     figure.tight_layout()
     return figure
 
@@ -329,9 +263,8 @@ def plot_iv_curves(
     voltages: np.ndarray,
     temperatures: np.ndarray,
     current_density: np.ndarray,
-    by_mechanism: Optional[Dict[str, np.ndarray]] = None,
 ) -> Figure:
-    """I-V 曲线：一条曲线一个温度点，纵轴 J 取对数。
+    """I-V 曲线：一条曲线一个温度点，纵轴总电流密度 J 取对数。
 
     见 docs/physics_model.md 的"可视化接口"一节。
 
@@ -341,9 +274,6 @@ def plot_iv_curves(
     temperatures : 温度 [K]，长度 n_T
     current_density : 电流密度 [A/m²]，形状 (n_T, n_V)，即 `SweepResult` /
         `EnsembleSweepResult` 的 `current_density`
-    by_mechanism : 机制分解 [A/m²]，`SweepResult.by_mechanism` 那样的矩阵字典。
-        传入时把 **TAT 与 PF 两项画在同一张图上**（颜色分机制、深浅分温度）；
-        传 None 就只画总电流
     """
     temperatures = np.asarray(temperatures, dtype=float)
     labels = ["T = {:.1f} °C".format(t - constants.zero_Celsius) for t in temperatures]
@@ -353,7 +283,6 @@ def plot_iv_curves(
         labels,
         "U (V)",
         "I-V characteristics",
-        _components(by_mechanism, transpose=False),
     )
 
 
@@ -361,13 +290,11 @@ def plot_it_curves(
     voltages: np.ndarray,
     temperatures: np.ndarray,
     current_density: np.ndarray,
-    by_mechanism: Optional[Dict[str, np.ndarray]] = None,
 ) -> Figure:
-    """I-T 曲线：一条曲线一个电压点，横轴温度换算成 °C，纵轴 J 取对数。
+    """I-T 曲线：一条曲线一个电压点，横轴温度换算成 °C，纵轴总电流密度 J 取对数。
 
     参数与 `plot_iv_curves` 完全相同（同一份扫描结果的另一个切法：这里按电压
-    分曲线、沿温度轴展开）。机制分量矩阵跟着一起转置，TAT 与 PF 同样画在这
-    张图上、深浅分电压。
+    分曲线、沿温度轴展开）。
     """
     voltages = np.asarray(voltages, dtype=float)
     density = np.asarray(current_density, dtype=float)
@@ -377,5 +304,4 @@ def plot_it_curves(
         ["U = {:.2f} V".format(v) for v in voltages],
         "T (°C)",
         "I-T characteristics",
-        _components(by_mechanism, transpose=True),
     )

@@ -129,7 +129,6 @@ def test_plot_prefix_writes_iv_and_it_figures(tmp_path):
         result.voltages,
         result.temperatures,
         result.current_density,
-        result.by_mechanism,  # CLI 一律把机制分解一起传下去
     )
     for kind in ("iv", "it"):
         assert (tmp_path / "scan_{}.png".format(kind)).stat().st_size > 0

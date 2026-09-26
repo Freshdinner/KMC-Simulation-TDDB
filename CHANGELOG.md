@@ -7,6 +7,16 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **I-V / I-T 曲线图只画总电流，不再画 TAT 与 PF 分机制曲线**（改 `visualization.py`：
+  `plot_iv_curves` / `plot_it_curves` 去掉 `by_mechanism` 参数，删除 `_Component`、
+  `_components`、`_COMPONENT_STYLES`、`_log_safe` 与两段式图例；行序仍按 Blues 色系深浅区分。
+  `__main__._write_sweep_plots` 同步去掉该参数。同步 `docs/physics_model.md`"可视化接口"
+  第 3 项与 `README.md` 的出图说明）。按用户要求简化曲线图；机制分解的数值出口（CLI 摘要、
+  CSV）不变。无 R 编号。`tests/test_visualization.py` 删掉分机制相关测试，新增"只画总电流"
+  与"蓝色系逐行变深"两项；`tests/test_sweep.py` 同步调用签名。`pytest tests/ -v`
+  213 passed、1 failed，失败为已知的
+  `test_stack_examples.py::test_t2_series_differs_only_in_layer_structure`，与本次无关。
+
 - **pytest 从可选依赖 `[test]` 移入基础依赖，锁 `pytest>=7.0,<8.4`**（改 `pyproject.toml`；
   同步 `README.md` 环境一节与 `PROJECT_CONTEXT.md`）。原先 `pip install -e .` 不装 pytest，
   项目 `.venv` 里一直没有（review 2026-09-15 记录过"未能执行"），"合并前必须跑通

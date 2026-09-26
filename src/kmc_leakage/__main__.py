@@ -6,7 +6,7 @@
     python -m kmc_leakage plot  --config examples/single_run.yaml --kind defects|bands
 """
 
-from typing import Dict, Optional
+from typing import Optional
 
 import numpy as np
 import typer
@@ -144,16 +144,14 @@ def _write_sweep_plots(
     voltages: np.ndarray,
     temperatures: np.ndarray,
     density: np.ndarray,
-    by_mechanism: Optional[Dict[str, np.ndarray]] = None,
 ) -> None:
-    """把扫描结果画成 I-V 与 I-T 两张曲线图并落盘。
+    """把扫描结果画成 I-V 与 I-T 两张总电流曲线图并落盘。
 
-    绘图函数只返回 Figure，保存动作在这里发生。`by_mechanism` 让两张图各自
-    多出 TAT 与 PF 两族曲线。
+    绘图函数只返回 Figure，保存动作在这里发生。
     """
     from .visualization import plot_it_curves, plot_iv_curves
 
-    args = (voltages, temperatures, density, by_mechanism)
+    args = (voltages, temperatures, density)
     figures = (("iv", plot_iv_curves(*args)), ("it", plot_it_curves(*args)))
     for kind, figure in figures:
         path = "{}_{}.png".format(prefix, kind)
@@ -195,7 +193,6 @@ def sweep(
                 result.voltages,
                 result.temperatures,
                 result.current_density,
-                by_mechanism=result.by_mechanism,
             )
         return
 
@@ -227,7 +224,6 @@ def sweep(
             ensemble.voltages,
             ensemble.temperatures,
             ensemble.current_density,
-            ensemble.by_mechanism,
         )
 
 
