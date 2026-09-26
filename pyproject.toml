@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kmc-leakage"
+version = "0.1.0"
+description = "MIM 电容器漏电流的动力学蒙特卡洛（KMC）仿真"
+requires-python = ">=3.8"
+dependencies = [
+    # numpy 1.25 / scipy 1.11 起不再支持 Python 3.8，上界不要放开
+    "numpy>=1.20,<1.25",
+    "scipy>=1.6,<1.11",
+    "matplotlib>=3.3",
+    "typer>=0.9",
+    "PyYAML>=5.4",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

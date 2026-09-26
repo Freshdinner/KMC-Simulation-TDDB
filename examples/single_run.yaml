@@ -1,0 +1,76 @@
+# 单点仿真示例配置
+# 数值全部用器件物理惯用单位（eV / nm / cm^-3 / degC），
+# 换算到 SI 只在 io.py 的读入边界发生。
+# 默认参考预设见 docs/physics_model.md。
+#
+# 结构 schema（ADR-003/015）：materials 按名字典 + layers 有序层（各引用材料、
+# 给 thickness_nm、配 defects）+ 可选 interfaces（数量 = 层数-1）。Lz 由层厚求和。
+# 本例是单层退化：layers 只含一个元素，回到单层 ZrO₂。
+#
+# 50×50×9 nm、3×10^18 cm^-3 → 68 个缺陷；5 个实现取算术平均。
+
+materials:
+  reference-preset:
+    kappa: 38.0          # 静态介电常数，只用于泊松方程
+    eps_opt: 5.6         # 光学介电常数，只用于 PF 发射 (R8)
+    band_gap_eV: 5.4
+    electron_affinity_eV: 2.86   # 与 Φ_m=4.6 一起给出 E_B=1.74 eV
+    m_cb_me: 1.2         # 导带边有效质量（裸带边质量）
+    m_vb_me: 2.5         # 价带边有效质量（裸带边质量）
+    m_di_me: 1.2         # 隧穿有效质量，速率公式实际使用；现设为 = m_cb
+    phonon_energy_eV: 0.04
+    huang_rhys_S: 1.0
+    attempt_frequency_s: 1.0e13  # ν0，R6/R7/R8 共用
+
+layers:
+  # 单层退化：只含一个元素。Lz = 各层 thickness_nm 求和 = 9 nm
+  - material: reference-preset    # 引用 materials 里的材料名
+    thickness_nm: 9.0
+    defects:
+      concentration_cm3: 3.0e18
+      charge_state_Z: 1.0          # 施主型，未占据时 +1，不可双占据
+      min_separation_nm: 0.5       # 缺陷两两之间 + 缺陷到电极界面的最小距离
+      level:
+        mode: gaussian                # fixed | gaussian
+        ED_eV: 1.15
+        sigma_eV: 0.15             # mode=gaussian 时生效
+      spatial:
+        mode: interface              # uniform | interface
+        enrichment: 5.0            # mode=interface 时生效
+        decay_length_nm: 1.0
+
+device:
+  Lx_nm: 50.0
+  Ly_nm: 50.0
+  # 接触势垒直接指定；注释掉这一行则改为由 Φ_m - χ 推算
+  barrier_height_eV: 1.74
+
+electrodes:
+  cathode: &electrode
+    name: TiN
+    work_function_eV: 4.6
+    effective_mass_me: 1.0
+    # 费米能相对电极导带底的高度：R2/R3 的 E1 与 R4/R5 的 N_C 需要
+    fermi_energy_eV: 5.0
+  anode: *electrode
+
+simulation:
+  voltage_V: 3.0
+  temperature_C: 25.0
+  n_events: 20000
+  burn_in_fraction: 0.2
+  seed: 12345        # 只在没有 ensemble 段时生效，否则由 ensemble 随机抽取的种子逐个覆盖
+  grid:
+    # hx = Lx/nx，格点数必须跟着器件尺寸走：固定 nx 改 Lx 会改变横向网格步长
+    # 与 CIC 自作用势（∝ 1/h），测到的就成了网格假象。这里
+    # hx = hy = 1.5625 nm、hz = 0.25 nm
+    nx: 32
+    ny: 32
+    nz: 36
+
+# 系综平均：每个种子跑一次独立的缺陷实现，最后取算术平均。
+# count = 实现个数 M，每次运行随机抽取 count 个互异种子；抽到的种子随 CLI
+# 进度与 CSV 落盘，要复现某次结果照抄回去即可。
+# 整段省略则退化为 simulation.seed 一个实现（即旧行为）。
+ensemble:
+  count: 5

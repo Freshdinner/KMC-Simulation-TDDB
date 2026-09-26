@@ -1,0 +1,113 @@
+# ZrO₂/Al₂O₃/ZrO₂ 叠层结构对照 —— t₂ = 2 nm（层厚 3.5 / 2 / 3.5 nm）
+#
+# t₂ 系列（ADR-006/019）：固定总厚 9 nm，ZrO₂ 两侧对称分配 t₁=t₃=(9−t₂)/2，
+# t₂ ∈ {0, 1, 2, 3} nm 各一份配置，各跑一次 `sweep` 命令、比对四份 CSV。
+# 四份只有层结构不同，材料、缺陷、器件、扫描范围、系综全部相同；t₂=0 是单层
+# 退化点（examples/stack_t2_0nm.yaml）。
+#
+# 层厚必须是 hz = Lz/nz = 9/36 = 0.25 nm 的整数倍（变 κ 泊松要求界面落在网格
+# 节点上，ADR-011）：3.5/2/3.5 对应 14/8/14 个单元。
+#
+# **Al₂O₃ 的物性是占位值、待标定**（ADR-004）：下面这一组取自文献量级，得出
+# 定量材料结论前必须替换成真实数据。界面缺陷面密度 Nₛ 同样是占位值（ADR-008）。
+
+materials:
+  ZrO2:
+    kappa: 38.0          # 静态介电常数，只用于泊松方程
+    eps_opt: 5.6         # 光学介电常数，只用于 PF 发射 (R8)
+    band_gap_eV: 5.4
+    electron_affinity_eV: 2.86   # 与 Φ_m=4.6 一起给出 E_B=1.74 eV
+    m_cb_me: 1.2         # 导带边有效质量（裸带边质量）
+    m_vb_me: 2.5
+    m_di_me: 1.2         # 隧穿有效质量，速率公式实际使用；现设为 = m_cb
+    phonon_energy_eV: 0.04
+    huang_rhys_S: 1.0
+    attempt_frequency_s: 1.0e13  # ν0，R6/R7/R8 共用
+
+  Al2O3:                 # 占位/待标定，数值取自文献量级
+    kappa: 9.0
+    eps_opt: 3.0         # n ≈ 1.7
+    band_gap_eV: 6.4
+    electron_affinity_eV: 1.4
+    m_cb_me: 0.3
+    m_vb_me: 0.4
+    m_di_me: 0.3
+    phonon_energy_eV: 0.09
+    huang_rhys_S: 1.0
+    attempt_frequency_s: 1.0e13
+
+layers:
+  - material: ZrO2       # 阴极侧 ZrO₂
+    thickness_nm: 3.5
+    defects: &zro2_defects
+      concentration_cm3: 1.0e19
+      charge_state_Z: 1.0          # 施主型，未占据时 +1，不可双占据
+      min_separation_nm: 0.5       # 缺陷两两之间 + 缺陷到电极/内部界面的最小距离
+      level:
+        mode: gaussian
+        ED_eV: 1.15
+        sigma_eV: 0.15
+      spatial:
+        # 界面富集轮廓按**所在层**的起止边界算：
+        # 两层 ZrO₂ 各自在自己的两端富集
+        mode: interface
+        enrichment: 10.0
+        decay_length_nm: 0.7
+
+  - material: Al2O3      # 阻挡层：体相无缺陷，不配 defects 段
+    thickness_nm: 2.0
+
+  - material: ZrO2       # 阳极侧 ZrO₂，与阴极侧同参数
+    thickness_nm: 3.5
+    defects: *zro2_defects
+
+interfaces:              # 数量 = 层数-1 = 2，按 z 从小到大
+  - &za_interface
+
+    sigma_C_per_cm2: 0.0         # v1 界面固定面电荷 = 0
+    defects:                     # 界面缺陷：独立物种，放在界面平面上
+      surface_density_cm2: 1.0e12  # Nₛ 占位/待标定，50×50 nm 元胞下每界面约 25 个
+      charge_state_Z: 1.0
+      level:                     # 能级相对 ZrO₂ 侧局部导带底，占位沿用体 ZrO₂
+        mode: gaussian
+        ED_eV: 1.15
+        sigma_eV: 0.15
+  - *za_interface        # 两个界面对称（同 Nₛ、同参数）
+
+device:
+  Lx_nm: 50.0
+  Ly_nm: 50.0
+  barrier_height_eV: 1.74   # 接触势垒直接指定，四份配置一致
+
+electrodes:
+  cathode: &electrode
+    name: TiN
+    work_function_eV: 4.6
+    effective_mass_me: 1.0
+    fermi_energy_eV: 5.0
+  anode: *electrode
+
+simulation:
+  voltage_V: 3.0          # 被 sweep 覆盖，仅作占位
+  temperature_C: 25.0     # 同上
+  n_events: 4000
+  burn_in_fraction: 0.2
+  seed: 12345             # 有 ensemble 段时被随机抽取的种子逐个覆盖
+  grid:
+    # hz = 9/36 = 0.25 nm，层厚必须是它的整数倍；hx = hy = 1.5625 nm
+    nx: 32
+    ny: 32
+    nz: 36
+
+sweep:
+  voltage_V:
+    start: 2.0
+    stop: 4.0
+    step: 0.1
+  temperature_C:
+    start: 25.0
+    stop: 25.0
+    step: 50.0
+
+ensemble:
+  count: 5

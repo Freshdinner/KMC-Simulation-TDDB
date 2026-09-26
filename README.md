@@ -1,0 +1,747 @@
+# KMC 漏电流仿真
+
+基于动力学蒙特卡洛（KMC，Gillespie direct method）的 MIM（金属-绝缘体-金属）
+电容器漏电流仿真。电极/介质材料、器件尺寸、缺陷分布均可配置，不绑定单一材料
+体系；覆盖全部输运机制（内部编号 R1–R8），输出 I-V / I-T 曲线以及按机制、按
+缺陷位置的电流分解。
+
+物理规格见 `docs/physics_model.md` 与 `docs/rate_equations.md`——那两份文档是
+本项目的规格来源，本 README 只讲怎么用和实现上做了哪些取舍。
+
+---
+
+## 环境
+
+- Python 3.8
+- numpy ≤ 1.24.x、scipy ≤ 1.10.x（1.25 / 1.11 起不再支持 3.8，`pyproject.toml`
+  里锁了上界，不要让依赖自动升级）
+- 其余：matplotlib、typer、PyYAML；测试用 pytest
+
+```bash
+pip install -e .          # 在 Python 3.8 环境下
+pip install -e ".[test]"  # 附带 pytest
+```
+
+> **在更新的解释器上开发时**：`pyproject.toml` 的版本上界是按 3.8 锁的，如果本机
+> 是 Python 3.10+ / numpy 2.x，`pip install -e .` 会试图把 numpy 降级到没有 wheel
+> 的版本。这种情况下不要安装，直接用源码路径：
+> ```bash
+> pytest tests/ -v                              # pyproject 里配了 pythonpath = ["src"]
+> PYTHONPATH=src python -m kmc_leakage run ...  # 命令行
+> ```
+> 代码本身对 numpy 1.24 与 2.x 都兼容（例如一律用 `scipy.integrate.trapezoid`，
+> 不用在两个版本间变动的 `np.trapz` / `np.trapezoid`）。
+
+---
+
+## 快速开始
+
+```bash
+# 单点仿真
+python -m kmc_leakage run --config examples/single_run.yaml
+
+# I-V / I-T 扫描，结果写 CSV
+python -m kmc_leakage sweep --config examples/iv_sweep.yaml --out results.csv
+
+# 扫描顺手出曲线图：<前缀>_iv.png（横轴电压，一条曲线一个温度）
+#                  <前缀>_it.png（横轴温度，一条曲线一个电压）
+# 两张图上都同时画出总电流、TAT 与 PF 三族曲线
+python -m kmc_leakage sweep --config examples/iv_sweep.yaml --out results.csv --plot-prefix scan
+
+# 出图：缺陷分布 / 能带结构
+python -m kmc_leakage plot --config examples/single_run.yaml --kind defects --out defects.png
+python -m kmc_leakage plot --config examples/single_run.yaml --kind bands   --out bands.png
+
+# ZrO₂/Al₂O₃/ZrO₂ 叠层的 t₂ 结构对照：固定总厚 9 nm，t₂ ∈ {0,1,2,3} nm 各一份
+# 配置，逐份跑同一条 sweep 命令再比对四个 CSV（t₂=0 是单层退化点）
+python -m kmc_leakage sweep --config examples/stack_t2_1nm.yaml --out t2_1nm.csv
+python -m kmc_leakage plot  --config examples/stack_t2_1nm.yaml --kind bands --out t2_1nm_bands.png
+```
+
+`run` 的输出长这样（示例配置带 `ensemble` 段，逐个实现跑完再取算术平均）：
+
+```
+U = 2.00 V, T = 25.0 °C   系综：5 个缺陷实现
+  [ 1/5 ] seed 12345    J = 1.7051e-08 A/cm²
+  [ 2/5 ] seed 23456    J = 2.1561e-08 A/cm²
+  [ 3/5 ] seed 34567    J = 9.9426e-09 A/cm²
+  [ 4/5 ] seed 45678    J = 1.5389e-08 A/cm²
+  [ 5/5 ] seed 56789    J = 1.8833e-08 A/cm²
+系综平均（M = 5 个缺陷实现）：J = 1.6555e-08 A/cm²   标准误 ±1.944e-09（相对 11.7%）
+  各实现散布：min 9.9426e-09   max 2.1561e-08 A/cm²   σ(log₁₀J) = 0.128
+  按机制分解（系综平均）：
+    直接/FN隧穿      J =   1.5557e-18 A/cm²   占比   0.000%   标准误 ±0.000e+00
+    热电子发射        J =   4.1553e-23 A/cm²   占比   0.000%   标准误 ±0.000e+00
+    TAT          J =   3.0153e-10 A/cm²   占比   1.821%   标准误 ±3.630e-11
+    PF发射         J =   1.6254e-08 A/cm²   占比  98.179%   标准误 ±1.908e-09
+```
+
+去掉 `ensemble` 段就退回单实现的详细报告——多出按缺陷位置的分解与三个估计量的
+交叉检验，那些量是单次实现才有的。
+
+**耗时参考**（默认 50×50×9 nm、3×10¹⁸ cm⁻³ → 68 个缺陷，`grid` = 32/32/36）：
+每个 KMC 事件约 1.9 ms，外加每个实现 0.2 s 的静电预计算（N+1 次泊松求解）。
+
+| 跑什么 | 单个实现 | 5 个实现 |
+|---|---|---|
+| 单点 20000 事件 | 38 s | **3.1 分钟** |
+| `examples/iv_sweep.yaml`（15 个工作点 × 5000 事件） | 2.3 分钟 | 12 分钟 |
+| 默认全范围（16 电压 × 6 温度 = 96 点 × 5000 事件） | 15 分钟 | 1.3 小时 |
+
+机时对 M 是严格线性的。浓度是比尺寸更敏感的成本变量：同样 50×50×9 nm，
+3×10¹⁹ cm⁻³ 下 N=675，单个事件涨到 19 ms（电极↔陷阱那部分的 WKB 积分是
+O(N)，占大头），单点 20000 事件约 6.3 分钟。
+
+### 作为库使用
+
+```python
+import dataclasses
+import numpy as np
+from kmc_leakage.io import load_config
+from kmc_leakage.kmc import run_single
+
+config = load_config("examples/single_run.yaml")
+config = dataclasses.replace(
+    config, simulation=dataclasses.replace(config.simulation, voltage=3.0)
+)
+
+result = run_single(config)
+print(result.current_density)                 # A/m²（内部一律 SI）
+print(result.by_mechanism)                    # 四项之和 == result.current
+print(result.by_defect)                       # 每个缺陷的贡献，之和 + R1 == current
+top = np.argsort(result.by_defect)[::-1][:3]  # 贡献最大的三个缺陷
+print(result.defects.positions[top, 2])
+```
+
+`SimulationResult` 的字段：
+
+| 字段 | 含义 |
+|---|---|
+| `current` / `current_density` / `area` | 总电流 [A] / 电流密度 [A/m²] / 电极面积 [m²] |
+| `by_mechanism` | 四类机制的电流，四项之和恒等于 `current` |
+| `by_defect` | 每个缺陷的电流贡献，之和 + R1 两项恒等于 `current` |
+| `occupancy` | KMC 采样的时间平均占据概率 |
+| `occupancy_mean_field` | 条件稳态占据 p̂ 的时间平均，与上一项对照即可判断估计量前提是否成立 |
+| `current_direct` / `current_counts` / `n_anode_events` | 交叉检验用的另外两个估计量（见下文） |
+| `elapsed_time` | 统计窗口时长 [s] |
+
+扫描：
+
+```python
+from kmc_leakage.sweep import run_sweep, write_csv
+
+sweep = run_sweep(config)          # 复用同一套缺陷实现与静电预计算
+write_csv(sweep, "results.csv")    # 输出边界换算成 A/cm² 与 °C
+```
+
+系综平均（M 个缺陷实现取算术平均，见下文"系综平均 `ensemble`"）：
+
+```python
+from kmc_leakage.ensemble import run_ensemble, run_ensemble_sweep, write_ensemble_csv
+
+point = run_ensemble(config)                    # 逐个种子跑单点
+print(point.current_density, point.current_density_sem)  # 平均值与标准误 [A/m²]
+print(point.samples)                            # 平均前每个实现的原始值
+print(point.results[0].by_defect)               # 单个实现的缺陷分解仍在手边
+
+curves = run_ensemble_sweep(config)             # 逐个种子跑完整扫描
+write_ensemble_csv(curves, "ensemble.csv")      # 平均 + 标准误 + 各实现原始值
+```
+
+`EnsembleResult` / `EnsembleSweepResult` 的字段（前者是标量，后者是 (温度点, 电压点)
+矩阵，字段名相同）：
+
+| 字段 | 含义 |
+|---|---|
+| `current_density` | M 个实现的算术平均 [A/m²] |
+| `current_density_sem` | 平均值的标准误 σ/√M [A/m²]，M=1 时为 0 |
+| `by_mechanism` / `by_mechanism_sem` | 四类机制的平均电流密度与标准误，四项之和恒等于 `current_density` |
+| `samples` | 平均前的原始电流密度，形状 `(M,)` / `(M, 温度点, 电压点)` |
+| `results` / `sweeps` | 每个实现的完整结果，顺序与 `seeds` 一致 |
+| `seeds` / `n_realizations` | 种子列表与实现个数 M |
+
+---
+
+## 配置文件
+
+完整示例见 `examples/single_run.yaml`。YAML 用器件物理惯用单位（eV / nm / cm⁻³ /
+cm⁻² / °C），**换算到 SI 只发生在 `io.py` 的读入边界**，换算系数一律取自
+`scipy.constants`；下游模块只见 SI。
+
+介质结构采用"有序介质层 + 材料库 + 显式界面"表示（ADR-003/015）：顶层
+`materials`（按名字典）给材料物性，`layers`（有序层）各按名引用材料、给厚度、配
+该层体缺陷，可选的 `interfaces`（数量 = 层数-1）携带带阶 / 面电荷 / 界面缺陷。
+**`Lz` 由各层 `thickness_nm` 求和，不再是配置项**；单层退化就是 `layers` 只含一个
+元素。旧 schema 的顶层 `dielectric` / `defects` 与 `device.Lz_nm` 会直接报错并提示
+新写法（不做运行时兼容层）。
+
+```yaml
+materials:                     # 材料库，按名字典；layers 按名引用
+  reference-preset:
+    kappa: 38.0                # 静态介电常数——只进泊松方程
+    eps_opt: 5.6               # 光学介电常数——只进 PF 发射 (R8)
+    band_gap_eV: 5.4
+    electron_affinity_eV: 2.86
+    m_cb_me: 1.2               # 裸带边质量，Weinberg 关系的输入
+    m_vb_me: 2.5
+    m_di_me: 1.2               # 隧穿质量，速率公式实际使用（现数值上 = m_cb）
+    phonon_energy_eV: 0.04
+    huang_rhys_S: 1.0
+    attempt_frequency_s: 1.0e13  # ν0，R6/R7/R8 共用同一项
+
+layers:                        # 有序介质层；Lz = 各层 thickness_nm 之和
+  - material: reference-preset  # 引用 materials 里的材料名
+    thickness_nm: 9.0
+    defects:                   # 该层体缺陷（单层退化：只有这一层）
+      concentration_cm3: 3.0e18
+      charge_state_Z: 1.0
+      min_separation_nm: 0.5
+      level:   {mode: fixed,   ED_eV: 1.15, sigma_eV: 0.15}   # fixed | gaussian
+      spatial: {mode: uniform, enrichment: 5.0, decay_length_nm: 1.0}  # uniform | interface
+
+# interfaces:                  # 可选，数量 = 层数-1；单层不配。多层时携带：
+#   - delta_Ec_eV: 1.46        # 导带带阶 ΔE_C 覆盖（省略则电子亲和能对齐）
+#     sigma_C_per_cm2: 0.0     # 固定界面面电荷
+#     defects: {surface_density_cm2: 1.0e12, level: {mode: fixed, ED_eV: 1.15}}
+
+device:
+  Lx_nm: 50.0
+  Ly_nm: 50.0
+  barrier_height_eV: 1.74      # 可选；省略则由 Φ_m - χ 推算
+  # Lz 不再是配置项——由各层 thickness_nm 求和得到
+
+electrodes:
+  cathode: &electrode
+    name: TiN
+    work_function_eV: 4.6
+    effective_mass_me: 1.0
+    fermi_energy_eV: 5.0       # 费米能相对该电极导带底的高度
+  anode: *electrode
+
+simulation:
+  voltage_V: 2.0
+  temperature_C: 25.0
+  n_events: 20000
+  burn_in_fraction: 0.2
+  seed: 12345                 # 只在没有 ensemble 段时生效
+  grid: {nx: 32, ny: 32, nz: 36}   # hx = Lx/nx，格点数必须跟着器件尺寸走
+
+sweep:                          # 整段省略则用默认范围
+  voltage_V:     {start: 1.0, stop: 4.0, step: 0.2}    # 默认 I-V：16 点
+  temperature_C: {start: 0.0, stop: 125.0, step: 25.0} # 默认 I-T：6 点
+
+ensemble:                       # 整段省略则退化为 simulation.seed 一个实现
+  count: 5                       # 实现个数 M，每次运行随机抽取 count 个互异种子
+```
+
+### 叠层结构与不同层厚的设置
+
+介质由 `layers` 有序列表描述，每层 `material` 引用材料库、`thickness_nm` 给层厚，
+**总厚 Lz = 各层 thickness_nm 之和**（不再有独立的 `device.Lz_nm`）。要换叠层结构，
+改的就是层数、每层引用哪种材料、以及各层的 `thickness_nm`。
+
+`examples/stack_t2_{0,1,2,3}nm.yaml` 是一组现成的 ZrO₂/Al₂O₃/ZrO₂ 结构对照：**固定
+总厚 9 nm，中间 Al₂O₃ 层厚 t₂ ∈ {0,1,2,3} nm，两侧 ZrO₂ 对称补偿 t₁=t₃=(9−t₂)/2**。
+四份配置只有层结构不同，材料、缺陷、器件、扫描范围、系综全部相同，所以比对四份结果
+就是在看 t₂ 这一个变量的影响。要自己设别的层厚，照这组改 `thickness_nm` 即可：
+
+```yaml
+layers:
+  - material: ZrO2      # 阴极侧 ZrO₂，t₁ = (9−t₂)/2
+    thickness_nm: 3.5
+    defects: {...}      # 体缺陷挂在层上
+  - material: Al2O3     # 阻挡层：不配 defects 段即体相无缺陷
+    thickness_nm: 2.0
+  - material: ZrO2      # 阳极侧 ZrO₂，t₃ = t₁
+    thickness_nm: 3.5
+    defects: {...}
+
+interfaces:             # 数量 = 层数−1（三层 → 两个界面），按 z 从小到大
+  - delta_Ec_eV: 1.46   # 省略则按电子亲和能对齐自动推算带阶
+    sigma_C_per_cm2: 0.0
+    defects: {surface_density_cm2: 1.0e12, ...}  # 界面缺陷按面密度 Nₛ 配
+  - {...}               # 第二个界面
+```
+
+改层厚时有两条硬约束，违反会在构造泊松求解器时直接报错：
+
+- **每层 `thickness_nm` 必须是 hz = Lz/nz 的整数倍**（变 κ 泊松要求界面落在网格节点上）。
+  默认 nz=36、Lz=9 nm，hz = 0.25 nm，所以 4.5/0/4.5、4/1/4、3.5/2/3.5、3/3/3 这几组
+  都对齐。选层厚前先确认能被 hz 整除
+- **改总厚 Lz 时 `grid.nz` 要跟着改**——`hz = Lz/nz` 由厚度和格点个数推出，固定 nz 改
+  总厚会改变 hz 和 CIC 自作用势（∝ 1/h），测到的就成了网格假象（见"几个约定"与
+  `docs/physics_model.md`）
+
+**单层退化**：`layers` 只写一个元素、不写 `interfaces` 段即可（`io` 拒绝 0 厚层，
+所以 t₂=0 那份是写成单层 9 nm ZrO₂，而不是留一个 `thickness_nm: 0` 的层）。单层时
+所有叠层专属逻辑（分段 WKB、界面台阶、界面缺陷）逐位退回单层口径。
+
+设好每份配置后，下面三件事都指向同一个 `--config`，换配置就是换叠层：
+
+**① I-V / I-T 扫描**——扫描范围取自配置的 `sweep` 段（示例是 2–4 V 步长 0.5、
+25–125 °C 步长 50），有 `ensemble` 段就逐个种子扫完取算术平均：
+
+```bash
+# 单份：写 CSV，同时落 t2_2nm_iv.png（横轴电压）与 t2_2nm_it.png（横轴温度）
+python -m kmc_leakage sweep --config examples/stack_t2_2nm.yaml --out t2_2nm.csv --plot-prefix t2_2nm
+
+# 四份逐个跑同一条命令，再比对四个 CSV / 四组曲线看 t₂ 的影响（t2_0nm 是单层退化点）
+python -m kmc_leakage sweep --config examples/stack_t2_0nm.yaml --out t2_0nm.csv --plot-prefix t2_0nm
+python -m kmc_leakage sweep --config examples/stack_t2_1nm.yaml --out t2_1nm.csv --plot-prefix t2_1nm
+python -m kmc_leakage sweep --config examples/stack_t2_3nm.yaml --out t2_3nm.csv --plot-prefix t2_3nm
+```
+
+曲线图上同时画总电流、TAT、PF 三族（颜色分机制、深浅分行），不画误差棒；标准误走
+CSV 的 `J_sem_A_cm2` 一列。
+
+**② 缺陷分布图**——三维散点（按能级着色）+ 沿 z 的数密度直方图；叠层时两幅都叠画
+层边界与界面位置，界面缺陷单独标色（直方图柱子只统计体缺陷）：
+
+```bash
+python -m kmc_leakage plot --config examples/stack_t2_2nm.yaml --kind defects --out t2_2nm_defects.png
+```
+
+**③ 能带图**——沿 z 的能带剖面，界面处画真实台阶（高度 = ΔE_C，不连斜坡），缺陷
+能级按 z 散点标出：
+
+```bash
+python -m kmc_leakage plot --config examples/stack_t2_2nm.yaml --kind bands --out t2_2nm_bands.png
+```
+
+`plot` 画的是配置抽到的第一个种子对应的那一次缺陷实现（有 `ensemble` 段时是随机抽的
+头一个，否则用 `simulation.seed`），换种子即换一次实现。
+
+> **叠层材料是占位值**：示例里 Al₂O₃ 的物性与界面缺陷面密度 Nₛ 都是待标定的占位值
+> （ADR-004/008），结构对照能看趋势，得出定量材料结论前要先换成真实数据。
+
+### 最容易混淆的参数
+
+| 参数 | 用在哪 | 不能用在哪 |
+|---|---|---|
+| `kappa`（静态介电常数） | 泊松方程 `electrostatics.py` | 任何速率公式 |
+| `eps_opt`（光学介电常数） | **只**在 PF 发射 R8 | 其他速率公式里出现即为实现错误 |
+| `m_cb` / `m_vb`（裸带边质量） | Weinberg 关系的输入；`m_cb` 另用于有效理查森常数 A\* | R1–R7 的速率公式 |
+| `m_di`（隧穿质量） | R1–R7 的全部速率公式与 WKB 积分 | —— |
+| `m_e`（自由电子质量） | R1 前置因子（发射极电子质量） | —— |
+
+`m_di` 当前数值上等于 `m_cb`，但在代码里是两个独立配置项——以后单独调整 `m_di`
+（比如真正实现 Weinberg 色散关系）不需要改接口。
+
+### 缺陷分布的配置
+
+体缺陷现在挂在层上（`layers[i].defects`，单层就是唯一那层）。下面 `defects` 子块里的
+能级分布 `level` 与空间分布 `spatial` 是两个互相独立的子块，各有两种模式，四种组合都
+可用。两者都只决定"能级怎么散开""位置往哪儿堆"——**缺陷个数由 `concentration_cm3 ×
+体积` 单独决定**（四舍五入取整），换分布不改变个数。
+
+#### 能级分布 `defects.level`
+
+| 键 | 含义 | 说明 |
+|---|---|---|
+| `mode` | `fixed`（单一能级）或 `gaussian`（正态分散） | 缺省 `fixed` |
+| `ED_eV` | 能级深度 E_D，相对介质导带底 | 必填；`gaussian` 模式下是均值 |
+| `sigma_eV` | 高斯标准差 σ_E | 只在 `gaussian` 模式生效，`fixed` 模式下忽略 |
+
+```yaml
+defects:
+  level:
+    mode: fixed          # 全部缺陷同一能级
+    ED_eV: 1.15
+```
+
+```yaml
+defects:
+  level:
+    mode: gaussian       # 能级按 N(1.15, 0.15²) eV 分散
+    ED_eV: 1.15
+    sigma_eV: 0.15
+```
+
+- `mode: gaussian` 必须给出正的 `sigma_eV`，否则 `io.py` 在读入时就报错
+- 高斯采样对 E_D ≤ 0 重采样（截断高斯）：E_D 非正会让局域化半径
+  r_D = ℏ/√(2·m_di·E_D) 发散。σ_E 逼近 E_D 时重采样 1000 轮仍失败会抛
+  `RuntimeError`，把 `sigma_eV` 保持在 `ED_eV` 的三分之一以内就不会碰到
+- **r_D 按每个缺陷自己的能级算**，`gaussian` 模式下 r_D 随之分散，直接进 R6/R7 的
+  缺陷间跃迁速率；`fixed` 模式下全部缺陷共用同一个 r_D
+- 能级同时进 R2–R5、R8 的指数项：室温下 σ_E = 0.15 eV 对应 `exp(−E_D/k_BT)` 有约
+  350 倍的 1σ 分散，选 σ 时按这个量级估计影响
+
+#### 空间分布 `defects.spatial`
+
+xy 方向始终均匀随机（周期边界），`mode` 只控制 z 方向（膜厚方向）的轮廓。
+
+| 键 | 含义 | 说明 |
+|---|---|---|
+| `mode` | `uniform`（体内均匀）或 `interface`（界面富集） | 缺省 `uniform` |
+| `enrichment` | 富集因子 g，界面处相对体内平台的密度倍数 | 只在 `interface` 生效，必须为正 |
+| `decay_length_nm` | 特征衰减长度 λ | 同上 |
+
+```yaml
+defects:
+  spatial:
+    mode: uniform        # 体内均匀随机
+```
+
+```yaml
+defects:
+  spatial:
+    mode: interface      # 双端指数富集
+    enrichment: 5.0
+    decay_length_nm: 1.0
+```
+
+界面富集轮廓：
+
+    n(z) ∝ 1 + (g−1)·[exp(−z/λ) + exp(−(Lz−z)/λ)]
+
+轮廓在采样时归一化，**缺陷总数始终 = 浓度 × 体积**——浓度控制数量、轮廓只控制形状，
+这样不同轮廓下的 I-V 才是在同一缺陷数下的比较。
+
+- 两种模式的 z 都限制在可采样窗口 `[d, Lz−d]`，d = `min_separation_nm`（贴在电极上的
+  缺陷会让 KMC 时间步塌缩，见下文"几个约定"）；`interface` 模式在这个区间上对归一化轮廓
+  做数值逆变换采样
+- **轮廓锚定到可采样窗口**：峰落在窗口边界 z=d（距界面 d 处）、值仍 ≈ g，**不被 d 削掉**——
+  d 内按数值稳定性要求本就不放缺陷，把峰锚在最靠近界面的可放置平面上，否则 λ ≲ d 时峰
+  整个落进禁区、采样窗口上近乎平坦，加大 g、减小 λ 都救不回来（早期版本正是这么丢掉富集的）
+- `enrichment: 1.0` 在数学上退化为均匀分布，但 `interface` 模式要求 g 与 λ 都为正；
+  要均匀分布直接写 `mode: uniform`
+- 例：Lz=8 nm、g=5、λ=1 nm，看距两侧可采样边界各 λ 以内的缺陷占比——d=0 时轮廓给
+  44%、均匀分布给 25%（`tests/test_defects.py` 拿采样结果与这个解析积分对过）；d=0.5 nm
+  时窗口变窄，两数变成 47% 与 29%，峰值仍 ≈ g（不被削）
+
+#### 确认配置是否落到位
+
+```bash
+python -m kmc_leakage plot --config examples/single_run.yaml --kind defects --out defects.png
+```
+
+左图是按能级着色的三维散点（`gaussian` 模式的能级分散一眼可见），画其中的**代表实现**
+（每次运行随机抽取的那批种子里的第一个）。右图是沿 z 的缺陷数密度直方图（核对
+`uniform` / `interface` 轮廓）：**汇总系综 M 个实现再除以 M**——默认 N≈68、每 bin 才几个
+缺陷，单实现的直方图基本是泊松噪声，看不出富集，汇总后 σ∝1/√(MN) 才压得下来。横轴只画
+可采样窗口 `[standoff, Lz−standoff]`：两端 standoff 内本就不放缺陷，裁掉后图上不留空、
+边缘柱恰好落在富集峰所在的可放置平面上。缺陷实现由
+种子决定（没有 `ensemble` 段时用 `simulation.seed`），换种子即换一批实现。
+
+在 Python 里改分布用 `dataclasses.replace`。缺陷现在挂在层上、`config.defects` 是只读
+属性，改的是 `stack.layers[i].defects`。注意 `config.py` 的字段一律是 SI（能级是 J、长度
+是 m），eV/nm 换算只发生在 YAML 读入边界：
+
+```python
+import dataclasses
+from scipy import constants
+from kmc_leakage.config import DefectLevelConfig, DefectSpatialConfig
+
+EV = constants.electron_volt
+stack = config.device.stack
+layer = dataclasses.replace(stack.layers[0], defects=dataclasses.replace(
+    stack.layers[0].defects,
+    level=DefectLevelConfig(mode="gaussian", ED=1.15 * EV, sigma=0.15 * EV),
+    spatial=DefectSpatialConfig(mode="interface", enrichment=5.0, decay_length=1.0e-9),
+))
+stack = dataclasses.replace(stack, layers=(layer,) + stack.layers[1:])
+config = dataclasses.replace(config, device=dataclasses.replace(config.device, stack=stack))
+```
+
+### 系综平均 `ensemble`
+
+一次 KMC 只看到一套具体的缺陷坐标，而漏电流对这套坐标敏感。要给出可与实验比绝对
+值的 J，得跑 M 个独立实现再取**算术平均**——电流是可加量，实验测到的也是整片电极上
+大量局部通道之和，所以取算术平均而不是几何平均。
+
+```yaml
+ensemble:
+  count: 5   # M = 5，每次运行随机抽取 5 个互异种子
+```
+
+| 行为 | 说明 |
+|---|---|
+| 一个种子 = 一次实现 | 种子同时驱动缺陷生成与 KMC 轨迹，换种子换掉的是"缺陷摆在哪、能级多深"加上轨迹噪声 |
+| 种子每次运行随机抽取 | `count` 给出实现个数 M，加载配置时从系统熵源抽 M 个互异种子；同一份配置每次跑都是新的一批，抽到的种子随 CLI 进度与 CSV 落盘，要复现照抄 |
+| 实现之间完全独立 | 每个实现自己做一遍静电预计算（缺陷位置变了，耦合矩阵就得重算），没有共享状态 |
+| 实现内部仍是同一个器件 | 扫描时一个实现跑遍所有工作点，曲线形状由单个器件决定，系综只在工作点之间纵向平均 |
+| 误差范围 | 平均值的标准误 σ/√M（σ 为实现间样本标准差，`ddof=1`）；M=1 时按 0 处理。走 CLI 摘要与 CSV，曲线图上不画误差棒 |
+| 整段省略 | 退化为 `simulation.seed` 一个实现，行为与加系综之前完全一致 |
+
+`ensemble.count` 必须是 ≥ 1 的整数，否则读入时报错。
+
+`sweep --out` 在有系综时写的是另一套表头：`J_mean_A_cm2`、`J_sem_A_cm2`、各机制平均，
+外加每个实现的原始值 `J_seed<种子>_A_cm2`。原始值留在 CSV 里，换一种平均口径（比如
+改看几何平均或中位数）不必重跑。
+
+**成本是线性的**：M 个实现就是 M 倍机时，实现之间彼此独立、没有任何复用。压涨落的
+另一条路是扩大侧向尺寸（缺陷数 N ∝ Lx·Ly，单个实现内部自平均更充分）。两条路**机时
+上等价**——实测把 4 V 的相对标准误压到 10%，50×50 nm 需 M≈27、100×100 nm 需 M≈8，
+而单实现机时正好差 3.8 倍。
+
+内存上原先扩面积也是 O(N²)（`pair_distances` 的 (N,N,3) 与静电耦合的 (3,N,N) 都是
+稠密矩阵），陷阱间跃迁改成近邻表之后只剩静电耦合一项。**当前默认取 50×50×9 nm
+（N=68），涨落靠种子压**；要用更大的侧向尺寸，先看静电耦合矩阵的 24N² 字节
+（N=2700 时 222 MiB）够不够，那是现在唯一的 O(N²) 内存项。
+
+实测的实现间散布（16 个实现，n_events=2000，参考预设，Lz=8 nm）：
+
+| 侧向尺寸 | 缺陷数 N | σ/mean @2 V | σ(log₁₀J) @2 V | σ/mean @4 V | σ(log₁₀J) @4 V |
+|---|---|---|---|---|---|
+| 50 × 50 nm | 60 | 38.8% | 0.190 | 52.0% | 0.329 |
+| 100 × 100 nm | 240 | 16.9% | 0.080 | 27.9% | 0.138 |
+
+缺陷数翻 4 倍把 σ 砍掉约一半，正是 σ ∝ 1/√N；两种尺寸的均值在各自标准误内一致
+（2 V 差 8%，4 V 差 0.8%），侧向尺寸没有引入系统性偏移。当前默认的 50×50×9 nm
+（N=68，20000 事件）实测 M=5 给出 2 V 下 11.7% 的相对标准误、σ(log₁₀J)=0.128。
+
+### 几个约定
+
+- **能量零点 = 阴极费米能级**，阳极费米能级在 −eU
+- **不考虑镜像力势垒降低**：所有势垒按零场高度 E_B 处理，界面处能带保持直线，
+  WKB 积分在未经圆化的直线/分段线性势垒上做
+- `min_separation_nm` 同时作用于两处：缺陷两两之间的最小距离，以及缺陷到两侧
+  电极界面的最小距离（贴在电极上的缺陷 P(E)→1、速率发散到 1e16 s⁻¹ 量级，会让
+  KMC 时间步长塌缩）
+
+---
+
+## 物理模型
+
+| 编号 | 机制 | 统计口径 |
+|---|---|---|
+| R1（阈值以下） | 电极↔电极 直接/FN 隧穿 | `direct_fn` |
+| R1（阈值以上） | 电极↔电极 热激发越过势垒 | `thermionic` |
+| R2 / R3 | 电极→陷阱 / 陷阱→电极 弹性隧穿 | `tat` |
+| R4 / R5 | 电极→陷阱 / 陷阱→电极 非弹性（多声子） | `tat` |
+| R6 / R7 | 陷阱→陷阱 弹性 / 非弹性（Miller-Abrahams） | `tat` |
+| R8 | 陷阱→导带 PF 热发射 | `pf` |
+
+统计按"电子抵达收集电极（或进入导带后被收集）的最后一步事件类型"归类。R1 的两
+部分以势垒沿隧穿路径的最高点能量为阈值切分。
+
+`rates/` 下每个函数都是纯函数：输入物理量与参数、返回速率数值，不依赖全局状态、
+不做 I/O，docstring 标注对应的 R 编号。
+
+---
+
+## 实现要点
+
+这几条是规格文档里没有、但影响结果解读的工程决定。
+
+### 1. 电流估计量
+
+稳态净电流是阳极侧两个大通量之差（阳极→陷阱俘获 vs 陷阱→阳极逃逸），二者在稳态
+下几乎精确抵消。**直接数到达阳极的净电子数在本项目参数下不可用**：噪声比信号大
+2–3 个数量级，低偏压下常常给出 0 或负电流。
+
+主输出改用条件期望（Rao-Blackwell）估计量：把单个陷阱的条件稳态占据
+p̂ = C/(C+E) 代入净通量表达式后，相消项解析约掉
+
+```
+flux_i = [(C_c + H_in)·E_a − (E_c + H_out)·C_a] / (C + E)
+```
+
+（C_c/C_a 为阴极/阳极侧俘获总速率，E_c/E_a 为向阴极/阳极的逃逸总速率，H_in/H_out
+为陷阱间跃迁的进出速率。）KMC 仍然在做实事——采样到的组态决定静电环境、MA 能量
+因子与跃迁的 Pauli 阻塞。
+
+结果里同时给出另外两个估计量作交叉检验：`current_direct`（瞬时通量的时间平均）与
+`current_counts + R1`（数事件）。这三个估计量是 F04（ADR-021）要求的口径。每个工作点
+带一个**验证状态**（`validated` + `validation_notes`）：只在正向收集（U+V_bi>0）、测量
+窗口充分、KMC 采样占据与条件稳态 p̂ 接近、且（阳极事件够多时）净计数交叉校验通过时
+才判"通过验证"，否则标"未通过验证"、不得当可信稳态电流交付。净事件计数在本项目低
+漏电流下噪声大（比信号低 2–3 个量级），只有统计够用才纳入门槛。窗口内还核对全局电荷
+守恒 (I_C−I_A)·Δt = q·ΔN_inside（逐事件记账的恒等式）。系综层面另给出成对差
+ΔJ = J_条件 − (J_数事件+R1) 及其跨种子标准误。条件通量估计量本身用**小状态空间主方程
+稳态解**独立对照（`master_equation.py` / `test_master_equation.py`，复现 review 的 25%
+反例与一致极限）——耦合网络里它不自动无偏，所以要独立验证。
+
+**分层归因**（`by_layer`）：把逐缺陷通量按 layer_id / interface_id 分组得到端口电流贡献，
+两个界面各一栏、界面缺陷只计一次、R1 单列，满足 Σ_{ℓ,Γ} I_{ℓ,Γ} = I_TAT+I_PF、
+I_total = Σ I_{ℓ,Γ} + I_R1，从单点贯通到 sweep / ensemble / CSV。
+
+### 2. 泊松方程只在初始化时求解
+
+泊松方程是线性的、缺陷位置在一次实现里固定，所以初始化时解 N+1 次（外加偏压 1 次
++ 每个缺陷单位电荷各 1 次），之后任一占据组态的电势/电场都由这些解按占据数线性
+叠加得到，主循环里退化为矩阵-向量乘。这是精确的，不是近似。缺陷自身电荷在自己
+位置产生的电势（CIC 自作用）就是耦合矩阵的对角元，整项扣除——实测自作用势约
+3×q/(4πε₀κh)，对应自能约 0.24 eV ≈ 9 k_BT，并非可忽略的小量。
+
+xy 方向周期 → FFT；每个傅里叶模式在 z 方向退化为三对角方程组，用 Thomas 算法直接
+求解，三对角系数只依赖网格与各层 κ，在构造时预先分解、每步复用。**叠层里 κ 按单元
+取值**（单元落在哪层取该层的静态 κ），界面对齐到网格节点（层厚必须是 hz 的整数倍，
+否则构造求解器时报错）；横向项用相邻两单元 κ 的算术平均。单层退化时各单元 κ 相同，
+退回常系数解。所有吃场的机制（R4/R5 前置因子、R8）经统一的场读取接口取局域场——
+体缺陷用中心差分，界面缺陷的 E_z 用单侧差分（界面上 E_z 两侧差 κ 比，中心差分会取到
+错误的平均）。
+
+### 3. R1 按公式求值一次，不进主循环
+
+电极↔电极隧穿不改变占据组态，放进事件表只会产生大量"空转"事件。它走的是**理想
+平面势垒**的物理图像——Richardson-Schottky 对照式也是——所以势垒剖面取零空间电荷的
+外加偏压解（`E_C(z) = E_B − e·(U+V_bi)·z/Lz`，无电荷时泊松解严格线性），在初始化时
+按公式求值一次，`run()` 末尾把 `I_R1 = q·R1` 直接加进 `by_mechanism`。
+
+可观察的后果：`direct_fn` / `thermionic` 两项**不随 seed、`n_events`、缺陷实现变化**，
+也没有采样噪声；势垒顶恒为 E_B，两个分支的切分阈值与 RS 对照式的 φ_B 严格同口径。
+参考预设下 R1 占总电流 10⁻¹¹–10⁻⁸，总电流数字不受影响。
+
+### 4. R6 / R7 合并为一条通道
+
+R7 = R6 × Θ，而 E_b ≤ E_a 时 Θ = 1 即 R7 ≡ R6，两条并列会把下坡跃迁速率精确地
+算成两倍。本阶段陷阱间跃迁一律走 R7；R6 仍作为独立纯函数实现并单独测试。等 R7
+换成量子模型之后两者才需要分开计入。
+
+### 5. 系综平均是最外层循环
+
+`ensemble.py` 只做一件事：把种子逐个换掉、把结果按算术平均合起来。每个实现从缺陷
+生成开始重来一遍（新坐标 → 新的静电耦合矩阵 → 新轨迹），实现之间没有任何复用，
+所以机时严格是 M 倍。好处是这一层天然可并行——真要跑大 M 时，把 `run_ensemble`
+的循环换成进程池即可，不用动 KMC 内部；本项目发的是串行版本。
+
+一个能直接看到的后果：`direct_fn` 与 `thermionic` 两项在系综里**标准误恒为 0**。
+R1 按构造与缺陷实现无关（见上文第 3 条），M 个实现给出逐位相同的值。这条写成了
+测试，同时也是"系综代码没有把实现之间串味"的检查。
+
+---
+
+## 测试
+
+```bash
+pytest tests/ -v      # 218 个测试，约 72 s
+```
+
+| 文件 | 覆盖内容 |
+|---|---|
+| `test_rates_limits.py` | R1–R8 的解析极限与物理约束：WKB 对矩形/三角势垒的解析解、R1 零偏压归零与玻尔兹曼极限、R2/R3 占据因子互补、**R4/R5 细致平衡**（R5/R4 = exp((E−E_F)/k_BT)，与 N_C、P、L_p 取值无关）、声子权重的低温泊松极限、R7 上下坡行为、**R8 的零场与高场两个极限** |
+| `test_richardson.py` | R1 热发射子部分 vs Richardson-Schottky 解析式的**独立检验**：单层里比值恒为 m_e/m_cb 且不随温度/偏压漂移，三个缺陷浓度下逐位相同（R1 按构造与缺陷无关）；另配一例用体内鼓包把势垒顶推离界面；**叠层里以 E_max（分段势垒顶，落在 Al₂O₃ 内）为参考的 R1 供给函数玻尔兹曼导出式对照**（ADR-012） |
+| `test_electrostatics.py` | 解代回离散泊松方程的残差、均匀电荷的解析抛物线、**线性叠加成立**、CIC 电荷守恒与插值精确性、**单点电荷入盒测试**（近场库仑标度 + 自作用势量级） |
+| `test_stack_physics.py` | **变 κ 泊松 + 分段能带 + 界面单侧场**（Phase 3）：无电荷解析分压、串联电容 C/A=ε0/S_κ、面电荷电位移跳变 = σ、变系数离散残差、界面对齐校验、同材料多层退回单层求解器、响应互易；E_C 真实台阶与显式 ΔE_C 覆盖、V_bi = (B_c+ΣΔE_C−B_a)/q；界面单侧场按 κ 比跳变、`field_vectors_at` 按 field_side 选侧、体缺陷回归锚点 |
+| `test_kmc_consistency.py` | **各分量之和 = 总电流**（机制分解、缺陷分解两条）、可复现性、三个估计量互相印证、零偏压电流可忽略、跃迁通道只走 R7、**近邻表在保留对上与稠密 (N,N) 矩阵逐位相同且截掉的总速率在双精度噪声以下**、**R1 两项等于理想梯形势垒上的公式值且与 seed / 事件数无关** |
+| `test_defects.py` | 缺陷数 = 浓度×体积、最小距离（含到界面）、r_D 公式、高斯能级统计、界面富集轮廓与解析积分对比、近邻表与"稠密矩阵+掩码"逐位一致（强制走多块路径）、截断半径命中给定容差 |
+| `test_config_io.py` | 单位换算逐项核对、两种有效质量保持独立、势垒显式优先于推算、内建电势、默认扫描范围、两个示例配置的缺陷段同构；**新 schema 结构校验**（材料引用存在、层厚为正、interfaces 数量 = 层数-1）与**旧键拒绝**（顶层 `dielectric` / `defects`、`device.Lz_nm` 各自报错提示新写法） |
+| `test_stack_schema.py` | `DielectricStack` 统一查询接口（`Lz` 求和、`single_material` / `bulk_defects` 在多材料/多层时抛错）、**单元素 layers 退化用例**（YAML 解析与直接构造的单层叠层逐位相同：确定性量 rtol ≤ 1e-12、同种子轨迹 rtol ≤ 1e-9）、ZAZ 三层 schema 完整解析、**ZAZ 端到端跑通并给出机制分解**（Phase 4 打通，各分量之和 = 总电流、按缺陷分解 + R1 = 总电流） |
+| `test_stack_rates.py` | **分段 WKB + 按材料取速率参数 + 分段 G_ab + 截断重推**（Phase 4）：WKB 逐段 m_di、界面双值台阶不插斜坡、R1 势垒顶落在 Al₂O₃、分段 G_ab 同质退回闭式且跨层用 Al₂O₃ 低质量（路径传播质量，F08）、ZAZ 里 R7 正反细致平衡（F02 事件能量差不变）、截断半径按最慢材料推（ADR-013/F05）、R8 逐缺陷取 ε_opt/ν、**三层同材料 + ΔE_C=0 的速率表（rtol ≤ 1e-12）与轨迹（rtol ≤ 1e-9）退回单层**（ADR-018） |
+| `test_pf_collection.py` | **F03 PF 收集概率**（Phase 5）：带偏压 Al₂O₃ 势垒（矩形/梯形/三角）的 WKB 与解析闭式一致、0≤P_A≤1 且随偏压单调、阻挡层检测、**位置感知**（阴极侧穿层 P_A<1、阳极侧立即收集 P_A=1，界面缺陷按宿主侧判定）、反偏收集电极翻转、R8_eff=P_A·R8 折进事件表、单层 P_A≡1 逐位退回 |
+| `test_current_validation.py` | **F04 三估计量与验证 + 分层归因**（Phase 5）：全局电荷守恒 (I_C−I_A)Δt=q·ΔN_inside、正向充分点判通过验证 / 零偏压判未通过验证 / R1-only 判通过、by_layer 单层与 ZAZ（层0/层2/界面0/界面1 各一栏）闭合 Σ=TAT+PF、贯通到 sweep/ensemble/CSV、块 4 确认 R8_eff 沿用界面单侧场 |
+| `test_stack_examples.py` | **t₂ 结构对照配置与退化用例全套**（Phase 6，ADR-006/018/019）：四份示例固定总厚 9 nm、ZrO₂ 两侧对称、层厚对齐到 hz 整数倍、除层结构外逐项相同；t₂>0 有阻挡层 + Al₂O₃ 体内为空 + 两界面各 25 个界面缺陷；**t₂=0 与单层基准 `single_run.yaml` 同一器件且数值逐位退回**（速率表 / R1 / φ / E_C(z) rtol ≤ 1e-12，同种子轨迹 rtol ≤ 1e-9）、三层同材料 + ΔE_C=0 的场量退回单层 |
+| `test_master_equation.py` | **条件通量的独立主方程基准**（Phase 5，ADR-021 F04）：复现 review 4 态反例（条件通量比真实稳态低 25%）、单陷阱下条件通量 = 真实稳态、π 是合法分布且 πQ=0、长 KMC 轨迹的条件通量收敛到主方程期望 |
+| `test_numerics_convergence.py` | `kmc.py` 里各积分点数的收敛性依据 |
+| `test_ensemble.py` | 平均确实是**算术平均**、每个种子确实换了一整套缺陷、M=1 退化为普通单点仿真、标准误 = σ/√M、**R1 分量在系综里零散布**（按构造与缺陷无关）、CSV 保留各实现原始值 |
+| `test_sweep.py` / `test_visualization.py` | 扫描形状与单调性、缺陷实现复用、**高斯能级与界面富集在扫描里同样生效**（扫描用的缺陷与按同一配置同一种子直接生成的逐位相同）、CSV 往返、`--plot-prefix` 落两张图；绘图只返回 Figure、不落盘不 show，I-V/I-T 曲线的数据换算（A/cm²、°C）、**不带误差棒**、**TAT 与 PF 画在同一张图上**（分量数值、I-T 侧跟着转置、每个机制一个色系、行序逐行变深且最浅档仍可见、色系不随行数漂、两段式图例、R1 两项不上图、分量为 0 时留 nan 断点）；**叠层叠画**（ADR-016 ①②）：缺陷图两幅都叠层边界与界面位置、界面缺陷单独标色且柱子只统计体缺陷，能带图界面双值台阶（高度 = ΔE_C、两侧值就是各层 B_ℓ−eφ），单层两幅图逐位退回 |
+
+---
+
+## 已知局限与待确认项
+
+- **ZrO₂/Al₂O₃/ZrO₂ 叠层结果是"明确标注近似的 v1"，不是定量材料预测**：
+  `examples/stack_t2_*.yaml` 里 Al₂O₃ 的物性（κ=9、ε_opt=3.0、Eg=6.4 eV、
+  χ=1.4 eV、m_cb=m_di=0.3 m_e、ℏω=90 meV）与界面缺陷面密度（Nₛ=1×10¹² cm⁻²）
+  都是**占位值、待标定**（ADR-004/008）。带阶按电子亲和能对齐给出 ΔE_C=1.46 eV，
+  界面固定面电荷取 0（ADR-007）。要得出定量结论必须先换成真实材料数据
+- **PF 发射没有反向通道**（导带→陷阱俘获未在机制表里），零场下 R8 = ν·exp(−E_D/k_BT)
+  仍非零，留下一个伪零偏压电流。实测比工作点电流小约 14 个数量级，已写进测试钉住量级
+- **系综平均已落地**（`ensemble.py`）：`ensemble.count` 指定实现个数 M，每次运行随机
+  抽取 M 个种子、各跑一次独立实现，取算术平均。当前默认的 50×50×9 nm（N=68）实测 M=5 在 2 V 给出 11.7% 的相对标准误；
+  100×100 nm（N=240）下实现间 σ/mean = 16.9%（2 V）至 27.9%（4 V），M=5 对应
+  8%–13%。侧向尺寸每翻 4 倍把 σ 砍掉约一半（σ ∝ 1/√N），均值在标准误内不变
+- **陷阱间跃迁按近邻表存储**：R6/R7 的几何因子在同质材料里 e 折长度只有 r_D/2（参考
+  预设下 0.083 nm），截断半径外的缺陷对速率在双精度下对事件表没有影响——实测与稠密
+  (N,N) 实现给出逐位相同的 J 与机制分解。叠层里几何因子沿路径按材料分段衰减（ADR-010），
+  截断半径按所有材料里最慢的衰减推、判据用被丢弃的总速率上界 < 机制表最小速率
+  （`kmc._hop_cutoff_radius`，ADR-013/F05），不是写死的长度；单一材料叠层逐位退回闭式
+- **电子跳跃轨迹输出未实现**——规格里标的是"可选"，且对应绘图项列在"后续可能添加"
+- **侧向胞元尺寸的收敛性检查标准未定**。现在的 50 nm 与之前的 100 nm 都是按成本选的，
+  不是收敛性结论；两者的均值在各自标准误内一致，但"多大才算收敛"仍未测。网格分辨率
+  同理：无空间电荷时电势严格线性、结果与网格无关，网格只影响空间电荷的分辨能力
+- **R7 是 Miller-Abrahams 经典跃迁模型**的简化实现，后续可能升级为量子模型；届时只需
+  改 R7 内部实现与"R6/R7 合并"这一条
+- 绘图文字用英文：matplotlib 在没有配置中文字体的机器上会把中文渲染成方框，这里不去
+  改全局 rcParams，也就不依赖任何字体
+
+---
+
+## 目录结构
+
+```
+src/kmc_leakage/
+  config.py            配置数据结构（全部 SI 单位）：materials / layers / interfaces + DielectricStack 查询接口
+  io.py                YAML 读入 + 单位换算（唯一的换算边界）+ schema 校验、旧键拒绝
+  defects.py           缺陷生成、界面富集轮廓、r_D、最小镜像距离、R6/R7 近邻表
+  electrostatics.py    变 κ 泊松方程（FFT + Thomas，κ 按单元）、CIC 分配与插值、界面单侧场读取
+  bands.py             能带剖面、费米分布、电极态密度
+  rates/               R1–R8 与 WKB，每个函数一个纯函数
+    wkb.py                 WKB 透射系数
+    electrode_tunneling.py R1 + Richardson-Schottky 对照式
+    elastic_capture.py     R2 / R3
+    multiphonon.py         R4 / R5 + 声子线型
+    trap_hopping.py        R6 / R7
+    pf_emission.py         R8
+  kmc.py               Gillespie 主循环、PF 收集概率 P_A、电流估计量、分层归因与验证状态
+  master_equation.py   小状态空间主方程稳态解（条件通量的独立基准，仅验证用）
+  sweep.py             I-V / I-T 扫描 + CSV 输出
+  ensemble.py          多个缺陷实现的算术平均 + CSV 输出
+  visualization.py     缺陷分布、能带结构、I-V / I-T 曲线（只返回 Figure）
+  __main__.py          命令行入口
+tests/                 218 个测试
+examples/              single_run.yaml、iv_sweep.yaml、stack_t2_{0,1,2,3}nm.yaml（t₂ 结构对照）
+docs/                  物理规格（改 rates/ 或 electrostatics.py 前先读）
+```
+
+## 可视化模块
+
+`src/kmc_leakage/visualization.py` 与仿真主流程解耦：绘图函数只接受**已经算好的
+数据**，返回 matplotlib 的 `Figure`，内部不调用 `plt.show()`、不保存文件、不触发
+仿真——保存还是显示由调用方决定。图上文字一律用英文（不依赖中文字体）。
+
+| 函数 | 画什么 | 输入 |
+|---|---|---|
+| `plot_defect_distribution` | 三维缺陷散点（按能级着色，画代表实现）+ 沿 z 的数密度直方图（汇总系综 M 个实现除以 M，横轴只画可采样窗口）；叠层时两幅都叠画层边界与界面位置、界面缺陷单独标色 | `DeviceConfig`、`DefectEnsemble`、可选 `realizations`（系综 M 个实现） |
+| `plot_band_diagram` | 沿 z 的能带剖面（不画镜像力圆化）；叠层时导带/价带在界面处画真实台阶（界面双值，不连斜坡） | `BandProfile`，可选缺陷 z 与能级 |
+| `plot_iv_curves` | I-V：横轴电压，一条曲线一个温度；总电流 + TAT + PF | 电压 [V]、温度 [K]、J 矩阵 [A/m²]，可选机制分解 |
+| `plot_it_curves` | I-T：横轴温度（°C），一条曲线一个电压；总电流 + TAT + PF | 同上（同一份数据按电压切） |
+
+两条曲线函数吃的就是 `SweepResult` / `EnsembleSweepResult` 的
+`voltages`、`temperatures`、`current_density`、`by_mechanism`（矩阵形状
+`(温度点数, 电压点数)`）：
+
+```python
+from kmc_leakage.ensemble import run_ensemble_sweep
+from kmc_leakage.visualization import plot_iv_curves
+
+result = run_ensemble_sweep(config)
+figure = plot_iv_curves(
+    result.voltages,
+    result.temperatures,
+    result.current_density,
+    result.by_mechanism,      # 同一张图上多出 TAT 与 PF 两族曲线
+)
+figure.savefig("iv.png", dpi=150)
+```
+
+- 输入是内部 SI 单位，换算在绘图这个输出边界做：纵轴 J 换成 A/cm²、横轴温度换成 °C，
+  与 CSV 输出同口径
+- 纵轴取对数（漏电流跨几个数量级）
+- **不画误差棒**。系综的标准误 σ/√M 仍然照算，只是走数字而不走图：CLI 摘要里逐点
+  打印，CSV 有 `J_sem_A_cm2` 一列，`EnsembleSweepResult.current_density_sem` 也还在
+- 第四个参数传机制分解时，**TAT 与 PF 画进同一张图**。两个维度分到两个通道：
+  **颜色分机制**（总电流蓝、TAT 橙、PF 绿），**深浅分行**（同一色系里浅 = 低温/低压、
+  深 = 高温/高压）。线型与标记同样跟机制走（总电流实线圆点、TAT 虚线方点、PF 点线
+  三角），是冗余的第二通道——色觉障碍与黑白打印下也能认出机制。图例相应分成
+  "温度/电压"与"total / TAT / PF"两段。分量在某工作点上可以恰好是 0（统计窗口内没有
+  该类事件），对数轴画不出，就换成 nan 在曲线上留一个断点
+- 配色取三条单色系（`Blues` / `Oranges` / `Greens`）在 0.50–0.95 区间上按行数等分。
+  下限 0.50 是为了最浅那档在白底上仍有 2.1:1 以上的对比度；上限 0.95 是为了最深那档
+  不糊成黑色。三个色系中点（`#2777b8` / `#de4e05` / `#29914a`，即只画一行时用的颜色，
+  也是图例代理的颜色）作为分类色通过了色觉障碍分离度检验（全配对最差
+  ΔE 8.4 deutan、常视 20.4，白底对比度均 ≥ 3:1）；每条色系的 5 档深浅也通过了
+  单色渐变检验（亮度单调、相邻 ΔL ≥ 0.06）。**行数超过 5 档时深浅分辨会变紧**
+  ——默认 I-T 图是 11 个电压点，靠图例与"越深越高"的单调方向读，相邻两档本身分不开
+- **只画 TAT 与 PF**，不画 R1 的 `direct_fn` / `thermionic`：那两项比总电流小 7–15 个
+  数量级，画进同一张对数图会把纵轴拉开十几个十倍程。四项完整分解看 CSV
+- CLI 里 `sweep --plot-prefix scan` 就是这两个函数加一次 `savefig`，落
+  `scan_iv.png` 与 `scan_it.png`，机制分解一律带上
+- **叠层的两处叠画**（ADR-016，函数签名不变，靠传进来的 `DeviceConfig` /
+  `BandProfile` 自己认出层结构）：缺陷图在三维盒子上把每个界面画成一圈虚线、
+  在深度剖面上画层边界竖线与层材料名，**界面缺陷单独标色**（深色菱形 + 界面处
+  的个数标注）——它们按面密度 Nₛ 配置，与体缺陷的体密度不是一个量纲，所以直方图
+  的柱子只统计体缺陷；能带图在界面处画**真实台阶**，同一个 z 上取两侧各一个值
+  （`BandProfile.stepped`），不把台阶连成斜坡。单层没有内部界面，两幅图与叠层
+  改造前逐位相同

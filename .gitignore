@@ -1,0 +1,35 @@
+# Python 字节码
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 打包与分发
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# 测试与覆盖率
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 编辑器与 IDE
+.idea/
+.vscode/
+*.swp
+
+# 操作系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Claude Code 本地设置（.claude/rules/ 与 .claude/settings.json 需入库）
+.claude/settings.local.json

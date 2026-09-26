@@ -1,0 +1,82 @@
+# I-V / I-T 扫描示例配置
+#
+# 器件与材料同 single_run.yaml（结构 schema 见那份的注释），另加 sweep 与
+# ensemble 两段。扫描范围如果整段省略，默认就是 docs/physics_model.md 里的
+# I-V 1–4 V 步长 0.2 V（16 点）与 I-T 0–125 °C 步长 25 °C（6 点）。
+#
+# 50×50×9 nm、3×10^18 cm^-3 → 68 个缺陷。要完整曲线时把 sweep 段整个删掉
+# （走默认范围）或按需改写，实现个数由 ensemble.count 控制。
+
+materials:
+  reference-preset:
+    kappa: 38.0
+    eps_opt: 5.6
+    band_gap_eV: 5.4
+    electron_affinity_eV: 2.86
+    m_cb_me: 1.2
+    m_vb_me: 2.5
+    m_di_me: 1.2
+    phonon_energy_eV: 0.04
+    huang_rhys_S: 1.0
+    attempt_frequency_s: 1.0e13
+
+# 单层退化：layers 只含一个元素，Lz = 9 nm。缺陷段与 single_run.yaml 完全同构：
+# 能级和空间分布的模式在扫描里一样生效，一个实现的缺陷按此生成一次、扫遍所有工作点。
+layers:
+  - material: reference-preset
+    thickness_nm: 9.0
+    defects:
+      concentration_cm3: 3.0e18
+      charge_state_Z: 1.0          # 施主型，未占据时 +1，不可双占据
+      min_separation_nm: 0.5       # 缺陷两两之间 + 缺陷到电极界面的最小距离
+      level:
+        mode: gaussian                # fixed | gaussian
+        ED_eV: 1.15
+        sigma_eV: 0.15             # mode=gaussian 时生效
+      spatial:
+        mode: interface              # uniform | interface
+        enrichment: 5.0            # mode=interface 时生效
+        decay_length_nm: 1.0
+
+device:
+  Lx_nm: 50.0
+  Ly_nm: 50.0
+  barrier_height_eV: 1.74
+
+electrodes:
+  cathode: &electrode
+    name: TiN
+    work_function_eV: 4.6
+    effective_mass_me: 1.0
+    fermi_energy_eV: 5.0
+  anode: *electrode
+
+simulation:
+  # 扫描时每个工作点都跑一遍 KMC，事件数比单点少一些
+  voltage_V: 2.0          # 被 sweep 覆盖，仅作占位
+  temperature_C: 25.0     # 同上
+  n_events: 5000
+  burn_in_fraction: 0.2
+  seed: 12345             # 有 ensemble 段时被随机抽取的种子逐个覆盖，仅作占位
+  grid:
+    # 格点数跟随器件尺寸，保持 hx = hy = 1.5625 nm、hz = 0.25 nm
+    nx: 32
+    ny: 32
+    nz: 36
+
+sweep:
+  voltage_V:
+    start: 2.0
+    stop: 4.0
+    step: 0.1
+  temperature_C:
+    start: 25.0
+    stop: 25.0
+    step: 50.0
+
+# 系综平均：每个种子把整条扫描曲线跑一遍，再逐工作点取算术平均。
+# 一个实现内部所有工作点共用同一套缺陷，曲线形状仍由单个器件决定。
+# count = 实现个数 M，每次运行随机抽取 count 个互异种子（一个种子 = 一次
+# 独立缺陷实现 + KMC 轨迹）；抽到的种子随 CLI 进度与 CSV 落盘，要复现照抄。
+ensemble:
+  count: 5
