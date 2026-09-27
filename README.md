@@ -122,7 +122,8 @@ print(result.defects.positions[top, 2])
 | `by_defect` | 每个缺陷的电流贡献，之和 + R1 两项恒等于 `current` |
 | `occupancy` | KMC 采样的时间平均占据概率 |
 | `occupancy_mean_field` | 条件稳态占据 p̂ 的时间平均，与上一项对照即可判断估计量前提是否成立 |
-| `current_direct` / `current_counts` / `n_anode_events` | 交叉检验用的另外两个估计量（见下文） |
+| `current_direct` / `current_counts_total` / `n_anode_events` | 交叉检验用的另外两个估计量（见下文）；`current_counts_total` = 阳极净事件电流 `current_counts` + 快陷阱电流 `current_fast` + R1 |
+| `n_fast_traps` / `current_fast` / `fast_exchange` | 快陷阱个数、它们的阳极净电流 [A]、快→慢跃迁的净次数（未启用 `fast_trap_rate_s` 时全为 0） |
 | `elapsed_time` | 统计窗口时长 [s] |
 
 扫描：
@@ -225,6 +226,7 @@ simulation:
   burn_in_fraction: 0.2
   seed: 12345                 # 只在没有 ensemble 段时生效
   grid: {nx: 32, ny: 32, nz: 80}   # hx = Lx/nx，格点数必须跟着器件尺寸走
+  # fast_trap_rate_s: 1.0e9   # 可选：与电极交换电子 ≥ 此速率 [s⁻¹] 的陷阱移出事件表（见"实现要点"）
 
 sweep:                          # 整段省略则用默认范围
   voltage_V:     {start: 1.0, stop: 4.0, step: 0.2}    # 默认 I-V：16 点
@@ -549,16 +551,29 @@ flux_i = [(C_c + H_in)·E_a − (E_c + H_out)·C_a] / (C + E)
 真实电荷分布重算速率，解簇内主方程稳态，簇外占据作为环境。孤立簇上结果与主方程精确解
 一致，且与轨迹无关；单陷阱仍走上式，逐位不变。
 
+**快陷阱移出事件预算**（ADR-023，可选，`simulation.fast_trap_rate_s`）：贴电极的陷阱与
+电极交换电子可达 1e9–1e10 s⁻¹，Gillespie 的事件几乎全花在它们的来回翻转上，4000 个事件
+只推进几十纳秒。配置 R_cut 后，全空组态下与电极交换总速率 ≥ R_cut 的陷阱退出事件表，
+占据改用与当前慢组态自洽的条件稳态 p̂（进静电叠加与跃迁的 Pauli 阻塞），快↔慢跃迁仍是
+事件、执行时只改慢陷阱一端。估计量不受影响：快陷阱的电流本来就由上式给出，照样可以是
+强耦合簇成员；近似只在于慢陷阱感受到的是快陷阱的平均电荷，所以要求快陷阱比剩余事件
+快得多（min Γ_F 与测量窗口内平均事件速率之比 < 10 判未通过）。t2_2nm 叠层实测
+R_cut=1e9 把 4000 事件的窗口从 38 ns 延长到 24 μs，电流与不移出时相差 0.1%。不配置时
+逐位退回原算法。
+
 结果里同时给出另外两个估计量作交叉检验：`current_direct`（瞬时通量的时间平均）与
-`current_counts + R1`（数事件）。这三个估计量是 F04（ADR-021）要求的口径。每个工作点
+`current_counts_total`（数事件 + 快陷阱电流 + R1）。这三个估计量是 F04（ADR-021）要求的
+口径。每个工作点
 带一个**验证状态**（`validated` + `validation_notes`）：只在正向收集（U+V_bi>0）、测量
-窗口充分、KMC 采样占据与条件稳态 p̂ 接近、批次间电流一致、且（阳极事件够多时）净计数
-交叉校验通过时才判"通过验证"，否则标"未通过验证"、不得当可信稳态电流交付。批次间一致性
+窗口充分、KMC 采样占据与条件稳态 p̂ 接近、批次间电流一致、（启用快陷阱时）时间尺度分离
+足够、且（阳极事件够多时）净计数交叉校验通过时才判"通过验证"，否则标"未通过验证"、
+不得当可信稳态电流交付。批次间一致性
 用批次均值法检验：测量窗口按事件数等分成 10 批，电流相对标准误超过 0.05 即判未通过——
 它是强耦合簇之外剩余采样问题的保险。净事件计数在本项目低
 漏电流下噪声大（比信号低 2–3 个量级），只有统计够用才纳入门槛。窗口内还核对全局电荷
-守恒 (I_C−I_A)·Δt = q·ΔN_inside（逐事件记账的恒等式）。系综层面另给出成对差
-ΔJ = J_条件 − (J_数事件+R1) 及其跨种子标准误。条件通量估计量本身用**小状态空间主方程
+守恒 (I_C−I_A)·Δt = q·(ΔN_inside − fast_exchange)（逐事件记账的恒等式；快↔慢跃迁不经过
+电极，未启用快陷阱时 fast_exchange=0）。系综层面另给出成对差
+ΔJ = J_条件 − J_数事件（`current_counts_total`）及其跨种子标准误。条件通量估计量本身用**小状态空间主方程
 稳态解**独立对照（`master_equation.py` / `test_master_equation.py`，复现 review 的 25%
 反例与一致极限）——耦合网络里它不自动无偏，所以要独立验证。
 
@@ -633,6 +648,7 @@ pytest tests/ -v      # 218 个测试，约 72 s
 | `test_current_validation.py` | **F04 三估计量与验证 + 分层归因**（Phase 5）：全局电荷守恒 (I_C−I_A)Δt=q·ΔN_inside、正向充分点判通过验证 / 零偏压判未通过验证 / R1-only 判通过、by_layer 单层与 ZAZ（层0/层2/界面0/界面1 各一栏）闭合 Σ=TAT+PF、贯通到 sweep/ensemble/CSV、块 4 确认 R8_eff 沿用界面单侧场 |
 | `test_stack_examples.py` | **t₂ 结构对照配置与退化用例全套**（Phase 6，ADR-006/018/019）：三份示例（t₂ ∈ {0,2,4} nm）固定总厚 8 nm、ZrO₂ 两侧对称、层厚对齐到 hz 整数倍、除层结构外逐项相同；t₂>0 有阻挡层 + Al₂O₃ 体内为空 + 两界面各 25 个界面缺陷；**t₂=0 与单层基准 `single_run.yaml` 同一器件且数值逐位退回**（速率表 / R1 / φ / E_C(z) rtol ≤ 1e-12，同种子轨迹 rtol ≤ 1e-9）、三层同材料 + ΔE_C=0 的场量退回单层 |
 | `test_master_equation.py` | **条件通量的独立主方程基准**（Phase 5，ADR-021 F04）：复现 review 4 态反例（条件通量比真实稳态低 25%）、单陷阱下条件通量 = 真实稳态、π 是合法分布且 πQ=0、**强耦合对连成簇后 KMC 估计量 = 精确稳态**（rtol 1e-10，单陷阱估计量在同一体系上只有约 1.5%）且短轨迹、换种子不变、长 KMC 轨迹的条件通量收敛到主方程期望 |
+| `test_fast_traps.py` | **快陷阱移出事件预算**（ADR-023）：没有陷阱达到 R_cut 时与不配置逐位相同、三陷阱小体系开启后电流仍等于主方程精确稳态（rtol 1e-4）且窗口延长 6 个数量级以上、全局守恒计入快↔慢跃迁 (I_C−I_A)Δt=q(ΔN−fast_exchange)、全部陷阱都快时判未通过、时间尺度分离不足判未通过；配置项 `fast_trap_rate_s` 的解析与取值检查在 `test_config_io.py` |
 | `test_clusters.py` | **强耦合簇的纯函数**（ADR-022）：耦合强度与分簇、超限分量在最弱处切开、GTH 稳态分布与线性解一致且在速率跨 1e-20…1e14 时逐分量相对精度 ≤1e-12、簇内条件稳态在 4 态反例上给出精确 0.4、生成矩阵事件口径与 KMC 一致、无耦合时逐成员退回单陷阱公式（含贴阳极 1e13 s⁻¹ 交换、净通量 0.4 s⁻¹ 的成员） |
 | `test_numerics_convergence.py` | `kmc.py` 里各积分点数的收敛性依据 |
 | `test_ensemble.py` | 平均确实是**算术平均**、每个种子确实换了一整套缺陷、M=1 退化为普通单点仿真、标准误 = σ/√M、**R1 分量在系综里零散布**（按构造与缺陷无关）、CSV 保留各实现原始值 |
@@ -692,7 +708,7 @@ src/kmc_leakage/
   ensemble.py          多个缺陷实现的算术平均 + CSV 输出
   visualization.py     缺陷分布、能带结构、I-V / I-T 曲线（只返回 Figure）
   __main__.py          命令行入口
-tests/                 225 个测试
+tests/                 232 个测试
 examples/              single_run.yaml、iv_sweep.yaml、stack_t2_{0,2,4}nm.yaml（t₂ 结构对照）、stack_t2_2nm_custom.yaml（不对称自定义算例）
 docs/                  物理规格（改 rates/ 或 electrostatics.py 前先读）
 ```

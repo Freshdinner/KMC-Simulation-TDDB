@@ -129,7 +129,6 @@ def write_csv(result: SweepResult, path: str) -> None:
         for it, temperature in enumerate(result.temperatures):
             for iv, voltage in enumerate(result.voltages):
                 point = result.results[it][iv]
-                r1 = point.by_mechanism["direct_fn"] + point.by_mechanism["thermionic"]
                 to_density = per_cm2 / point.area
                 writer.writerow(
                     ["{:.6g}".format(voltage), "{:.6g}".format(temperature - constants.zero_Celsius)]
@@ -144,7 +143,7 @@ def write_csv(result: SweepResult, path: str) -> None:
                     ]
                     + [
                         "{:.6e}".format(point.current_direct * to_density),
-                        "{:.6e}".format((point.current_counts + r1) * to_density),
+                        "{:.6e}".format(point.current_counts_total * to_density),
                         "{:d}".format(point.delta_n_inside),
                         "{:d}".format(point.measured_events),
                         "{:d}".format(point.n_events),

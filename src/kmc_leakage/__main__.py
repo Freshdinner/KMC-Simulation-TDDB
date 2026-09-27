@@ -56,15 +56,20 @@ def _report(result: SimulationResult) -> None:
         z_nm = result.defects.positions[i, 2] / constants.nano
         share = result.by_defect[i] / result.current if result.current else 0.0
         typer.echo("    #{:<3d} z = {:5.2f} nm   占比 {:>8.3%}".format(int(i), z_nm, share))
-    r1 = result.by_mechanism["direct_fn"] + result.by_mechanism["thermionic"]
     typer.echo(
         "  三估计量：J_条件 = {:.3e}，J_直接 = {:.3e}，J_数事件+R1 = {:.3e} A/cm²（阳极事件 {} 次）".format(
             result.current * to_density,
             result.current_direct * to_density,
-            (result.current_counts + r1) * to_density,
+            result.current_counts_total * to_density,
             result.n_anode_events,
         )
     )
+    if result.n_fast_traps:
+        typer.echo(
+            "  快陷阱：{} 个移出事件表，占电流 {:.3e} A/cm²，测量窗口 {:.3e} s".format(
+                result.n_fast_traps, result.current_fast * to_density, result.elapsed_time
+            )
+        )
     status = "通过验证" if result.validated else "未通过验证：" + "；".join(result.validation_notes)
     typer.echo(
         "  验证状态：{}（测量事件 {}，ΔN_inside {}，守恒 (I_C−I_A)Δt=q·ΔN）".format(

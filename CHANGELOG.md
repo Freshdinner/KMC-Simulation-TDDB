@@ -7,6 +7,28 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **新增可选的快陷阱移出事件预算，测量窗口延长 80–900 倍**（`config.SimulationConfig` 新增
+  `fast_trap_rate`、`io._simulation` 解析 `simulation.fast_trap_rate_s`；`kmc.py`：`_prepare`
+  按全空组态速率分出快陷阱，主循环里快陷阱的块事件移出、占据取每步自洽的 p̂、快↔慢跃迁
+  按 p̂ 加权并只改慢陷阱一端，`SimulationResult` 新增 `n_fast_traps`/`current_fast`/
+  `fast_exchange` 与属性 `current_counts_total`，`_validate_result` 新增时间尺度分离判据；
+  `ensemble.py` 的 ΔJ、`sweep.py` 的 CSV、`__main__.py` 的摘要改用 `current_counts_total`，
+  删去随之无用的 `ensemble._r1`；新增 `tests/test_fast_traps.py` 6 个测试、`test_config_io.py`
+  1 个；同步 README、`docs/glossary.md`、`docs/leakage_current_statistics.md` §3.3/§4、ADR-023）。
+
+  **问题**：贴电极的陷阱与电极交换电子达 1e9–3e10 s⁻¹，4000 事件在 t2_2nm 叠层 125 °C/4.3 V
+  下只推进 38 ns，事件预算几乎全花在它们的来回翻转上。
+
+  **做法**：Jegert 等人 R_cutoff 方法的变体。全空组态下电极交换总速率 ≥ R_cut 的陷阱退出
+  事件表，占据取与当前慢组态自洽的条件稳态 p̂（迭代容差 1e-3），估计量不变（快陷阱照样
+  可以是强耦合簇成员）。省略该配置项时逐位退回原算法。
+
+  **结果**：同一实现 4000 事件，125 °C/4.3 V 下 R_cut=1e10/1e9 把窗口从 38 ns 延长到 3.0/24 μs，
+  25 °C/3.3 V 下从 0.54 μs 延长到 70/490 μs，电流与不启用相差 ≤0.23%；三陷阱小体系开启后电流
+  仍等于主方程精确稳态（rtol 1e-4）。R_cut=1e8 时 125 °C/4.3 V 分离比 4.1，判未通过。无 R 编号
+  （KMC 采样，ADR-021 F04 的延续）。`pytest tests/ -v`（`.venv`，Python 3.8）230 passed、2 failed；
+  两个失败同上一条，来自工作区未提交的 `examples/stack_t2_2nm.yaml` 改动，与本次无关。
+
 - **电流估计量对强耦合陷阱簇改用簇内条件稳态，消除 I-V 尖峰与跃迁供给通路的漏算**
   （新增 `clusters.py`：`coupling_strength`、`coupled_clusters`、`stationary_distribution_gth`、
   `cluster_generator`、`cluster_steady_state`；`kmc.py`：`_build_clusters`/`_cluster_plan` 在工作点

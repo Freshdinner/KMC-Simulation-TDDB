@@ -381,6 +381,9 @@ class SimulationConfig:
     burn_in_fraction: float = 0.2
     seed: int = 12345
     grid: GridConfig = GridConfig()
+    # 快陷阱判据 R_cut [1/s]：与电极交换电子的总速率 ≥ 此值的陷阱移出事件表、占据取
+    # 条件稳态 p̂（ADR-023）。None = 不移出，逐位退回原算法
+    fast_trap_rate: Optional[float] = None
 
 
 @dataclass(frozen=True)

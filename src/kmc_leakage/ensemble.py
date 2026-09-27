@@ -106,11 +106,6 @@ def _layer_union(layer_dicts) -> List[str]:
     return keys
 
 
-def _r1(result: SimulationResult) -> float:
-    """R1 两分量之和 [A]（电极↔电极，单列、不进分层）。"""
-    return result.by_mechanism["direct_fn"] + result.by_mechanism["thermionic"]
-
-
 def _seeded(config: Config, seed: int) -> Config:
     """把配置里的种子换成指定值——缺陷实现与 KMC 轨迹都跟着换。"""
     return replace(config, simulation=replace(config.simulation, seed=seed))
@@ -145,7 +140,7 @@ def run_ensemble(
         for key in layer_keys
     }
     delta = _mean_sem(
-        np.array([(r.current - (r.current_counts + _r1(r))) / area for r in results])
+        np.array([(r.current - r.current_counts_total) / area for r in results])
     )
     return EnsembleResult(
         seeds=seeds,
@@ -198,7 +193,7 @@ def run_ensemble_sweep(
         for key in layer_keys
     }
     dj_samples = np.array([
-        [[(p.current - (p.current_counts + _r1(p))) / area for p in row] for row in s.results]
+        [[(p.current - p.current_counts_total) / area for p in row] for row in s.results]
         for s in sweeps
     ])
     delta_j, delta_j_sem = _mean_sem(dj_samples)

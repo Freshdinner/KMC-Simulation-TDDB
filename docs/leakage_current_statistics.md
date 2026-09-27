@@ -152,6 +152,16 @@ $$
 
 当前程序按指定事件数结束，也会在总速率非正时提前结束；没有自动稳态判定或按目标误差自动延长采样的逻辑。因此，完成指定事件数后仍需检查预热与采样是否充分。
 
+### 3.3 快陷阱移出事件预算（可选，ADR-023）
+
+贴电极的陷阱与电极交换电子的速率可达 1e9–1e10 s⁻¹，\(R_{\mathrm{tot}}\) 几乎全由它们贡献，固定事件数下 \(T_{\mathrm m}\) 只有几十纳秒。配置 `simulation.fast_trap_rate_s` \(=R_{\mathrm{cut}}\) 后，全空组态下电极交换总速率 \(\Gamma_i\ge R_{\mathrm{cut}}\) 的陷阱（集合 \(F\)）退出事件表：
+
+- 它们的占据取与当前慢组态自洽的条件稳态 \(\hat p_i\)（6.2 的公式，每步开头迭代到变化 \(\le 10^{-3}\)），进入静电叠加与跃迁的 Pauli 阻塞；
+- 快→慢、慢→快的跃迁仍是事件，速率分别乘 \(\hat p_a\) 与 \(1-\hat p_b\)，执行时只改慢陷阱一端；快↔快跃迁不进事件表；
+- \(R_{\mathrm{tot}}\) 只剩慢过程，同样的事件数覆盖的物理时间长得多。
+
+要求快陷阱在两次事件之间来得及弛豫：\(\min_{i\in F}\Gamma_i\big/(N_{\mathrm{events}}/T_{\mathrm m})<10\) 时判未通过验证。
+
 ## 4. 第一种估计量：阳极净事件计数
 
 对应字段：`current_counts`。
@@ -176,17 +186,19 @@ I_{\mathrm{counts}}
 q\frac{N_+-N_-}{T_{\mathrm m}}.
 $$
 
-`current_counts` 只包含陷阱相关电流。与总电流比较时应使用：
+`current_counts` 只包含实际执行了的陷阱相关事件。启用快陷阱（3.3）时，快陷阱的事件不再执行，它们的阳极净电流 `current_fast` 按主估计量的条件稳态通量补上。与总电流比较时应使用（字段 `current_counts_total`）：
 
 $$
 I_{\mathrm{counts,total}}
 =
-I_{\mathrm{counts}}+I_{\mathrm{R1}},
+I_{\mathrm{counts}}+I_{\mathrm{fast}}+I_{\mathrm{R1}},
 \qquad
 I_{\mathrm{R1}}
 =
 I_{\mathrm{direct/FN}}+I_{\mathrm{thermionic}}.
 $$
+
+全局守恒相应写成 \((I_C-I_A)\Delta t=q(\Delta N_{\mathrm{inside}}-N_{\mathrm{fast\to slow}})\)，\(N_{\mathrm{fast\to slow}}\)（`fast_exchange`）是快→慢减慢→快跃迁的净次数，未启用快陷阱时为 0。
 
 `n_anode_events` 记录的是：
 
@@ -616,7 +628,7 @@ print("阳极相关事件数:", result.n_anode_events)
 
 | 内容 | 入口 |
 |---|---|
-| 单点参数、种子选择 | [config.py](../src/kmc_leakage/config.py)：`SimulationConfig`、`Config.seeds` |
+| 单点参数、种子选择、快陷阱判据 | [config.py](../src/kmc_leakage/config.py)：`SimulationConfig`（含 `fast_trap_rate`）、`Config.seeds` |
 | 事件推进、预热、时间加权、计数及结果组合 | [kmc.py](../src/kmc_leakage/kmc.py)：`KMCSimulation.run` |
 | 陷阱间流入与流出 | [kmc.py](../src/kmc_leakage/kmc.py)：`_hop_sums` |
 | 条件稳态通量与 TAT/PF 分解 | [kmc.py](../src/kmc_leakage/kmc.py)：`_conditional_flux`、`_trap_flux` |

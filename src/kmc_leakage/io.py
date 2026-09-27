@@ -215,6 +215,9 @@ def _device(raw: Dict[str, Any], electrodes: Dict[str, Any], stack: DielectricSt
 
 def _simulation(raw: Dict[str, Any]) -> SimulationConfig:
     grid_raw = raw.get("grid", {})
+    fast_rate = raw.get("fast_trap_rate_s")
+    if fast_rate is not None and not float(fast_rate) > 0.0:
+        raise ValueError("simulation.fast_trap_rate_s 必须为正（单位 s⁻¹），收到 {!r}".format(fast_rate))
     return SimulationConfig(
         voltage=float(_require(raw, "voltage_V", "simulation")),
         temperature=celsius_to_kelvin(_require(raw, "temperature_C", "simulation")),
@@ -226,6 +229,7 @@ def _simulation(raw: Dict[str, Any]) -> SimulationConfig:
             ny=int(grid_raw.get("ny", 32)),
             nz=int(grid_raw.get("nz", 32)),
         ),
+        fast_trap_rate=None if fast_rate is None else float(fast_rate),
     )
 
 

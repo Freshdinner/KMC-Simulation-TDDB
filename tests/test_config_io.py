@@ -87,6 +87,17 @@ def test_units_are_converted_to_si():
     assert cfg.simulation.temperature == pytest.approx(298.15)
 
 
+def test_fast_trap_rate_is_optional_and_positive():
+    """simulation.fast_trap_rate_s（s⁻¹）缺省为 None（不移出快陷阱），给出时须为正（ADR-023）。"""
+    raw = _base_dict()
+    assert config_from_dict(raw).simulation.fast_trap_rate is None
+    raw["simulation"]["fast_trap_rate_s"] = 1.0e9
+    assert config_from_dict(raw).simulation.fast_trap_rate == pytest.approx(1.0e9)
+    raw["simulation"]["fast_trap_rate_s"] = 0.0
+    with pytest.raises(ValueError, match="fast_trap_rate_s"):
+        config_from_dict(raw)
+
+
 def test_lz_is_the_sum_of_layer_thicknesses():
     """Lz 不是配置项，由各层 thickness_nm 求和得到。"""
     raw = _base_dict()

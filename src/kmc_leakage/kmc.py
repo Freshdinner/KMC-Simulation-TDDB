@@ -55,6 +55,20 @@
    由此给出，不再依赖簇内的采样；单陷阱仍走说明 3 的公式，逐位不变。孤立簇的
    结果与 `master_equation.py` 的精确稳态一致。
 
+6. **快陷阱移出事件预算（ADR-023，可选）。** 贴着电极的陷阱与电极交换电子可达
+   1e9–1e10 s⁻¹，Gillespie 的事件几乎全花在它们的来回翻转上，n_events 个事件只推进
+   几十纳秒，慢变量（库仑环境、慢陷阱的填充）采不到。配置 `simulation.fast_trap_rate_s`
+   = R_cut 后，全空组态下电极交换总速率 Γ_i ≥ R_cut 的陷阱记为快陷阱：它们的俘获/
+   逃逸/PF 事件移出事件表，占据不再取 0/1，改用与当前慢组态自洽的条件稳态 p̂（每步
+   迭代到变化 ≤ `_FAST_P_TOL`），进入静电叠加与跃迁的 Pauli 阻塞；快→慢、慢→快的
+   跃迁仍是事件，速率乘 p̂ 或 1−p̂，执行时只改慢陷阱一端；快↔快跃迁移出。这是
+   Jegert 等人 R_cutoff 方法的变体：原文用此前迭代的时间平均占据，这里用随组态更新
+   的 p̂。估计量不受影响：快陷阱的电流由说明 3 的公式给出（本来就不依赖采样），同时
+   补进数事件与瞬时通量两个交叉估计量；快陷阱照样可以是强耦合簇的成员，簇内按组态
+   精确枚举。所以近似只进入**采样的动力学**——慢陷阱感受到的是快陷阱的平均电荷——要求
+   快陷阱比剩余事件快得多：测量窗口内平均事件速率与 min Γ_F 之比低于
+   `_FAST_SEPARATION_MIN` 时判未通过验证。不配置时逐位退回原算法。
+
 统计口径按"电子抵达收集电极（或进入导带后被收集）的最后一步事件类型"
 归类，见 docs/rate_equations.md 的机制对照表。R8 发射到导带的电子按
 "立即被阳极收集"处理（U>0 时导带电子向阳极漂移）。
@@ -128,6 +142,13 @@ _N_BATCHES = 10  # 测量窗口按事件数等分的批次数，批次均值法�
 # 批次均值法给出的电流相对标准误上限。实测正常点 ≤0.001（条件稳态估计量很平滑），
 # 跃迁供给通路偶尔被填充造成的尖峰为 0.19–0.26（t2_2nm 叠层、seed 243366264）
 _BATCH_REL_TOL = 0.05
+# 快陷阱（ADR-023）：min Γ_F 至少是测量窗口内平均事件速率的这么多倍，快陷阱才来得及
+# 在两次事件之间弛豫到 p̂（绝热消去成立）
+_FAST_SEPARATION_MIN = 10.0
+# 快陷阱 p̂ 与当前慢组态自洽迭代的收敛容差（占据概率的绝对变化）。t2_2nm 叠层 125 °C/4.3 V、
+# R_cut=1e9 实测：1e-3 时平均每步 1.10 次 _rates、1e-6 时 1.93 次，两者 J 前 6 位相同
+_FAST_P_TOL = 1e-3
+_FAST_MAX_ITER = 20
 
 # 事件块：每块长度 N，块内索引即缺陷编号。前四块是俘获，后五块是逃逸/发射。
 _B_R2C, _B_R2A, _B_R4C, _B_R4A, _B_R3C, _B_R3A, _B_R5C, _B_R5A, _B_R8 = range(9)
@@ -160,14 +181,25 @@ class SimulationResult:
     measured_events: int  # 测量窗口内执行的事件数
     # --- 三个估计量与全局守恒（F04，ADR-021）---
     current_direct: float  # 瞬时阳极通量的时间平均 [A]（相消未消去，方差大）
-    current_counts: float  # 阳极净事件电流 [A]（不含 R1，即 I_A − I_R1）
-    current_counts_cathode: float  # 阴极净事件电流 [A]（不含 R1，即 I_C − I_R1）
+    current_counts: float  # 阳极净事件电流 [A]（只数执行了的事件，不含 R1 与快陷阱）
+    current_counts_cathode: float  # 阴极净事件电流 [A]（同上，即 I_C − I_R1）
     n_anode_events: int
-    delta_n_inside: int  # 测量窗口内器件内电子数变化 ΔN_inside（守恒：ΔI·Δt = q·ΔN_inside）
+    # 测量窗口内慢陷阱电子数变化 ΔN_inside。守恒：(I_C−I_A)·Δt = q·(ΔN_inside − fast_exchange)
+    delta_n_inside: int
     # --- 收敛/验证状态（F04，ADR-021）---
     validated: bool  # 是否通过验证；未通过时不得作为可信稳态电流交付
     validation_notes: Tuple[str, ...]  # 未通过/存疑的具体原因
+    # --- 快陷阱（ADR-023），未启用时全为 0 ---
+    n_fast_traps: int = 0
+    current_fast: float = 0.0  # 快陷阱的阳极净电流 [A]（条件稳态通量，它们的事件不再执行）
+    fast_exchange: int = 0  # 测量窗口内由快陷阱跳进慢陷阱的净电子数（跃迁事件记账）
     defects: Optional[DefectEnsemble] = field(repr=False, default=None)
+
+    @property
+    def current_counts_total(self) -> float:
+        """数事件估计量 [A]：阳极净事件电流 + 快陷阱电流 + R1（F04 交叉校验的口径）。"""
+        r1 = self.by_mechanism["direct_fn"] + self.by_mechanism["thermionic"]
+        return self.current_counts + self.current_fast + r1
 
     @property
     def mechanism_fractions(self) -> Dict[str, float]:
@@ -226,12 +258,14 @@ def _validate_result(
     current: float,
     current_counts_total: float,
     batch_rel_error: float,
+    timescale_separation: float = np.inf,
 ) -> Tuple[bool, Tuple[str, ...]]:
     """按 ADR-021 F04 判定单点是否通过验证，返回 (validated, 原因列表)。
 
     硬门槛用可靠可算的判据：正向收集（U+V_bi>0）、测量窗口充分、KMC 占据与条件
     稳态 p̂ 接近（局部稳态/条件通量成立的前提）、批次均值法给出的电流相对标准误
-    不超限（测量窗口内电流统计收敛）、机制分量闭合（构造保证）。净事件计数交叉
+    不超限（测量窗口内电流统计收敛）、启用快陷阱时时间尺度分离足够（min Γ_F 与
+    平均事件速率之比，ADR-023）、机制分量闭合（构造保证）。净事件计数交叉
     校验 ΔJ=J_cond−(J_counts+R1) 噪声大，只有阳极事件数足够（统计非空）时才纳入
     门槛，否则作诊断记录、不判失败（Q1 口径）。全器件无缺陷（R1-only）没有统计
     估计量要验证、R1 是确定性解，直接通过。
@@ -247,6 +281,10 @@ def _validate_result(
         notes.append("占据与条件稳态 p̂ 偏差过大（{:.3f}≥{}）".format(occ_mean_abs_dev, _MEAN_FIELD_TOL))
     if batch_rel_error > _BATCH_REL_TOL:
         notes.append("批次间电流不一致，相对标准误 {:.2f}>{}".format(batch_rel_error, _BATCH_REL_TOL))
+    if timescale_separation < _FAST_SEPARATION_MIN:
+        notes.append(
+            "快陷阱与剩余事件的时间尺度分离不足（{:.1f}<{}）".format(timescale_separation, _FAST_SEPARATION_MIN)
+        )
     if n_anode_events >= _COUNTS_SUFFICIENT and current != 0.0:
         rel = abs(current_counts_total - current) / abs(current)
         if rel > _COUNTS_REL_TOL:
@@ -538,15 +576,27 @@ class KMCSimulation:
         self._pf_forward = self._drive_potential > 0.0
         self._pf_collection = self._compute_pf_collection()
 
-        # 强耦合簇（模块文档说明 5）：要用上面全部速率量，放在初始化最后
-        self._clusters = self._build_clusters()
+        # 快陷阱（说明 6）与强耦合簇（说明 5）都按全空组态下的速率划分、工作点内固定；
+        # 要用上面全部速率量，放在初始化最后。快陷阱只退出事件表，照样可以进簇
+        self._fast = np.zeros(self.n_defects, dtype=bool)
+        self._fast_gamma_min = np.inf
+        self._clusters: List[_Cluster] = []
+        if self.n_defects > 0:
+            blocks, hop = self._rates(np.zeros(self.n_defects, dtype=bool))
+            gamma = blocks.sum(axis=0)  # 与电极交换电子的总速率（俘获 + 逃逸 + PF）
+            if sim.fast_trap_rate is not None:
+                self._fast = gamma >= sim.fast_trap_rate
+                if np.any(self._fast):
+                    self._fast_gamma_min = float(gamma[self._fast].min())
+            self._clusters = self._build_clusters(blocks, hop)
+        # 快↔快跃迁不进事件表（两端都用 p̂，交换不改变任何慢变量）
+        self._hop_event_mask = (~(self._fast[self._pairs.a] & self._fast[self._pairs.b])).astype(float)
 
-    def _build_clusters(self) -> List[_Cluster]:
-        """按全空组态下的速率找强耦合簇（ADR-022），工作点内固定。"""
+    def _build_clusters(self, blocks: np.ndarray, hop: np.ndarray) -> List[_Cluster]:
+        """按全空组态下的速率 `blocks`/`hop` 找强耦合簇（ADR-022）。"""
         n = self.n_defects
         if n < 2:
             return []
-        blocks, hop = self._rates(np.zeros(n, dtype=bool))
         pairs = self._pairs
         strength = coupling_strength(pairs.a, pairs.b, hop, blocks.sum(axis=0))
         groups = coupled_clusters(
@@ -1005,8 +1055,14 @@ class KMCSimulation:
         n = self.n_defects
         sim = self.sim
         pairs = self._pairs
-        occ = np.zeros(n, dtype=bool)  # 初始占据状态：全空
+        occ = np.zeros(n, dtype=bool)  # 初始占据状态：全空（快陷阱处恒为 False，占据看 p_fast）
         burn_in = int(sim.n_events * sim.burn_in_fraction)
+        # 快陷阱（说明 6）：占据取与当前慢组态自洽的条件稳态 p̂，每步开头迭代求出
+        fast = self._fast
+        has_fast = bool(fast.any())
+        p_fast = np.zeros(n)
+        fast_flux = 0.0  # 快陷阱阳极净通量的时间积分
+        fast_exchange = 0  # 快→慢跃迁减慢→快跃迁的净次数（测量窗口内）
 
         elapsed = 0.0
         mech_flux = {"tat": 0.0, "pf": 0.0}
@@ -1029,15 +1085,31 @@ class KMCSimulation:
         batch_time = np.zeros(_N_BATCHES)
 
         for step in range(sim.n_events):
-            blocks, hop = self._rates(occ)
-            empty = ~occ
-            occf = occ.astype(float)
+            occ_now = np.where(fast, p_fast, occ) if has_fast else occ
+            blocks, hop = self._rates(occ_now)
+            if has_fast:
+                # 快陷阱的 p̂ 与当前慢组态自洽：按本步速率更新 p̂，变化超过容差就重算速率
+                for _ in range(_FAST_MAX_ITER):
+                    occf = occ_now.astype(float)
+                    p_new = self._conditional_flux(blocks, *self._hop_sums(hop, occf, 1.0 - occf))[2][fast]
+                    converged = np.max(np.abs(p_new - p_fast[fast])) <= _FAST_P_TOL
+                    p_fast[fast] = p_new
+                    occ_now = np.where(fast, p_fast, occ)
+                    if converged:
+                        break
+                    blocks, hop = self._rates(occ_now)
+            occf = occ_now.astype(float)
+            empty = 1.0 - occf
 
-            # 事件表：俘获类要求空位，逃逸/发射类要求已占据
+            # 事件表：俘获类要求空位，逃逸/发射类要求已占据；快陷阱的块整列移出，
+            # 跃迁按端点的 p̂ / 1−p̂ 加权，快↔快跃迁移出
             mask[:_N_CAPTURE_BLOCKS] = empty
-            mask[_N_CAPTURE_BLOCKS:] = occ
-            event_blocks = blocks * mask
+            mask[_N_CAPTURE_BLOCKS:] = occf
             event_hop = hop * occf[pairs.a] * empty[pairs.b]
+            if has_fast:
+                mask[:, fast] = 0.0
+                event_hop = event_hop * self._hop_event_mask
+            event_blocks = blocks * mask
 
             total_rate = event_blocks.sum() + event_hop.sum()
             if total_rate <= 0.0:
@@ -1046,14 +1118,19 @@ class KMCSimulation:
             dt = -np.log(self.rng.random()) / total_rate
 
             if measuring:
-                tat, pf, p_hat = self._trap_flux(occ, blocks, hop)
+                tat, pf, p_hat = self._trap_flux(occ_now, blocks, hop)
                 elapsed += dt
-                occupancy_time += occ * dt
+                occupancy_time += occf * dt
                 occupancy_mf += p_hat * dt
                 defect_flux += (tat + pf) * dt
                 mech_flux["tat"] += tat.sum() * dt
                 mech_flux["pf"] += pf.sum() * dt
                 direct_flux += (_ANODE_SIGN[:, None] * event_blocks).sum() * dt
+                if has_fast:
+                    # 快陷阱的事件不再执行，它们的阳极通量按条件稳态补进两个交叉估计量
+                    flux_fast = (tat[fast] + pf[fast]).sum() * dt
+                    direct_flux += flux_fast
+                    fast_flux += flux_fast
                 batch = min(measured_events // batch_events, _N_BATCHES - 1)
                 batch_charge[batch] += (tat.sum() + pf.sum()) * dt
                 batch_time[batch] += dt
@@ -1080,14 +1157,17 @@ class KMCSimulation:
                         cathode_counts += c_sign
             else:
                 k = index - _N_BLOCKS * n
-                occ[pairs.a[k]] = False
-                occ[pairs.b[k]] = True
+                a, b = pairs.a[k], pairs.b[k]
+                occ[a] = False  # 快陷阱一端的 p̂ 在下一步开头重新自洽，布尔占据保持 False
+                occ[b] = not fast[b]
+                if measuring:
+                    fast_exchange += int(fast[a]) - int(fast[b])
 
             if measuring:
                 measured_events += 1
             elif step + 1 >= burn_in:
                 measuring = True
-                n_inside_start = int(occ.sum())  # 测量窗口起点的器件内电子数
+                n_inside_start = int(occ.sum())  # 测量窗口起点的器件内（慢陷阱）电子数
 
         scale = constants.elementary_charge / elapsed if elapsed > 0.0 else 0.0
         r1_tunnel, r1_thermionic = self._r1_current
@@ -1104,14 +1184,19 @@ class KMCSimulation:
         occupancy_mf_avg = occupancy_mf * inv_time
         occ_dev = float(np.mean(np.abs(occupancy - occupancy_mf_avg))) if n > 0 else 0.0
         current_counts = float(counts * scale)
-        current_counts_total = current_counts + r1_tunnel + r1_thermionic
+        current_fast = float(fast_flux * scale)
+        current_counts_total = current_counts + current_fast + (r1_tunnel + r1_thermionic)
         delta_n_inside = int(occ.sum()) - n_inside_start
         batch_rel_error = batch_relative_error(
             constants.elementary_charge * batch_charge, batch_time, current
         )
+        # 时间尺度分离：min Γ_F 与测量窗口内平均事件速率之比（没有快陷阱时为 ∞）
+        separation = np.inf
+        if has_fast:
+            separation = self._fast_gamma_min * elapsed / measured_events if measured_events else 0.0
         validated, validation_notes = _validate_result(
             n, self._pf_forward, elapsed, measured_events, occ_dev,
-            n_anode_events, current, current_counts_total, batch_rel_error,
+            n_anode_events, current, current_counts_total, batch_rel_error, separation,
         )
         return SimulationResult(
             voltage=sim.voltage,
@@ -1134,6 +1219,9 @@ class KMCSimulation:
             delta_n_inside=delta_n_inside,
             validated=validated,
             validation_notes=validation_notes,
+            n_fast_traps=int(fast.sum()),
+            current_fast=current_fast,
+            fast_exchange=fast_exchange,
             defects=self.defects,
         )
 
