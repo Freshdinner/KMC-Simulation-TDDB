@@ -7,6 +7,34 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **电流估计量对强耦合陷阱簇改用簇内条件稳态，消除 I-V 尖峰与跃迁供给通路的漏算**
+  （新增 `clusters.py`：`coupling_strength`、`coupled_clusters`、`stationary_distribution_gth`、
+  `cluster_generator`、`cluster_steady_state`；`kmc.py`：`_build_clusters`/`_cluster_plan` 在工作点
+  初始化时分簇，`_rates` 拆出 `_path_barriers`/`_electrode_blocks` 以便按"缺陷×组态"行求值，
+  新增 `_electrostatics_batch`、`_trap_flux`、`_cluster_flux`，主循环改调 `_trap_flux`；
+  `master_equation.steady_state_flux` 的条件通量一栏改走同一估计量，`enumerate_occupations`
+  移到 `clusters.py`；新增 `tests/test_clusters.py` 8 个测试、`tests/test_master_equation.py` 2 个；
+  同步 README、`docs/glossary.md`、`docs/leakage_current_statistics.md` §6.5、ADR-022）。
+
+  **问题**：单陷阱条件通量只把陷阱自身的占据解析平均掉，陷阱间跃迁的供给项用的是邻居的
+  采样占据。t2_2nm 叠层 seed 1522848646 在 125 °C/4.3 V 得 1.12e-1 A/cm²，只换轨迹随机数就
+  回落到 1.57e-2：阴极侧 #71 以 3e6 s⁻¹ 填充、以 3.4e7 s⁻¹ 跳给 #51、#51 以 1.2e8 s⁻¹ 放给
+  阳极，而测量窗口只有 38 ns，#71 在窗口里填充 0 次（漏算）或 1 次（高估）。即使窗口无限长，
+  单陷阱估计量也丢掉两者占据之间的关联：这一对偏低 9%，更强耦合的对上只剩精确值的 1–7%。
+
+  **做法**：跃迁速率 ≥ 1e-3 × 两端电极交换速率较小者的陷阱对连成簇（上限 8 个陷阱），测量期
+  每步对每个簇枚举 2^k 个组态、按各组态真实电荷分布重算簇成员速率，解簇内主方程稳态（GTH
+  状态约化，逐分量相对精度），簇外占据作为环境。单陷阱仍走原公式、逐位不变。
+
+  **结果**：上述两个尖峰点改后三条轨迹一致：125 °C/4.3 V 为 2.169e-2 / 2.170e-2 / 2.170e-2，
+  100 °C/3.6 V 为 2.247e-3 / 2.242e-3 / 2.247e-3（旧代码 5.55e-3 / 1.86e-3 / 2.07e-3）；孤立强耦合
+  对上 KMC 估计量 = 主方程精确稳态（rtol 1e-10）。代价：4000 事件单点从 27–28 s 增至 55–81 s
+  （簇越大越慢）。无 R 编号（统计/估计量，ADR-021 F04 的延续）。
+  `pytest tests/ -v`（`.venv`，Python 3.8）223 passed、2 failed；两个失败
+  （`test_stack_examples.py::test_t2_series_fixes_total_thickness_and_keeps_zro2_symmetric`、
+  `::test_t2_series_differs_only_in_layer_structure`）来自工作区里未提交的
+  `examples/stack_t2_2nm.yaml` 改动（层厚 2.5/2.5/3.0、浓度 6e18），只读配置，与本次无关。
+
 - **z 向网格加密：hz 从 0.2 nm 改为 0.1 nm（nz 从 40 改为 80）**（改 `examples/` 下全部 6 份配置的
   `grid.nz`，同步 `docs/physics_model.md`"已确认"一节的默认网格、README 的配置示例与层厚约束
   说明）。按用户要求执行。层厚现在只需是 0.1 nm 的整数倍，上一条里"t₂ 取奇数对不上网格"的

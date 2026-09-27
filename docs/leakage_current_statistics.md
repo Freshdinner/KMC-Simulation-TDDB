@@ -384,6 +384,26 @@ $$
 
 增大采样长度可以减小随机误差；近似本身若存在系统偏差，需要通过与净计数、瞬时通量等结果比较来识别。
 
+### 6.5 强耦合簇：把条件稳态推广到几个陷阱（ADR-022）
+
+实现位置：`clusters.py`、`KMCSimulation._trap_flux()`、`KMCSimulation._cluster_flux()`。
+
+6.4 的前提在强耦合的陷阱对上不成立：\(H_{\mathrm{in},i}\) 里的邻居占据 \(n_j\) 是采样值，而邻居 \(j\) 与 \(i\) 之间的跃迁和它们自身的电极交换一样快。结果是两类误差：测量窗口很短时，\(j\) 的稀有填充落进窗口就高估（I-V 尖峰）、没落进来就漏算；窗口再长，\(\hat p_i\) 也丢掉了 \(n_i\) 与 \(n_j\) 之间的关联（强耦合对上实测只剩精确值的 1–7%）。
+
+因此每个工作点初始化时，把满足
+
+$$
+\frac{h_{ab}}{\min(\Gamma_a,\Gamma_b)}\ge 10^{-3}
+$$
+
+的陷阱对连成簇（\(\Gamma_i\) 为陷阱 \(i\) 与电极交换电子的总速率，上限 8 个陷阱）。测量期每步对簇 \(K\) 枚举簇内全部 \(2^k\) 个组态 \(s\)，按各组态的真实电荷分布重算簇成员的速率，簇外占据取当前组态作为环境，解簇内主方程稳态 \(\pi_K\)，成员 \(i\) 的阳极净通量为
+
+$$
+\phi_i=\sum_s \pi_K(s)\left[n_i(s)\left(E_{a,i}^{\mathrm{TAT}}+P_i\right)(s)-\left(1-n_i(s)\right)C_{a,i}(s)\right].
+$$
+
+计算时这一式与"其余通道的净流入"两种等价写法取总量较小的一种，避免贴电极的成员放大舍入误差。单陷阱就是 \(k=1\) 的特例，仍走 6.2–6.3 的公式。孤立簇上结果与 `master_equation.py` 的精确稳态一致，且与轨迹无关。
+
 ## 7. R1 电流如何加入总结果
 
 实现位置：`r1_electrode_current()`、`KMCSimulation._prepare()`，以及 [electrode_tunneling.py](../src/kmc_leakage/rates/electrode_tunneling.py)。
@@ -599,7 +619,8 @@ print("阳极相关事件数:", result.n_anode_events)
 | 单点参数、种子选择 | [config.py](../src/kmc_leakage/config.py)：`SimulationConfig`、`Config.seeds` |
 | 事件推进、预热、时间加权、计数及结果组合 | [kmc.py](../src/kmc_leakage/kmc.py)：`KMCSimulation.run` |
 | 陷阱间流入与流出 | [kmc.py](../src/kmc_leakage/kmc.py)：`_hop_sums` |
-| 条件稳态通量与 TAT/PF 分解 | [kmc.py](../src/kmc_leakage/kmc.py)：`_conditional_flux` |
+| 条件稳态通量与 TAT/PF 分解 | [kmc.py](../src/kmc_leakage/kmc.py)：`_conditional_flux`、`_trap_flux` |
+| 强耦合簇的识别与簇内条件稳态 | [clusters.py](../src/kmc_leakage/clusters.py)；[kmc.py](../src/kmc_leakage/kmc.py)：`_build_clusters`、`_cluster_flux` |
 | R1 积分与两类分量 | [electrode_tunneling.py](../src/kmc_leakage/rates/electrode_tunneling.py)：`r1_electrode_electrode` |
 | 单实现扫描与 CSV | [sweep.py](../src/kmc_leakage/sweep.py)：`run_sweep`、`write_csv` |
 | 系综平均、SEM 与 CSV | [ensemble.py](../src/kmc_leakage/ensemble.py)：`_mean_sem`、`run_ensemble`、`run_ensemble_sweep`、`write_ensemble_csv` |

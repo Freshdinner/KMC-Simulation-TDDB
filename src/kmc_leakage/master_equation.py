@@ -2,7 +2,8 @@
 
 条件通量估计量（`kmc._conditional_flux`）把每个陷阱的占据用单陷阱条件稳态
 p̂=C/(C+E) 代入净通量，是"局部稳态近似"，在耦合跃迁网络里不自动等于真实稳态
-下的期望通量（review F04 给出 25% 反例）。这里对**可处理规模**的小体系（N 个
+下的期望通量（review F04 给出 25% 反例）。KMC 现在对强耦合簇改用簇内条件稳态
+（ADR-022，`kmc._trap_flux`），孤立簇上与这里的精确解一致。这里对**可处理规模**的小体系（N 个
 陷阱 → 2^N 个组态）枚举完整状态空间、组装连续时间马氏链的生成矩阵、直接解
 稳态分布 π，再算真实稳态阳极通量，作为独立基准与条件通量估计量对照。
 
@@ -17,6 +18,7 @@ from typing import Tuple
 import numpy as np
 from scipy import constants
 
+from .clusters import enumerate_occupations
 from .kmc import (
     _B_R2A,
     _B_R3A,
@@ -31,12 +33,6 @@ from .kmc import (
 # 阳极侧的逃逸/发射块（对阳极记 +1 电子）与俘获块（记 -1 电子）
 _ANODE_ESCAPE_BLOCKS = (_B_R3A, _B_R5A, _B_R8)
 _ANODE_CAPTURE_BLOCKS = (_B_R2A, _B_R4A)
-
-
-def enumerate_occupations(n: int) -> np.ndarray:
-    """全部 2^n 个占据组态，形状 (2^n, n) 的 bool 数组（bit i = 陷阱 i 是否占据）。"""
-    idx = np.arange(2 ** n)
-    return ((idx[:, None] >> np.arange(n)[None, :]) & 1).astype(bool)
 
 
 def transition_generator(sim: KMCSimulation) -> Tuple[np.ndarray, np.ndarray]:
@@ -103,7 +99,8 @@ def steady_state_flux(sim: KMCSimulation) -> dict:
 
     返回 dict：
     - `exact_flux` [1/s]：主方程稳态下真实阳极净电子速率的期望（= 真实 I_trap/q）
-    - `conditional_flux` [1/s]：条件通量估计量在同一 π 下的期望（KMC `current` 的极限）
+    - `conditional_flux` [1/s]：KMC 所用估计量（单陷阱条件通量，强耦合簇成员换成
+      簇内条件稳态，`KMCSimulation._trap_flux`）在同一 π 下的期望（KMC `current` 的极限）
     - `exact_current` / `conditional_current` [A]：上二者 ×q（陷阱相关部分，不含 R1）
     - `stationary`：稳态分布 π
 
@@ -118,8 +115,7 @@ def steady_state_flux(sim: KMCSimulation) -> dict:
         occ = occs[s]
         blocks, hop = sim._rates(occ)
         exact[s] = _anode_electron_rate(blocks, occ)
-        occf, empty = occ.astype(float), ~occ
-        tat, pf, _ = sim._conditional_flux(blocks, *sim._hop_sums(hop, occf, empty))
+        tat, pf, _ = sim._trap_flux(occ, blocks, hop)
         conditional[s] = float((tat + pf).sum())
 
     exact_flux = float(pi @ exact)

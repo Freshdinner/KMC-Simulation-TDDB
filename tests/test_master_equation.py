@@ -4,6 +4,8 @@
 - 复现 review 附录的 4 态反例：条件通量比真实稳态低 25%（局部稳态近似不严格无偏）；
 - 单陷阱（无耦合）时条件通量 = 真实稳态（p̂ 对两态系统精确）；
 - 稳态分布 π 是合法概率分布、满足 πQ=0；
+- 强耦合的两个陷阱连成一个簇后，KMC 估计量的期望 = 精确稳态，且短轨迹、换种子
+  都不变（单陷阱条件通量在同一体系上只有精确值的约 1.5%，ADR-022）；
 - 长 KMC 轨迹的条件通量估计量收敛到主方程给出的同一期望（引擎与独立基准互证）。
 """
 
@@ -103,6 +105,38 @@ def test_enumerate_occupations_covers_all_states():
     assert occs.shape == (8, 3)
     # 每个组态互异
     assert len({tuple(row) for row in occs.tolist()}) == 8
+
+
+def test_cluster_estimator_equals_master_equation_for_coupled_pair():
+    """相距 0.9 nm 的两个陷阱连成一个强耦合簇，KMC 估计量的期望 = 主方程精确稳态。
+
+    簇覆盖全部陷阱，簇内条件稳态就是整个系统的精确稳态（rtol 1e-10）。对照：同一
+    体系上单陷阱条件通量的期望只有精确值的约 1.5%——邻居占据被当成独立采样值，
+    丢掉了两者占据之间的关联（ADR-022）。
+    """
+    sim = _two_trap_sim(z=(3e-9, 3.9e-9))
+    assert [c.members.tolist() for c in sim._clusters] == [[0, 1]]
+    flux = steady_state_flux(sim)
+    assert flux["conditional_flux"] == pytest.approx(flux["exact_flux"], rel=1e-10)
+
+    occs, generator = transition_generator(sim)
+    pi = stationary_distribution(generator)
+    single = []
+    for occ in occs:
+        blocks, hop = sim._rates(occ)
+        occf = occ.astype(float)
+        tat, pf, _ = sim._conditional_flux(blocks, *sim._hop_sums(hop, occf, 1.0 - occf))
+        single.append(float(np.sum(tat + pf)))
+    assert float(pi @ np.array(single)) < 0.05 * flux["exact_flux"]
+
+
+def test_cluster_current_does_not_depend_on_trajectory():
+    """强耦合对的电流不再取决于稀有填充是否落在窗口里：短轨迹、换种子都等于精确值。"""
+    exact = steady_state_flux(_two_trap_sim(z=(3e-9, 3.9e-9)))["exact_current"]
+    for seed in (1, 2, 3):
+        result = _two_trap_sim(z=(3e-9, 3.9e-9), n_events=300, seed=seed).run()
+        r1 = result.by_mechanism["direct_fn"] + result.by_mechanism["thermionic"]
+        assert result.current - r1 == pytest.approx(exact, rel=1e-9)
 
 
 def test_kmc_conditional_flux_converges_to_master_equation():
