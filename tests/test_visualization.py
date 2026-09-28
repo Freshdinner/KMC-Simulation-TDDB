@@ -276,15 +276,21 @@ def test_it_curves_slice_the_same_data_by_voltage():
 
 @pytest.mark.parametrize("plot", [plot_iv_curves, plot_it_curves])
 def test_curves_draw_sem_error_bars(plot):
-    """给了标准误就画 ±σ/√M 误差棒，棒的上下端 = J ± SEM（换算成 A/cm²）；不给就没有竖线段。"""
+    """给了标准误就画 ±σ/√M 误差棒，棒的上下端 = J ± SEM（换算成 A/cm²），两端带小横线
+    （端帽）；不给就没有竖线段。"""
     sem = 0.1 * DENSITY
     axes = plot(VOLTAGES, TEMPERATURES, DENSITY, sem).axes[0]
-    assert len(axes.collections) == len(axes.lines)  # 每条曲线一组竖线段
-    for line, bars in zip(axes.lines, axes.collections):
+    assert len(axes.collections) == len(axes.containers)  # 每条曲线一组竖线段
+    for container in axes.containers:
+        line, caps, (bars,) = container.lines
         y = np.asarray(line.get_ydata())
         segments = np.array([seg[:, 1] for seg in bars.get_segments()])
         assert np.allclose(segments[:, 0], 0.9 * y, rtol=1e-12)
         assert np.allclose(segments[:, 1], 1.1 * y, rtol=1e-12)
+        # 两端小横线：下端帽、上端帽各一个 Line2D，位置与棒端一致
+        assert len(caps) == 2 and all(cap.get_markersize() > 0 for cap in caps)
+        assert np.allclose(caps[0].get_ydata(), 0.9 * y, rtol=1e-12)
+        assert np.allclose(caps[1].get_ydata(), 1.1 * y, rtol=1e-12)
     axes = plot(VOLTAGES, TEMPERATURES, DENSITY).axes[0]
     assert len(axes.collections) == 0
 

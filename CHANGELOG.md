@@ -7,6 +7,12 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **I-V / I-T 曲线图的误差棒两端加小横线**（`visualization._current_curves` 的 `capsize` 0 → 3）：
+  原先只有竖线段，棒端位置不好读。端帽是额外的 Line2D、会混进 `axes.lines`，测试改为按
+  `axes.containers` 逐条取主线/端帽/竖线段，并核对两个端帽恰在 J ± SEM。不涉及 R 编号。
+  pytest：test_visualization.py 全过；全量 232 过、2 败（仍是 test_stack_examples 那两项，
+  来自工作区里 examples/stack_t2_2nm.yaml 未提交的修改，与本改动无关）。
+
 - **`sweep --plot-prefix` 另出一张缺陷分布图 `<前缀>_defects.png`**（`__main__._write_sweep_defect_plot`）：
   从系综种子里随机挑一个，按扫描同样的 `default_rng(seed)` 重建该实现的缺陷，复用
   `plot_defect_distribution`，单层、叠层都支持；所用 seed 打印在终端。原因：扫描完直接能看到

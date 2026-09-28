@@ -253,7 +253,7 @@ def _current_curves(
             ms=4.0,
             lw=1.5,
             elinewidth=1.0,
-            capsize=0.0,  # 不画端帽：端帽是额外的 Line2D，会混进 axes.lines
+            capsize=3.0,  # 误差棒两端画小横线（端帽是额外的 Line2D，会混进 axes.lines）
         )
     axes.set_yscale("log")
     axes.set_xlabel(x_label)
