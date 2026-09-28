@@ -758,10 +758,11 @@ figure.savefig("iv.png", dpi=150)
 - CLI 里 `sweep --plot-prefix scan` 就是这两个函数加一次 `savefig`，落
   `scan_iv.png` 与 `scan_it.png`，外加随机一个系综种子的缺陷分布图 `scan_defects.png`
   及其簇标注图 `scan_defects_clusters.png`
-- **缺陷簇标注图**（`plot_defect_clusters`）：底图与 `plot_defect_distribution` 相同，
-  强耦合簇（`KMCSimulation.cluster_members`，按配置的单点工况识别）在三维散点上每簇
-  套一圈同色空心圆，深度剖面底部每簇一行同色圆点标出成员的 z。簇常跨界面，所以不画
-  z 范围竖带
+- **缺陷簇标注图**（`plot_defect_clusters`）：强耦合簇（`KMCSimulation.cluster_members`，
+  按配置的单点工况识别）用缺陷本身的颜色区分——三维散点不按能级着色、不画 colorbar，
+  非簇缺陷画黑色，同一个簇的成员同色（tab10 去掉与柱子同色的蓝、与黑易混的灰，8 色
+  轮换），界面缺陷仍以菱形区分；深度剖面柱子与原图相同，底部每簇一行同色圆点标出成员
+  的 z。簇常跨界面，所以不画 z 范围竖带
 - **叠层的两处叠画**（ADR-016，函数签名不变，靠传进来的 `DeviceConfig` /
   `BandProfile` 自己认出层结构）：缺陷图在三维盒子上把每个界面画成一圈虚线、
   在深度剖面上画层边界竖线与层材料名，**界面缺陷单独标色**（深色菱形 + 界面处

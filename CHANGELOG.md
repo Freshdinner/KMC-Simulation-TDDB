@@ -7,6 +7,16 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **簇标注图改为用缺陷本身的颜色区分簇**（`visualization.plot_defect_clusters`）：三维散点不再
+  按能级着色、不画 colorbar，非簇缺陷画黑色，同簇成员同色，取消原先套在簇成员外的彩色空心圈；
+  界面缺陷仍以菱形区分（图例改用黑色代理句柄）。簇配色取 tab10 去掉蓝（与深度剖面柱子同色、
+  圆点看不见）和灰（与黑易混），8 色轮换。实现上给私有 `_draw_defect_distribution` 加可选的
+  逐缺陷 `point_colors`，缺省时原图逐位不变。原因：一眼看出哪些缺陷同属一个簇。测试改为逐缺陷
+  核对颜色（matplotlib 3.7 的三维散点出图后 `get_facecolor()` 是按深度排序且少一个的，改读原始
+  输入颜色）。同步 README 与 docs/physics_model.md。pytest：test_visualization.py 全过；全量 235
+  过、2 败（test_stack_examples 那两项，来自工作区里 examples/stack_t2_2nm.yaml 未提交的修改，
+  与本改动无关）。
+
 - **缺陷分布图每次出两张：原图 + 强耦合簇标注图**（新增 `visualization.plot_defect_clusters`、
   `KMCSimulation.cluster_members`）。`plot --kind defects` 另落 `<out 去扩展名>_clusters.png`，
   `sweep --plot-prefix` 另落 `<前缀>_defects_clusters.png`。簇 = ADR-022 的强耦合簇，按配置里的

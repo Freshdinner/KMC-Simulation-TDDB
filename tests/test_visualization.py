@@ -13,7 +13,7 @@ import pathlib
 import numpy as np
 import pytest
 from matplotlib.collections import PathCollection
-from matplotlib.colors import to_rgb
+from matplotlib.colors import to_rgb, to_rgba, to_rgba_array
 from matplotlib.figure import Figure
 from scipy import constants
 
@@ -236,7 +236,8 @@ def test_single_layer_plots_are_unchanged_by_the_stack_overlays(profile_and_leve
 
 @pytest.mark.parametrize("stack", [False, True])
 def test_cluster_plot_marks_each_cluster_on_top_of_the_base_figure(stack):
-    """簇标注图 = 原图 + 每个簇一圈空心圆（圈住的正是簇成员）+ 深度剖面上一行成员 z 圆点。
+    """簇标注图：不按能级着色、无 colorbar；非簇缺陷黑色，同簇成员同色、不同簇不同色；
+    深度剖面柱子与原图相同，底部每簇一行成员 z 圆点。
 
     簇取 KMC 在该工作点实际识别的强耦合簇；单层、叠层都要能出图。
     """
@@ -255,15 +256,30 @@ def test_cluster_plot_marks_each_cluster_on_top_of_the_base_figure(stack):
 
     base = plot_defect_distribution(device, defects)
     figure = plot_defect_clusters(device, defects, clusters)
+    assert len(figure.axes) == 2  # 三维散点 + 深度剖面，没有能级 colorbar
     axes3d, hist = figure.axes[0], figure.axes[-1]
-    base3d, base_hist = base.axes[0], base.axes[-1]
+    base_hist = base.axes[-1]
 
-    rings = axes3d.collections[len(base3d.collections):]
-    assert len(rings) == len(clusters)
-    for ring, members in zip(rings, clusters):
-        xy = np.asarray(ring.get_offsets())  # 三维散点投影前的 (x, y) 就是数据坐标
-        assert np.allclose(xy, defects.positions[members, :2] / NM)
-        assert np.all(np.asarray(ring.get_facecolor())[:, 3] == 0.0)  # 空心圈，不遮挡能级着色
+    # 散点按体缺陷、界面缺陷两族画（与原图同序），逐点颜色拼回全局缺陷编号的顺序
+    assert len(axes3d.collections) == len(base.axes[0].collections)
+    assert all(c.get_array() is None for c in axes3d.collections)  # 不按能级映射颜色
+    is_interface = np.asarray(defects.interface_id) >= 0
+    colors = np.zeros((len(defects), 4))
+    for family, mask in zip(axes3d.collections, (~is_interface, is_interface)):
+        # 三维散点出图后 get_facecolor() 返回的是按深度排序（且 mpl 3.7 会少一个）的颜色，
+        # 按输入顺序核对只能读原始输入颜色
+        colors[mask] = to_rgba_array(family._original_facecolor)
+    in_cluster = np.zeros(len(defects), dtype=bool)
+    cluster_colors = []
+    for members in clusters:
+        in_cluster[members] = True
+        assert np.allclose(colors[members], colors[members[0]])  # 同簇同色
+        cluster_colors.append(tuple(colors[members[0]]))
+    assert np.allclose(colors[~in_cluster], to_rgba("k"))  # 非簇缺陷黑色
+    assert not any(np.allclose(c, to_rgba("k")) for c in cluster_colors)
+    n_distinct = min(len(clusters), 8)  # 簇间颜色轮换，前 8 个簇两两不同
+    assert len(set(cluster_colors[:n_distinct])) == n_distinct
+
     marks = hist.lines[len(base_hist.lines):]  # 每簇一行圆点，横坐标 = 成员的 z
     assert len(marks) == len(clusters)
     for mark, members in zip(marks, clusters):
@@ -275,12 +291,13 @@ def test_cluster_plot_marks_each_cluster_on_top_of_the_base_figure(stack):
 
 
 def test_cluster_plot_without_clusters_equals_base_figure(defects):
-    """没有簇时不加任何标注，只在标题里注明 0 个。"""
+    """没有簇时全部缺陷画黑色、不加圆点行，标题注明 0 个。"""
     base = plot_defect_distribution(make_device(), defects)
     figure = plot_defect_clusters(make_device(), defects, [])
-    assert len(figure.axes[0].collections) == len(base.axes[0].collections)
+    assert np.allclose(to_rgba_array(figure.axes[0].collections[0]._original_facecolor), to_rgba("k"))
     assert len(figure.axes[-1].lines) == len(base.axes[-1].lines)
     assert "0 coupled clusters" in figure.axes[0].get_title()
+    assert len(figure.axes) == 2  # 簇标注图始终不画能级 colorbar
 
 
 def test_plot_functions_do_not_touch_the_filesystem(tmp_path, monkeypatch, defects):
