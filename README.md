@@ -44,7 +44,8 @@ python -m kmc_leakage sweep --config examples/iv_sweep.yaml --out results.csv
 
 # 扫描顺手出曲线图：<前缀>_iv.png（横轴电压，一条曲线一个温度）
 #                  <前缀>_it.png（横轴温度，一条曲线一个电压）
-# 两张图上都只画总电流
+# 两张图上都只画总电流；另落 <前缀>_defects.png：系综里随机一个种子的缺陷分布
+# （单层、叠层都适用，所用 seed 打印在终端）
 python -m kmc_leakage sweep --config examples/iv_sweep.yaml --out results.csv --plot-prefix scan
 
 # 出图：缺陷分布 / 能带结构
@@ -754,7 +755,7 @@ figure.savefig("iv.png", dpi=150)
   对比度；上限 0.95 是为了最深那档不糊成黑色。**行数超过 5 档时深浅分辨会变紧**
   ——默认 I-T 图是 11 个电压点，靠图例与"越深越高"的单调方向读，相邻两档本身分不开
 - CLI 里 `sweep --plot-prefix scan` 就是这两个函数加一次 `savefig`，落
-  `scan_iv.png` 与 `scan_it.png`
+  `scan_iv.png` 与 `scan_it.png`，外加随机一个系综种子的缺陷分布图 `scan_defects.png`
 - **叠层的两处叠画**（ADR-016，函数签名不变，靠传进来的 `DeviceConfig` /
   `BandProfile` 自己认出层结构）：缺陷图在三维盒子上把每个界面画成一圈虚线、
   在深度剖面上画层边界竖线与层材料名，**界面缺陷单独标色**（深色菱形 + 界面处

@@ -7,6 +7,13 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **`sweep --plot-prefix` 另出一张缺陷分布图 `<前缀>_defects.png`**（`__main__._write_sweep_defect_plot`）：
+  从系综种子里随机挑一个，按扫描同样的 `default_rng(seed)` 重建该实现的缺陷，复用
+  `plot_defect_distribution`，单层、叠层都支持；所用 seed 打印在终端。原因：扫描完直接能看到
+  实际参与计算的缺陷长什么样。不涉及 R 编号。pytest：新增 test_sweep.py 单层/叠层两项通过；
+  全量 232 过、2 败（test_stack_examples 的两项，因为工作区里 examples/stack_t2_2nm.yaml
+  有未提交的修改，与本改动无关）。
+
 - **I-V / I-T 曲线图画 ±σ/√M 误差棒**（`visualization.plot_iv_curves` / `plot_it_curves`
   新增可选参数 `current_density_sem`，系综扫描的 `--plot-prefix` 传入
   `EnsembleSweepResult.current_density_sem`；单种子扫描不传、不画）。原因：让图上直接看出

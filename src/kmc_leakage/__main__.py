@@ -165,12 +165,29 @@ def _write_sweep_plots(
         typer.echo("已写入 {}".format(path))
 
 
+def _write_sweep_defect_plot(prefix: str, cfg) -> None:
+    """从系综种子里随机挑一个，画该实现的缺陷分布图并落盘。
+
+    扫描对每个种子都是 default_rng(seed) 后第一步生成缺陷，这里按同样方式重建，
+    得到的就是扫描里实际用过的那个实现。单层、叠层走同一个绘图函数。
+    """
+    from .visualization import plot_defect_distribution
+
+    seed = int(np.random.default_rng().choice(cfg.seeds))
+    defects = generate_defects(cfg.device, np.random.default_rng(seed))
+    path = "{}_defects.png".format(prefix)
+    plot_defect_distribution(cfg.device, defects).savefig(path, dpi=150)
+    typer.echo("已写入 {}（缺陷分布，seed = {}）".format(path, seed))
+
+
 @app.command()
 def sweep(
     config: str = typer.Option(..., "--config", help="YAML 配置文件路径"),
     out: Optional[str] = typer.Option(None, "--out", help="结果 CSV 输出路径"),
     plot_prefix: Optional[str] = typer.Option(
-        None, "--plot-prefix", help="曲线图输出前缀，写出 <前缀>_iv.png 与 <前缀>_it.png"
+        None,
+        "--plot-prefix",
+        help="出图前缀，写出 <前缀>_iv.png、<前缀>_it.png 与随机一个种子的 <前缀>_defects.png",
     ),
 ) -> None:
     """I-V / I-T 扫描。配置里有 ensemble 段时逐个种子扫完取算术平均。"""
@@ -200,6 +217,7 @@ def sweep(
                 result.temperatures,
                 result.current_density,
             )
+            _write_sweep_defect_plot(plot_prefix, cfg)
         return
 
     def progress(index: int, n: int, done: int, total: int, result: SimulationResult) -> None:
@@ -232,6 +250,7 @@ def sweep(
             ensemble.current_density,
             ensemble.current_density_sem,
         )
+        _write_sweep_defect_plot(plot_prefix, cfg)
 
 
 @app.command()

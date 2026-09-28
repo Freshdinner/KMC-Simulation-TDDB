@@ -132,3 +132,19 @@ def test_plot_prefix_writes_iv_and_it_figures(tmp_path):
     )
     for kind in ("iv", "it"):
         assert (tmp_path / "scan_{}.png".format(kind)).stat().st_size > 0
+
+
+@pytest.mark.parametrize("example", ["single_run.yaml", "stack_t2_2nm.yaml"])
+def test_plot_prefix_writes_defect_figure_for_one_ensemble_seed(tmp_path, capsys, example):
+    """`--plot-prefix` 另出 <前缀>_defects.png：系综里随机一个种子的缺陷分布（单层、叠层都支持）。"""
+    import pathlib
+
+    from kmc_leakage.__main__ import _write_sweep_defect_plot
+    from kmc_leakage.io import load_config
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    cfg = load_config(str(root / "examples" / example))
+    _write_sweep_defect_plot(str(tmp_path / "scan"), cfg)
+    assert (tmp_path / "scan_defects.png").stat().st_size > 0
+    seed = int(capsys.readouterr().out.rsplit("seed = ", 1)[1].split("）")[0])
+    assert seed in cfg.seeds
