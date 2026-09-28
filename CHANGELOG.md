@@ -7,6 +7,13 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **I-V / I-T 曲线图画 ±σ/√M 误差棒**（`visualization.plot_iv_curves` / `plot_it_curves`
+  新增可选参数 `current_density_sem`，系综扫描的 `--plot-prefix` 传入
+  `EnsembleSweepResult.current_density_sem`；单种子扫描不传、不画）。原因：让图上直接看出
+  系综涨落。同步改 docs/physics_model.md"可视化接口"与 README 的对应口径；原测试
+  "不带误差棒"改为核对棒端 = J ± SEM。pytest：test_visualization.py 19 项全过；全量
+  230 过、2 挂（`test_stack_examples.py` 的 t₂ 系列两项，来自工作区里本次之前就未提交的
+  `examples/stack_t2_2nm.yaml` 改动，与本次无关）
 - **新增可选的快陷阱移出事件预算，测量窗口延长 80–900 倍**（`config.SimulationConfig` 新增
   `fast_trap_rate`、`io._simulation` 解析 `simulation.fast_trap_rate_s`；`kmc.py`：`_prepare`
   按全空组态速率分出快陷阱，主循环里快陷阱的块事件移出、占据取每步自洽的 p̂、快↔慢跃迁

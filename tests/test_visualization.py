@@ -275,12 +275,18 @@ def test_it_curves_slice_the_same_data_by_voltage():
 
 
 @pytest.mark.parametrize("plot", [plot_iv_curves, plot_it_curves])
-def test_curves_carry_no_error_bars(plot):
-    """不画误差棒：曲线是纯 Line2D，没有 ErrorbarContainer、没有竖线段集合。"""
+def test_curves_draw_sem_error_bars(plot):
+    """给了标准误就画 ±σ/√M 误差棒，棒的上下端 = J ± SEM（换算成 A/cm²）；不给就没有竖线段。"""
+    sem = 0.1 * DENSITY
+    axes = plot(VOLTAGES, TEMPERATURES, DENSITY, sem).axes[0]
+    assert len(axes.collections) == len(axes.lines)  # 每条曲线一组竖线段
+    for line, bars in zip(axes.lines, axes.collections):
+        y = np.asarray(line.get_ydata())
+        segments = np.array([seg[:, 1] for seg in bars.get_segments()])
+        assert np.allclose(segments[:, 0], 0.9 * y, rtol=1e-12)
+        assert np.allclose(segments[:, 1], 1.1 * y, rtol=1e-12)
     axes = plot(VOLTAGES, TEMPERATURES, DENSITY).axes[0]
-    assert axes.lines  # 曲线本身还在
-    assert len(axes.containers) == 0  # errorbar 会留下 ErrorbarContainer
-    assert len(axes.collections) == 0  # 误差棒的竖线与端帽是 LineCollection
+    assert len(axes.collections) == 0
 
 
 def test_curves_work_with_a_single_point():

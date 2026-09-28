@@ -230,24 +230,30 @@ def _current_curves(
     labels: Sequence[str],
     x_label: str,
     title: str,
+    errors: Optional[np.ndarray] = None,
 ) -> Figure:
     """一族总电流密度曲线：`rows` 的每一行画一条，纵轴取对数、换算成 A/cm²。
 
     行序在 Blues 色系里取深浅（浅 = 低温/低压、深 = 高温/高压），见 `_SHADE_RANGE`。
+    给了 `errors`（与 `rows` 同形状）就画 ±errors 的竖直误差棒。
     """
     figure = _new_figure((7.0, 5.0))
     axes = figure.add_subplot(1, 1, 1)
     palette = _shades(_TOTAL_CMAP, len(labels))
     for i, label in enumerate(labels):
-        axes.plot(
+        yerr = None if errors is None else np.asarray(errors[i], dtype=float) * _PER_CM2
+        axes.errorbar(
             x,
             np.asarray(rows[i], dtype=float) * _PER_CM2,
+            yerr=yerr,
             label=label,
             color=palette[i],
             linestyle="-",
             marker="o",
             ms=4.0,
             lw=1.5,
+            elinewidth=1.0,
+            capsize=0.0,  # 不画端帽：端帽是额外的 Line2D，会混进 axes.lines
         )
     axes.set_yscale("log")
     axes.set_xlabel(x_label)
@@ -263,6 +269,7 @@ def plot_iv_curves(
     voltages: np.ndarray,
     temperatures: np.ndarray,
     current_density: np.ndarray,
+    current_density_sem: Optional[np.ndarray] = None,
 ) -> Figure:
     """I-V 曲线：一条曲线一个温度点，纵轴总电流密度 J 取对数。
 
@@ -274,6 +281,8 @@ def plot_iv_curves(
     temperatures : 温度 [K]，长度 n_T
     current_density : 电流密度 [A/m²]，形状 (n_T, n_V)，即 `SweepResult` /
         `EnsembleSweepResult` 的 `current_density`
+    current_density_sem : 平均值的标准误 [A/m²]，形状同上，即
+        `EnsembleSweepResult.current_density_sem`；给了就画 ±σ/√M 误差棒
     """
     temperatures = np.asarray(temperatures, dtype=float)
     labels = ["T = {:.1f} °C".format(t - constants.zero_Celsius) for t in temperatures]
@@ -283,6 +292,7 @@ def plot_iv_curves(
         labels,
         "U (V)",
         "I-V characteristics",
+        None if current_density_sem is None else np.asarray(current_density_sem, dtype=float),
     )
 
 
@@ -290,6 +300,7 @@ def plot_it_curves(
     voltages: np.ndarray,
     temperatures: np.ndarray,
     current_density: np.ndarray,
+    current_density_sem: Optional[np.ndarray] = None,
 ) -> Figure:
     """I-T 曲线：一条曲线一个电压点，横轴温度换算成 °C，纵轴总电流密度 J 取对数。
 
@@ -304,4 +315,5 @@ def plot_it_curves(
         ["U = {:.2f} V".format(v) for v in voltages],
         "T (°C)",
         "I-T characteristics",
+        None if current_density_sem is None else np.asarray(current_density_sem, dtype=float).T,
     )

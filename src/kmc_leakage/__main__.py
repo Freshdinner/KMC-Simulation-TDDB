@@ -149,6 +149,7 @@ def _write_sweep_plots(
     voltages: np.ndarray,
     temperatures: np.ndarray,
     density: np.ndarray,
+    density_sem: Optional[np.ndarray] = None,
 ) -> None:
     """把扫描结果画成 I-V 与 I-T 两张总电流曲线图并落盘。
 
@@ -156,7 +157,7 @@ def _write_sweep_plots(
     """
     from .visualization import plot_it_curves, plot_iv_curves
 
-    args = (voltages, temperatures, density)
+    args = (voltages, temperatures, density, density_sem)
     figures = (("iv", plot_iv_curves(*args)), ("it", plot_it_curves(*args)))
     for kind, figure in figures:
         path = "{}_{}.png".format(prefix, kind)
@@ -229,6 +230,7 @@ def sweep(
             ensemble.voltages,
             ensemble.temperatures,
             ensemble.current_density,
+            ensemble.current_density_sem,
         )
 
 
