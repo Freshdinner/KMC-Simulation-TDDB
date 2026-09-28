@@ -16,11 +16,12 @@ matplotlib 的 `Figure`，内部不调用 `plt.show()`——保存还是显示�
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
+from matplotlib.axes import Axes
 from matplotlib.backends.backend_agg import FigureCanvasAgg
-from matplotlib.cm import Blues
+from matplotlib.cm import Blues, tab10
 from matplotlib.colors import Colormap
 from matplotlib.figure import Figure
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  注册 3d 投影
+from mpl_toolkits.mplot3d import Axes3D  # 同时注册 3d 投影
 from scipy import constants
 
 from .bands import BandProfile
@@ -43,6 +44,11 @@ _SHADE_RANGE = (0.50, 0.95)
 # 叠层叠画用的两个颜色：界面缺陷（独立物种，单独标色）与层边界/界面位置
 _INTERFACE_DEFECT_COLOR = "#c00000"
 _LAYER_EDGE_COLOR = "0.45"
+
+# 强耦合簇标注：簇间用定性色表轮换区分（簇多于 10 个时颜色会重复，靠位置区分）
+_CLUSTER_CMAP = tab10
+# 深度剖面上簇成员圆点的行位置（轴内比例）：第 i 个簇画在 START + i·STEP 高度
+_CLUSTER_ROW_START, _CLUSTER_ROW_STEP = 0.03, 0.035
 
 
 def _shades(cmap: Colormap, n: int) -> List[Tuple[float, float, float, float]]:
@@ -81,6 +87,56 @@ def plot_defect_distribution(
     的体密度不是同一个量纲，所以直方图的柱子只统计体缺陷，界面缺陷改用
     界面处的竖线加个数标注。单层没有内部界面，两幅图与叠层改造前逐位相同。
     """
+    figure, _, _ = _draw_defect_distribution(device, defects, n_bins, realizations)
+    figure.tight_layout()
+    return figure
+
+
+def plot_defect_clusters(
+    device: DeviceConfig,
+    defects: DefectEnsemble,
+    clusters: Sequence[np.ndarray],
+    n_bins: int = 20,
+    realizations: Optional[Sequence[DefectEnsemble]] = None,
+) -> Figure:
+    """缺陷分布图 + 强耦合簇（ADR-022）标注。
+
+    底图与 `plot_defect_distribution` 完全相同；`clusters` 是某个工作点下的强耦合簇
+    （每个簇一组全局缺陷编号，如 `KMCSimulation.cluster_members`），由调用方算好传入。
+    三维散点上每个簇的成员套一圈同色空心圆（簇间颜色轮换）；深度剖面底部每个簇占
+    一行，同色圆点标出成员的 z 位置（簇常跨界面，画成 z 范围竖带会盖住整层，故只点
+    成员）。没有簇时只在标题里注明 0 个。
+    """
+    figure, axes3d, axes = _draw_defect_distribution(device, defects, n_bins, realizations)
+    colors = [_CLUSTER_CMAP(i % _CLUSTER_CMAP.N) for i in range(len(clusters))]
+    rows = axes.get_xaxis_transform()  # x 取数据坐标、y 取轴内比例
+    for row, (members, color) in enumerate(zip(clusters, colors)):
+        z = defects.positions[members, 2] / _NM
+        axes3d.scatter(
+            *(defects.positions[members, i] / _NM for i in range(2)), z,
+            facecolors="none", edgecolors=[color], s=110, linewidths=1.6, depthshade=False,
+        )
+        axes.plot(
+            z, np.full(z.size, _CLUSTER_ROW_START + row * _CLUSTER_ROW_STEP),
+            transform=rows, ls="none", marker="o", ms=5, color=color, mec="white", mew=0.6,
+        )
+    n_members = int(sum(len(members) for members in clusters))
+    axes3d.set_title(
+        "N = {}, {} coupled clusters ({} traps)".format(
+            len(defects), len(clusters), n_members
+        )
+    )
+    figure.tight_layout()
+    return figure
+
+
+def _draw_defect_distribution(
+    device: DeviceConfig,
+    defects: DefectEnsemble,
+    n_bins: int,
+    realizations: Optional[Sequence[DefectEnsemble]],
+) -> Tuple[Figure, Axes3D, Axes]:
+    """画缺陷分布底图，返回 (figure, 三维散点 axes, 深度剖面 axes)，供两个公开函数共用。"""
     figure = _new_figure((11.0, 4.5))
     is_interface = np.asarray(defects.interface_id) >= 0
     bulk, interface = ~is_interface, is_interface
@@ -135,8 +191,7 @@ def plot_defect_distribution(
     axes.set_title("Depth profile")
     axes.set_xlim(z_lo, z_hi)
     _annotate_layers(axes, device, defects, layer_edges)
-    figure.tight_layout()
-    return figure
+    return figure, axes3d, axes
 
 
 def _annotate_layers(

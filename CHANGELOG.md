@@ -7,6 +7,16 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **缺陷分布图每次出两张：原图 + 强耦合簇标注图**（新增 `visualization.plot_defect_clusters`、
+  `KMCSimulation.cluster_members`）。`plot --kind defects` 另落 `<out 去扩展名>_clusters.png`，
+  `sweep --plot-prefix` 另落 `<前缀>_defects_clusters.png`。簇 = ADR-022 的强耦合簇，按配置里的
+  单点工况（simulation.voltage / temperature）只做 KMC 初始化识别、不跑事件；三维散点上每簇
+  一圈同色空心圆，深度剖面底部每簇一行成员 z 圆点（簇常跨界面，z 范围竖带会盖住整层，弃用）。
+  原图函数签名与输出不变，底图抽成私有 `_draw_defect_distribution` 共用。原因：直接看出簇在
+  哪、跨不跨界面。同步 README 与 docs/physics_model.md"可视化接口"。pytest：新增单层/叠层簇标注、
+  无簇退化三项通过；全量 235 过、2 败（test_stack_examples 那两项，来自工作区里
+  examples/stack_t2_2nm.yaml 未提交的修改，与本改动无关）。
+
 - **I-V / I-T 曲线图的误差棒两端加小横线**（`visualization._current_curves` 的 `capsize` 0 → 3）：
   原先只有竖线段，棒端位置不好读。端帽是额外的 Line2D、会混进 `axes.lines`，测试改为按
   `axes.containers` 逐条取主线/端帽/竖线段，并核对两个端帽恰在 J ± SEM。不涉及 R 编号。

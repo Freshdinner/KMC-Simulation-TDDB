@@ -23,8 +23,10 @@ from kmc_leakage.config import DefectLevelConfig, DefectSpatialConfig
 from kmc_leakage.defects import generate_defects
 from kmc_leakage.electrostatics import PoissonSolver
 from kmc_leakage.io import load_config
+from kmc_leakage.kmc import KMCSimulation
 from kmc_leakage.visualization import (
     plot_band_diagram,
+    plot_defect_clusters,
     plot_defect_distribution,
     plot_it_curves,
     plot_iv_curves,
@@ -232,6 +234,55 @@ def test_single_layer_plots_are_unchanged_by_the_stack_overlays(profile_and_leve
     assert len(hist.lines) == 0 and len(hist.texts) == 0
 
 
+@pytest.mark.parametrize("stack", [False, True])
+def test_cluster_plot_marks_each_cluster_on_top_of_the_base_figure(stack):
+    """簇标注图 = 原图 + 每个簇一圈空心圆（圈住的正是簇成员）+ 深度剖面上一行成员 z 圆点。
+
+    簇取 KMC 在该工作点实际识别的强耦合簇；单层、叠层都要能出图。
+    """
+    if stack:
+        device, defects, _, _ = _stack_scene()
+        config = dataclasses.replace(
+            load_config(str(ROOT / "examples" / "stack_t2_2nm.yaml")), device=device
+        )
+    else:
+        config = make_config()
+        device = config.device
+        defects = generate_defects(device, np.random.default_rng(0))
+    clusters = KMCSimulation(config, defects=defects).cluster_members
+    if not clusters:  # 该实现在此工作点没有簇时，人造两个簇检验标注逻辑
+        clusters = [np.array([0, 1]), np.array([2, 3, 4])]
+
+    base = plot_defect_distribution(device, defects)
+    figure = plot_defect_clusters(device, defects, clusters)
+    axes3d, hist = figure.axes[0], figure.axes[-1]
+    base3d, base_hist = base.axes[0], base.axes[-1]
+
+    rings = axes3d.collections[len(base3d.collections):]
+    assert len(rings) == len(clusters)
+    for ring, members in zip(rings, clusters):
+        xy = np.asarray(ring.get_offsets())  # 三维散点投影前的 (x, y) 就是数据坐标
+        assert np.allclose(xy, defects.positions[members, :2] / NM)
+        assert np.all(np.asarray(ring.get_facecolor())[:, 3] == 0.0)  # 空心圈，不遮挡能级着色
+    marks = hist.lines[len(base_hist.lines):]  # 每簇一行圆点，横坐标 = 成员的 z
+    assert len(marks) == len(clusters)
+    for mark, members in zip(marks, clusters):
+        assert np.allclose(mark.get_xdata(), defects.positions[members, 2] / NM)
+    # 底图不动：原图的柱子逐位保留
+    heights = [p.get_height() for p in hist.containers[0]]
+    assert heights == [p.get_height() for p in base_hist.containers[0]]
+    assert "{} coupled clusters".format(len(clusters)) in axes3d.get_title()
+
+
+def test_cluster_plot_without_clusters_equals_base_figure(defects):
+    """没有簇时不加任何标注，只在标题里注明 0 个。"""
+    base = plot_defect_distribution(make_device(), defects)
+    figure = plot_defect_clusters(make_device(), defects, [])
+    assert len(figure.axes[0].collections) == len(base.axes[0].collections)
+    assert len(figure.axes[-1].lines) == len(base.axes[-1].lines)
+    assert "0 coupled clusters" in figure.axes[0].get_title()
+
+
 def test_plot_functions_do_not_touch_the_filesystem(tmp_path, monkeypatch, defects):
     """约定：绘图函数内部不保存文件，也不调用 plt.show()。"""
     import matplotlib.pyplot as plt
@@ -242,6 +293,7 @@ def test_plot_functions_do_not_touch_the_filesystem(tmp_path, monkeypatch, defec
     monkeypatch.setattr(plt, "show", fail)
     monkeypatch.setattr(Figure, "savefig", fail)
     plot_defect_distribution(make_device(), defects)
+    plot_defect_clusters(make_device(), defects, [np.array([0, 1])])
     plot_iv_curves(VOLTAGES, TEMPERATURES, DENSITY)
     plot_it_curves(VOLTAGES, TEMPERATURES, DENSITY)
     assert not list(tmp_path.iterdir())

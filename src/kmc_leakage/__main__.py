@@ -6,14 +6,16 @@
     python -m kmc_leakage plot  --config examples/single_run.yaml --kind defects|bands
 """
 
-from typing import Optional
+import os
+from typing import List, Optional
 
 import numpy as np
 import typer
 from scipy import constants
 
 from .bands import band_profile, trap_levels
-from .defects import generate_defects
+from .config import Config
+from .defects import DefectEnsemble, generate_defects
 from .electrostatics import PoissonSolver
 from .ensemble import EnsembleResult, run_ensemble, run_ensemble_sweep, write_ensemble_csv
 from .io import load_config
@@ -165,19 +167,44 @@ def _write_sweep_plots(
         typer.echo("已写入 {}".format(path))
 
 
-def _write_sweep_defect_plot(prefix: str, cfg) -> None:
-    """从系综种子里随机挑一个，画该实现的缺陷分布图并落盘。
+def _write_defect_figures(
+    cfg: Config,
+    defects: DefectEnsemble,
+    path: str,
+    realizations: Optional[List[DefectEnsemble]] = None,
+) -> str:
+    """缺陷分布出两张图：`path` 是原图，`<path 去扩展名>_clusters.png` 另标出强耦合簇。
+
+    簇按配置里的单点工况（simulation.voltage / temperature）识别，只做 KMC 初始化、
+    不跑事件。返回簇标注图的路径。
+    """
+    from .visualization import plot_defect_clusters, plot_defect_distribution
+
+    plot_defect_distribution(cfg.device, defects, realizations=realizations).savefig(path, dpi=150)
+    clusters = KMCSimulation(cfg, defects=defects).cluster_members
+    cluster_path = "{}_clusters.png".format(os.path.splitext(path)[0])
+    plot_defect_clusters(cfg.device, defects, clusters, realizations=realizations).savefig(
+        cluster_path, dpi=150
+    )
+    return cluster_path
+
+
+def _write_sweep_defect_plot(prefix: str, cfg: Config) -> None:
+    """从系综种子里随机挑一个，画该实现的缺陷分布图（原图 + 簇标注图）并落盘。
 
     扫描对每个种子都是 default_rng(seed) 后第一步生成缺陷，这里按同样方式重建，
     得到的就是扫描里实际用过的那个实现。单层、叠层走同一个绘图函数。
     """
-    from .visualization import plot_defect_distribution
-
     seed = int(np.random.default_rng().choice(cfg.seeds))
     defects = generate_defects(cfg.device, np.random.default_rng(seed))
     path = "{}_defects.png".format(prefix)
-    plot_defect_distribution(cfg.device, defects).savefig(path, dpi=150)
-    typer.echo("已写入 {}（缺陷分布，seed = {}）".format(path, seed))
+    cluster_path = _write_defect_figures(cfg, defects, path)
+    typer.echo(
+        "已写入 {} 与 {}（缺陷分布，seed = {}；簇按 U = {:.2f} V, T = {:.1f} °C 识别）".format(
+            path, cluster_path, seed, cfg.simulation.voltage,
+            cfg.simulation.temperature - constants.zero_Celsius,
+        )
+    )
 
 
 @app.command()
@@ -260,7 +287,7 @@ def plot(
     out: Optional[str] = typer.Option(None, "--out", help="图片输出路径（默认 <kind>.png）"),
 ) -> None:
     """出图。绘图函数只返回 Figure，保存动作在这里发生。"""
-    from .visualization import plot_band_diagram, plot_defect_distribution
+    from .visualization import plot_band_diagram
 
     cfg = load_config(config)
     # 系综 M 个实现（种子每次运行随机抽取）：代表实现取抽到的头一个用于三维散点，
@@ -269,9 +296,18 @@ def plot(
     realizations = [generate_defects(cfg.device, np.random.default_rng(s)) for s in cfg.seeds]
     defects = realizations[0]
 
+    path = out if out is not None else "{}.png".format(kind)
     if kind == "defects":
-        figure = plot_defect_distribution(cfg.device, defects, realizations=realizations)
-    elif kind == "bands":
+        cluster_path = _write_defect_figures(cfg, defects, path, realizations=realizations)
+        typer.echo(
+            "已写入 {} 与 {}（三维散点 seed = {}，深度直方图汇总 M = {} 个实现；"
+            "簇按 U = {:.2f} V, T = {:.1f} °C 识别）".format(
+                path, cluster_path, seed, len(realizations), cfg.simulation.voltage,
+                cfg.simulation.temperature - constants.zero_Celsius,
+            )
+        )
+        return
+    if kind == "bands":
         from .bands import top_boundary_potential
 
         solver = PoissonSolver(cfg.device, cfg.simulation.grid)
@@ -289,16 +325,8 @@ def plot(
     else:
         raise typer.BadParameter("--kind 只支持 defects 或 bands，收到 {!r}".format(kind))
 
-    path = out if out is not None else "{}.png".format(kind)
     figure.savefig(path, dpi=150)
-    if kind == "defects":
-        typer.echo(
-            "已写入 {}（三维散点 seed = {}，深度直方图汇总 M = {} 个实现）".format(
-                path, seed, len(realizations)
-            )
-        )
-    else:
-        typer.echo("已写入 {}（seed = {} 的缺陷实现）".format(path, seed))
+    typer.echo("已写入 {}（seed = {} 的缺陷实现）".format(path, seed))
 
 
 def main() -> None:

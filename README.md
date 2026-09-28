@@ -44,11 +44,12 @@ python -m kmc_leakage sweep --config examples/iv_sweep.yaml --out results.csv
 
 # 扫描顺手出曲线图：<前缀>_iv.png（横轴电压，一条曲线一个温度）
 #                  <前缀>_it.png（横轴温度，一条曲线一个电压）
-# 两张图上都只画总电流；另落 <前缀>_defects.png：系综里随机一个种子的缺陷分布
-# （单层、叠层都适用，所用 seed 打印在终端）
+# 两张图上都只画总电流；另落 <前缀>_defects.png 与 <前缀>_defects_clusters.png：
+# 系综里随机一个种子的缺陷分布及其强耦合簇标注（单层、叠层都适用，所用 seed 打印在终端）
 python -m kmc_leakage sweep --config examples/iv_sweep.yaml --out results.csv --plot-prefix scan
 
-# 出图：缺陷分布 / 能带结构
+# 出图：缺陷分布 / 能带结构。defects 同时落 <out 去扩展名>_clusters.png，标出强耦合簇
+# （ADR-022，按配置里 simulation.voltage / temperature 这一工作点识别）
 python -m kmc_leakage plot --config examples/single_run.yaml --kind defects --out defects.png
 python -m kmc_leakage plot --config examples/single_run.yaml --kind bands   --out bands.png
 
@@ -756,6 +757,11 @@ figure.savefig("iv.png", dpi=150)
   ——默认 I-T 图是 11 个电压点，靠图例与"越深越高"的单调方向读，相邻两档本身分不开
 - CLI 里 `sweep --plot-prefix scan` 就是这两个函数加一次 `savefig`，落
   `scan_iv.png` 与 `scan_it.png`，外加随机一个系综种子的缺陷分布图 `scan_defects.png`
+  及其簇标注图 `scan_defects_clusters.png`
+- **缺陷簇标注图**（`plot_defect_clusters`）：底图与 `plot_defect_distribution` 相同，
+  强耦合簇（`KMCSimulation.cluster_members`，按配置的单点工况识别）在三维散点上每簇
+  套一圈同色空心圆，深度剖面底部每簇一行同色圆点标出成员的 z。簇常跨界面，所以不画
+  z 范围竖带
 - **叠层的两处叠画**（ADR-016，函数签名不变，靠传进来的 `DeviceConfig` /
   `BandProfile` 自己认出层结构）：缺陷图在三维盒子上把每个界面画成一圈虚线、
   在深度剖面上画层边界竖线与层材料名，**界面缺陷单独标色**（深色菱形 + 界面处

@@ -592,6 +592,11 @@ class KMCSimulation:
         # 快↔快跃迁不进事件表（两端都用 p̂，交换不改变任何慢变量）
         self._hop_event_mask = (~(self._fast[self._pairs.a] & self._fast[self._pairs.b])).astype(float)
 
+    @property
+    def cluster_members(self) -> List[np.ndarray]:
+        """本工作点的强耦合簇（ADR-022），每个簇是升序的全局缺陷编号数组。"""
+        return [cluster.members for cluster in self._clusters]
+
     def _build_clusters(self, blocks: np.ndarray, hop: np.ndarray) -> List[_Cluster]:
         """按全空组态下的速率 `blocks`/`hop` 找强耦合簇（ADR-022）。"""
         n = self.n_defects
