@@ -7,6 +7,15 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **TDDB 阶段初始状态**：新增 `PROJECT_CONTEXT_TDDB.md`（TDDB 搭建规格，取代已删除的
+  `CLAUDE_TDDB.md`）；`CLAUDE.md` 改为指向它，并补充输出风格、环境、单位约定与 TDDB 常用
+  命令；原 `CLAUDE.md` 里的代码规范、测试要求、提交规范移入 `PROJECT_CONTEXT.md`。
+  `kmc.py`（`r1_electrode_current`、`_blocking_layer_indices`）与 `rates/wkb.py`
+  （`wkb_transmission`）精简 docstring，逻辑不变。`results/` 下旧的 stack_t2_* 扫描结果与
+  t2_1nm 图删除，新结果按日期归档到 `results/9.28/`、`results/9.29/`，`results/t2_2nm.csv`
+  更新。`examples/stack_t2_2nm.yaml` 保持预设值。原因：作为 TDDB 开发的起点。
+  pytest：本次提交未运行。
+
 - **簇标注图改为用缺陷本身的颜色区分簇**（`visualization.plot_defect_clusters`）：三维散点不再
   按能级着色、不画 colorbar，非簇缺陷画黑色，同簇成员同色，取消原先套在簇成员外的彩色空心圈；
   界面缺陷仍以菱形区分（图例改用黑色代理句柄）。簇配色取 tab10 去掉蓝（与深度剖面柱子同色、

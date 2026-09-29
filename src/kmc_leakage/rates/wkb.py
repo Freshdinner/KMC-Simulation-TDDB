@@ -19,20 +19,6 @@ def wkb_transmission(
     z: np.ndarray, barrier: np.ndarray, energy: np.ndarray, m_di: np.ndarray
 ) -> np.ndarray:
     """WKB 透射系数 P(E) = exp[-(2/ℏ)·∫√(2·m_di·(U(z)-E)) dz]。
-
-    积分只在经典禁区（U > E）上进行；E 高于势垒最高点时 P = 1。
-
-    参数
-    ----
-    z : 隧穿路径坐标 [m]，最后一维是积分变量，须与 `barrier` 可广播
-    barrier : 势垒剖面 U(z) [J]，最后一维与 z 对应
-    energy : 电子能量 E [J]，形状须与 `barrier` 去掉最后一维后可广播
-        （函数内部自动补上末维）
-    m_di : 隧穿有效质量 [kg]，标量或沿积分轴（最后一维）逐样点给出的数组
-        （分段叠层的路径传播质量，ADR-012），须与 `barrier` 可广播
-
-    返回形状为 (z, barrier, energy[..., None]) 广播后去掉最后一维。
-    路径方向（z 递增或递减）不影响结果。
     """
     z = np.asarray(z, dtype=float)
     barrier = np.asarray(barrier, dtype=float)

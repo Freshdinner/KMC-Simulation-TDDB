@@ -349,12 +349,6 @@ def r1_electrode_current(
     phi_bar: np.ndarray,
 ) -> Tuple[float, float]:
     """R1 的两个电流分量 (直接/FN隧穿, 热电子发射)，单位 A。
-
-    I = q·R1，速率 R1 见 docs/rate_equations.md 的 R1 一节。`phi_bar` 是
-    `z_nodes` 上的横向平均电势剖面 [V]；取零空间电荷（外加偏压）解时势垒是
-    理想（分段）梯形，势垒顶恰在最高的那段——单层里是 E_B、叠层里可落在阻挡层
-    内（ADR-012）。分段 WKB：势垒用界面双值保留真实台阶，隧穿质量沿路径按层
-    取（`stack.m_di_at`）。单层退回原式（无界面、m_di 恒定）。
     """
     z = np.linspace(0.0, device.Lz, _R1_PATH_POINTS)
     band_nodes = conduction_band_edge(device, z_nodes, phi_bar)
@@ -374,9 +368,7 @@ def r1_electrode_current(
 
 
 def _blocking_layer_indices(band_refs: np.ndarray) -> np.ndarray:
-    """叠层里的阻挡层：导带基准高于两侧相邻层的内部层（glossary 的 Blocking layer）。
-
-    ZAZ 里正是中间 Al₂O₃。单层或无内部凸起时返回空——PF 收集退回"立即收集"。
+    """叠层里的阻挡层：导带基准高于两侧相邻层的内部层
     """
     n = band_refs.shape[0]
     if n < 3:
