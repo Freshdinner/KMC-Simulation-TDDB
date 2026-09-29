@@ -1,6 +1,7 @@
-"""速率方程（R1–R8）。
+"""速率方程（R1–R8）与 TDDB 缺陷生成速率（T1–T4）。
 
-编号与公式见 docs/rate_equations.md（本项目内部编号，不对应外部文献）。
+R 编号与公式见 docs/rate_equations.md（本项目内部编号，不对应外部文献）；
+T 编号见 PROJECT_CONTEXT_TDDB.md 第 3 节，实现在 generation.py。
 每个函数都是纯函数：输入物理量与参数，返回速率数值，不依赖全局状态、
 不做 I/O。全部量为 SI 单位。
 
@@ -19,6 +20,13 @@ from .electrode_tunneling import (
     richardson_schottky_current_density,
     supply_function,
 )
+from .generation import (
+    CaptureElectrode,
+    bond_break_generation_rate,
+    bond_break_probability,
+    effective_activation_energy,
+    single_electron_capture_rate,
+)
 from .multiphonon import (
     multiphonon_coupling,
     phonon_transition_probability,
@@ -35,7 +43,11 @@ from .trap_hopping import (
 from .wkb import barrier_maximum, wkb_transmission
 
 __all__ = [
+    "CaptureElectrode",
     "barrier_maximum",
+    "bond_break_generation_rate",
+    "bond_break_probability",
+    "effective_activation_energy",
     "effective_richardson_constant",
     "elastic_prefactor",
     "miller_abrahams_factor",
@@ -52,6 +64,7 @@ __all__ = [
     "r8_pf_emission",
     "richardson_schottky_current_density",
     "segmented_overlap_factor",
+    "single_electron_capture_rate",
     "supply_function",
     "wkb_transmission",
 ]

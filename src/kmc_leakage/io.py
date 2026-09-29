@@ -43,6 +43,7 @@ NM = constants.nano  # nm -> m
 PER_CM3 = constants.centi ** -3  # cm^-3 -> m^-3（体浓度）
 PER_CM2 = constants.centi ** -2  # cm^-2 -> m^-2（界面面密度、面电荷）
 M_E = constants.electron_mass  # m_e -> kg
+E_ANGSTROM = constants.elementary_charge * constants.angstrom  # e·Å -> C·m（偶极矩）
 
 
 def celsius_to_kelvin(t_c: float) -> float:
@@ -289,13 +290,28 @@ def _ensemble(raw: Optional[Dict[str, Any]]) -> Optional[EnsembleConfig]:
 
 
 def _tddb(raw: Optional[Dict[str, Any]]) -> Optional[TDDBConfig]:
-    """TDDB 缺陷生成参数（ADR-024）；整段省略返回 None，即纯漏电流仿真。"""
+    """TDDB 缺陷生成参数（ADR-024/028）；整段省略返回 None，即纯漏电流仿真。
+
+    三个能量（E_A、E_t1、E_rel1）必须为正；p₀ 必须 ≥ 0，取 0 即关掉场加速。
+    """
     if raw is None:
         return None
-    activation = float(_require(raw, "activation_energy_eV", "tddb"))
-    if not activation > 0.0:
-        raise ValueError("tddb.activation_energy_eV 必须为正（单位 eV），收到 {!r}".format(activation))
-    return TDDBConfig(activation_energy=activation * EV)
+
+    def energy(key: str) -> float:
+        value = float(_require(raw, key, "tddb"))
+        if not value > 0.0:
+            raise ValueError("tddb.{} 必须为正（单位 eV），收到 {!r}".format(key, value))
+        return value * EV
+
+    dipole = float(_require(raw, "dipole_moment_eA", "tddb"))
+    if not dipole >= 0.0:
+        raise ValueError("tddb.dipole_moment_eA 必须 ≥ 0（单位 e·Å），收到 {!r}".format(dipole))
+    return TDDBConfig(
+        activation_energy=energy("activation_energy_eV"),
+        precursor_ionization_energy=energy("precursor_ionization_energy_eV"),
+        precursor_relaxation_energy=energy("precursor_relaxation_energy_eV"),
+        dipole_moment=dipole * E_ANGSTROM,
+    )
 
 
 _LEGACY_TOP_KEYS = {

@@ -7,6 +7,32 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **TDDB Phase 1：生成速率纯函数与前驱参数配置**（新增 `rates/generation.py`：
+  `single_electron_capture_rate`（式 T4）、`effective_activation_energy` / `bond_break_probability`
+  （式 T2）、`bond_break_generation_rate`（式 T1）、`CaptureElectrode`；`config.TDDBConfig` 与
+  `io._tddb` 新增 E_t1、E_rel1、p₀ 三个必填字段，`io.py` 新增 e·Å → C·m 换算系数
+  `E_ANGSTROM`；`examples/zro2_tddb.yaml` 填入取值；新增 `tests/test_generation.py`（6 项），
+  改写 `test_config_io.py` 的两项；新增 ADR-027/028；同步 README、`PROJECT_CONTEXT_TDDB.md`
+  §3 参数表与 §8.1）。
+
+  **做法**：R_1e = Σ_两侧电极 (R2 + R4)，直接调用引擎的同一组速率原语，前驱用自己的 E_t1
+  （能级、r_D、R2 前置因子）与 S₁ = E_rel1/ℏω₀（式 T12，多声子线型），`multiphonon.py` 不改；
+  R4 的声子项数由调用方给（S₁ = 1 时 12 项已收敛，S₁ 在 10–40 时要约 200 项）。P_bb 在有效势垒
+  ≤ 0 时饱和为 1；G 的俘获速率作为参数传入，后期换 R_2e 只改调用方；场加速项的 k 取静态 κ
+  （ADR-027）。前驱参数按用户确认取 E_t1 = 1.15 eV、E_rel1 = 0.04 eV（与 O 空位预设相同）；
+  p₀ 按"3 V / 25 °C 下 t_BD ≈ 100 s"推算（暂借 N_T = 4×10¹⁹ cm⁻³、击穿约需 1.5×10³ 个空位），
+  解出 7.145 eÅ，取 7.1 eÅ（ADR-028）。
+
+  **结果**：p₀ = 7.1 eÅ 时有效势垒在 3 V 为 0.45 eV、3.38 V 降到 0，斜率 1.18 eV/V，25 °C 下
+  P_bb 每伏变化约 20 个数量级。这个斜率由 E_A = 4 eV 决定、与 p₀ 怎么取无关，标定电压加速因子时
+  先核对（ADR-028、§8.1）。R_1e 的空间平均几乎全部来自弹性通道 R2，量级由 E_t1 决定：3 V、
+  25 °C 下 ⟨R_1e⟩ = 2.3×10⁶ s⁻¹。
+
+  **验证**（§9 三条解析极限）：G 的零场极限 = R_1e·exp(−E_A/k_BT)；ln G 对 E 严格线性、斜率
+  p₀·(2+κ)/(3k_BT)；R_1e 与引擎里同一参数陷阱的两侧 R2 + R4 之和一致（rtol 1e-12，正反偏压）。
+  另测 P_bb 饱和、κ = 38 下每 1 eÅ 压低 0.5 eV。涉及 T1/T2/T4（T5–T12 经 R2/R4 复用），R1–R8
+  无改动。`pytest tests/ -v`（`.venv`，Python 3.8）245 passed。
+
 - **TDDB Phase 0：ZrO₂ 单层 TDDB 配置与小盒子稳态本底验证**（新增 `examples/zro2_tddb.yaml`；
   `config.py` 新增 `TDDBConfig` 与 `Config.tddb`，`io.py` 新增 `_tddb`，解析可选的顶层 `tddb`
   段；新增 `docs/adr/tddb-decisions.md`（ADR-024–026）；`tests/test_config_io.py` 新增 2 个测试；

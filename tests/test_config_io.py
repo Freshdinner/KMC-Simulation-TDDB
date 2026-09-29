@@ -101,17 +101,35 @@ def test_fast_trap_rate_is_optional_and_positive():
 
 
 def test_tddb_section_is_optional_and_converted():
-    """tddb 段缺省为 None（纯漏电流仿真）；E_A 从 eV 换算成 J，必须给出且为正（ADR-024）。"""
+    """tddb 段缺省为 None（纯漏电流仿真）；三个能量从 eV 换算成 J、必须为正，p₀ 从 e·Å
+    换算成 C·m、必须 ≥ 0，四项都必须给出（ADR-024/028）。"""
     raw = _base_dict()
     assert config_from_dict(raw).tddb is None
-    raw["tddb"] = {"activation_energy_eV": 4.0}
-    assert config_from_dict(raw).tddb.activation_energy == pytest.approx(4.0 * EV)
-    raw["tddb"] = {"activation_energy_eV": 0.0}
-    with pytest.raises(ValueError, match="activation_energy_eV"):
+    section = {
+        "activation_energy_eV": 4.0,
+        "precursor_ionization_energy_eV": 1.15,
+        "precursor_relaxation_energy_eV": 0.04,
+        "dipole_moment_eA": 7.1,
+    }
+    raw["tddb"] = dict(section)
+    tddb = config_from_dict(raw).tddb
+    assert tddb.activation_energy == pytest.approx(4.0 * EV)
+    assert tddb.precursor_ionization_energy == pytest.approx(1.15 * EV)
+    assert tddb.precursor_relaxation_energy == pytest.approx(0.04 * EV)
+    assert tddb.dipole_moment == pytest.approx(7.1 * constants.elementary_charge * 1e-10)
+    for key in ("activation_energy_eV", "precursor_ionization_energy_eV", "precursor_relaxation_energy_eV"):
+        raw["tddb"] = dict(section, **{key: 0.0})
+        with pytest.raises(ValueError, match=key):
+            config_from_dict(raw)
+    raw["tddb"] = dict(section, dipole_moment_eA=0.0)
+    assert config_from_dict(raw).tddb.dipole_moment == 0.0  # p₀ = 0：关掉场加速
+    raw["tddb"] = dict(section, dipole_moment_eA=-1.0)
+    with pytest.raises(ValueError, match="dipole_moment_eA"):
         config_from_dict(raw)
-    raw["tddb"] = {}
-    with pytest.raises(KeyError):
-        config_from_dict(raw)
+    for key in section:
+        raw["tddb"] = {k: v for k, v in section.items() if k != key}
+        with pytest.raises(KeyError, match=key):
+            config_from_dict(raw)
 
 
 def test_lz_is_the_sum_of_layer_thicknesses():
@@ -322,7 +340,8 @@ def test_example_configs_load():
 
 def test_tddb_example_matches_leakage_reference_preset():
     """zro2_tddb.yaml 的材料、缺陷、电极与默认盒子 single_run.yaml 逐项相同（材料名之外），
-    只把侧向尺寸改成 20×20 nm 小盒子，网格步长跟默认盒子取最接近的整数格点（ADR-025）。"""
+    只把侧向尺寸改成 20×20 nm 小盒子，网格步长跟默认盒子取最接近的整数格点（ADR-025）；
+    前驱的 E_t1 / E_rel1 与 O 空位预设相同（ADR-028）。"""
     root = pathlib.Path(__file__).resolve().parents[1]
     tddb = load_config(str(root / "examples" / "zro2_tddb.yaml"))
     ref = load_config(str(root / "examples" / "single_run.yaml"))
@@ -349,4 +368,7 @@ def test_tddb_example_matches_leakage_reference_preset():
 
     assert len(tddb.seeds) == 30  # 小盒子的系综个数（ADR-026）
     assert tddb.tddb.activation_energy == pytest.approx(4.0 * EV)
+    assert tddb.tddb.precursor_ionization_energy == pytest.approx(tddb.defects.level.ED)
+    assert tddb.tddb.precursor_relaxation_energy == pytest.approx(material.huang_rhys * material.phonon_energy)
+    assert tddb.tddb.dipole_moment == pytest.approx(7.1 * constants.elementary_charge * 1e-10)
     assert ref.tddb is None
