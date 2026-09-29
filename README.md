@@ -533,6 +533,29 @@ N_T、k_TH 等待定参数在 YAML 里以注释占位。生成率场加速项里
 `bond_break_probability` 给断键概率 P_bb（有效势垒 ≤ 0 时饱和为 1）；
 `bond_break_generation_rate` 给单个前驱的生成速率 G = R_1e·P_bb，俘获速率作为参数传入。
 
+TDDB 外层每生成一个空位都要重求一次输运稳态，内层默认用**簇级平均场**求解器
+（`mean_field.py`，ADR-031）：不做时间推进，直接求占据的不动点 p = p̂(p)。p̂ 就是 KMC 电流
+估计量里的条件稳态占据——孤立陷阱按邻居的平均占据算跃迁供给，强耦合簇（ADR-022）内部枚举
+全部组态、按真实电荷分布精确求解，簇外取平均电荷作环境。电流是不动点处同一个估计量公式给出的
+阳极净通量，分解口径与 KMC 相同：
+
+```python
+from kmc_leakage.kmc import KMCSimulation
+from kmc_leakage.mean_field import solve_mean_field
+
+sim = KMCSimulation(config)                      # 缺陷实现、静电预计算、强耦合簇
+result = solve_mean_field(sim)                   # 从全空出发
+print(result.current_density, result.converged)  # A/m²；未收敛时 converged=False，不得当稳态交付
+print(result.by_mechanism, result.occupancy)     # 分解口径同 KMC；不动点占据
+again = solve_mean_field(sim, occupancy=result.occupancy)  # 热启动：外层下一步从上一步的占据出发
+```
+
+不动点在 ln p 上用 Anderson 混合求解，收敛判据是占据的相对残差 ≤ 1e-10（占据只有 1e-10 量级、
+经快跃迁供给邻居的陷阱也要收敛到位）。本配置（N=10）下 5–7 次迭代、约 0.01 s 收敛，同一实现
+20000 事件的 KMC 要 30–50 s；与开快陷阱的长窗口 KMC 在 2–4 V、25/125 °C 六个工作点上系综均值一致
+到 5×10⁻⁵。浓度提高到 3×10¹⁹ cm⁻³（N=96）时 10–11 次、约 0.3 s，与长窗口 KMC 之比 0.997，在统计误差
+以内（对拍见 ADR-031，逐实现数据在 `results/9.29/tddb_phase2_mf_vs_kmc.csv`）。
+
 这份配置的稳态本底与默认盒子一致：2–4 V、25/125 °C 六个工作点上，小盒子（M=128）与
 默认盒子（M=32）的系综均值都在合成标准误的 2 倍以内；3–4 V 下 TAT 占总电流 92% 以上。
 小盒子的单条轨迹之间可差 5–6 个数量级，结论只能看系综（完整对比表见 ADR-026，逐种子
@@ -677,7 +700,7 @@ R1 按构造与缺陷实现无关（见上文第 3 条），M 个实现给出逐
 ## 测试
 
 ```bash
-pytest tests/ -v      # 245 个测试，约 110 s
+pytest tests/ -v      # 253 个测试，约 100 s
 ```
 
 | 文件 | 覆盖内容 |
@@ -697,6 +720,7 @@ pytest tests/ -v      # 245 个测试，约 110 s
 | `test_stack_examples.py` | **t₂ 结构对照配置与退化用例全套**（Phase 6，ADR-006/018/019）：三份示例（t₂ ∈ {0,2,4} nm）固定总厚 8 nm、ZrO₂ 两侧对称、层厚对齐到 hz 整数倍、除层结构外逐项相同；t₂>0 有阻挡层 + Al₂O₃ 体内为空 + 两界面各 25 个界面缺陷；**t₂=0 与单层基准 `single_run.yaml` 同一器件且数值逐位退回**（速率表 / R1 / φ / E_C(z) rtol ≤ 1e-12，同种子轨迹 rtol ≤ 1e-9）、三层同材料 + ΔE_C=0 的场量退回单层 |
 | `test_master_equation.py` | **条件通量的独立主方程基准**（Phase 5，ADR-021 F04）：复现 review 4 态反例（条件通量比真实稳态低 25%）、单陷阱下条件通量 = 真实稳态、π 是合法分布且 πQ=0、**强耦合对连成簇后 KMC 估计量 = 精确稳态**（rtol 1e-10，单陷阱估计量在同一体系上只有约 1.5%）且短轨迹、换种子不变、长 KMC 轨迹的条件通量收敛到主方程期望 |
 | `test_fast_traps.py` | **快陷阱移出事件预算**（ADR-023）：没有陷阱达到 R_cut 时与不配置逐位相同、三陷阱小体系开启后电流仍等于主方程精确稳态（rtol 1e-4）且窗口延长 6 个数量级以上、全局守恒计入快↔慢跃迁 (I_C−I_A)Δt=q(ΔN−fast_exchange)、全部陷阱都快时判未通过、时间尺度分离不足判未通过；配置项 `fast_trap_rate_s` 的解析与取值检查在 `test_config_io.py` |
+| `test_mean_field.py` | **簇级平均场内层求解器**（TDDB Phase 2，ADR-031）：孤立强耦合簇上 = 主方程精确稳态（rtol 1e-10）、簇外还有弱耦合陷阱时差 <1e-9 而逐陷阱平均场高 2.4%、无强耦合时逐位退回逐陷阱平均场且与独立的阻尼迭代同一不动点、占据 9e-11 的供给陷阱按相对残差收敛到位、不动点与初值无关且从不动点热启动一次即收敛、未收敛如实标出、分解之和 = 总电流、无缺陷只剩 R1 |
 | `test_clusters.py` | **强耦合簇的纯函数**（ADR-022）：耦合强度与分簇、超限分量在最弱处切开、GTH 稳态分布与线性解一致且在速率跨 1e-20…1e14 时逐分量相对精度 ≤1e-12、簇内条件稳态在 4 态反例上给出精确 0.4、生成矩阵事件口径与 KMC 一致、无耦合时逐成员退回单陷阱公式（含贴阳极 1e13 s⁻¹ 交换、净通量 0.4 s⁻¹ 的成员） |
 | `test_numerics_convergence.py` | `kmc.py` 里各积分点数的收敛性依据 |
 | `test_ensemble.py` | 平均确实是**算术平均**、每个种子确实换了一整套缺陷、M=1 退化为普通单点仿真、标准误 = σ/√M、**R1 分量在系综里零散布**（按构造与缺陷无关）、CSV 保留各实现原始值 |
@@ -753,11 +777,12 @@ src/kmc_leakage/
   kmc.py               Gillespie 主循环、PF 收集概率 P_A、电流估计量、分层归因与验证状态
   clusters.py          强耦合陷阱簇：分簇、GTH 稳态分布、簇内条件稳态（纯函数）
   master_equation.py   小状态空间主方程稳态解（条件通量的独立基准，仅验证用）
+  mean_field.py        簇级平均场内层求解器：占据不动点 + 与 KMC 同一估计量的电流（TDDB 内层默认路径）
   sweep.py             I-V / I-T 扫描 + CSV 输出
   ensemble.py          多个缺陷实现的算术平均 + CSV 输出
   visualization.py     缺陷分布、能带结构、I-V / I-T 曲线（只返回 Figure）
   __main__.py          命令行入口
-tests/                 245 个测试
+tests/                 253 个测试
 examples/              single_run.yaml、iv_sweep.yaml、stack_t2_{0,2,4}nm.yaml（t₂ 结构对照）、stack_t2_2nm_custom.yaml（不对称自定义算例）、zro2_tddb.yaml（TDDB 起点，20×20×8 nm 小盒子）
 docs/                  物理规格（改 rates/ 或 electrostatics.py 前先读）
 ```
