@@ -66,9 +66,14 @@ def test_field_lowering_uses_static_kappa_lorentz_factor():
     assert lowering == pytest.approx([0.5 * EV], rel=1e-12)
 
 
-def _precursor_probe(ionization_energy, huang_rhys, voltage):
-    """把前驱参数当成真实陷阱放进引擎：单层 ZrO₂ 参考预设、三个位置、全空组态。"""
-    material = make_material(huang_rhys=huang_rhys)
+def _precursor_probe(ionization_energy, relaxation_energy, voltage):
+    """把前驱参数当成真实陷阱放进引擎：单层 ZrO₂ 参考预设、三个位置、全空组态。
+
+    引擎侧陷阱的 Huang-Rhys 因子取 E_rel1/ℏω₀，只是为了让两边的多声子线型相同、逐项
+    对拍，不代表 E_rel1 与输运的 S 有关联（ADR-030）。
+    """
+    phonon_energy = make_material().phonon_energy
+    material = make_material(huang_rhys=relaxation_energy / phonon_energy)
     stack = DielectricStack.single(material, thickness=8e-9)
     electrode = ElectrodeMaterial("TiN", 4.6 * EV, M_E, 5.0 * EV)
     device = DeviceConfig(20e-9, 20e-9, electrode, electrode, stack, barrier_height=1.74 * EV)
@@ -84,11 +89,11 @@ def _precursor_probe(ionization_energy, huang_rhys, voltage):
 def test_single_electron_capture_rate_matches_engine_r2_plus_r4(voltage):
     """R_1e = 两侧电极的 R2 + R4 之和：前驱参数当成真实陷阱时与引擎的块速率逐项一致。
 
-    前驱取 E_t1 = 1.6 eV、S₁ = 3（都不同于 O 空位预设），正反偏压各测一次，两侧电极
-    都占主导的情形都覆盖到。能级、局域场、WKB 路径与势垒全部取自引擎的同一组态。
+    前驱取 E_t1 = 1.6 eV、E_rel1 = 0.12 eV（E_rel1/ℏω₀ = 3），正反偏压各测一次，两侧
+    电极都占主导的情形都覆盖到。能级、局域场、WKB 路径与势垒全部取自引擎的同一组态。
     """
-    ionization_energy, huang_rhys = 1.6 * EV, 3.0
-    sim, material = _precursor_probe(ionization_energy, huang_rhys, voltage)
+    ionization_energy, relaxation_energy = 1.6 * EV, 0.12 * EV
+    sim, material = _precursor_probe(ionization_energy, relaxation_energy, voltage)
     device = sim.device
     occ = np.zeros(len(sim.defects), dtype=bool)
     blocks, _ = sim._rates(occ)
@@ -110,7 +115,7 @@ def test_single_electron_capture_rate_matches_engine_r2_plus_r4(voltage):
         field_at,
         electrodes,
         ionization_energy,
-        huang_rhys * material.phonon_energy,
+        relaxation_energy,
         material.phonon_energy,
         material.band_gap,
         material.m_di,

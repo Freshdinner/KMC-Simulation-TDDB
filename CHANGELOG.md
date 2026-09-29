@@ -7,6 +7,18 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **删去 E_rel = S·ℏω₀，T3 乘 ½，E_rel1 取 1.0 eV**（新增 ADR-030，ADR-027 的对应写法与 ADR-029
+  标 superseded；`PROJECT_CONTEXT_TDDB.md` 删去原式 T12、T3 改为 p₀ = ½·n·Valence·e·d、§2 第 5 条
+  与参数表改写；`zro2_tddb.yaml` 的 E_rel1 0.04 → 1.0 eV；`config.py`、`rates/generation.py`、
+  README 的注释；`test_generation.py` 改用 E_rel1 = 0.12 eV 直接传参，`test_config_io.py` 核对
+  1.0 eV）。**原因**：按用户要求——E_rel = S·ℏω₀ 里的 S 与输运用的 Huang-Rhys 因子同名，写在文档里
+  会让 E_rel1 被读成输运 S 的另一种写法；E_rel1 是第一次电子俘获导致 O-Zr-O 键断裂、O 空位形成的
+  弛豫能，只用于空位生成。E_rel1 进 R_1e 的方式不变（E_rel1/ℏω₀ 作前驱线型 L(m) 的参数），代码
+  逻辑不变，只把中间变量改名为 `lineshape_parameter`。T3 只在文档里出现，配置直接给 p₀，
+  p₀ = 7.1 eÅ 不受影响。**核对**：E_rel1 = 1.0 eV 下 p₀ 推算仍是 7.145 eÅ；R4 要约 100 个声子项
+  （80 项误差 1×10⁻⁴），Phase 3 调用 R_1e 取 n_phonon ≥ 100。涉及 T3/T10/T12，R1–R8 无改动。
+  `pytest tests/ -v` 245 passed。
+
 - **E_rel1 的含义写清：氧空位生成的弛豫能，与输运的 Huang-Rhys 因子 S 无关**（新增 ADR-029，
   ADR-028 的 E_rel1 部分标 superseded；`PROJECT_CONTEXT_TDDB.md` §2 新增第 5 条、§3 参数表；
   `zro2_tddb.yaml`、`config.TDDBConfig`、`rates/generation.py` 的注释；README；

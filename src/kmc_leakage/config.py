@@ -406,14 +406,14 @@ class TDDBConfig:
     """TDDB 缺陷生成参数（PROJECT_CONTEXT_TDDB.md 第 3 节参数表，ADR-024/028）。
 
     只收已定取值的参数，每个字段在用到它的 Phase 加入。N_T、k_TH 等待定参数在
-    YAML 里以注释占位。G 场加速项里的相对介电常数 k 取介质材料的静态 κ，前驱的
-    声子能量 ℏω₀ 取宿主介质的值（S₁ = E_rel1/ℏω₀），都不在这里另设。
+    YAML 里以注释占位。G 场加速项里的相对介电常数 k 取介质材料的静态 κ，前驱俘获
+    线型用的声子能量 ℏω₀ 取宿主介质的值，都不在这里另设。
     """
 
     activation_energy: float  # E_A：无场下形成 Frenkel 对的激活能 [J]（式 T2；双电子机制下即 E_A,2e）
     precursor_ionization_energy: float  # E_t1：前驱能级相对局部导带底的深度 [J]（式 T4/T9）
-    # E_rel1：氧空位生成的弛豫能 [J]，只进 R_1e 的多声子线型（式 T12，S₁ = E_rel1/ℏω₀），
-    # 与输运用的材料 Huang-Rhys 因子 huang_rhys 无关（ADR-029）
+    # E_rel1：第一次电子俘获导致 O-Zr-O 键断裂、O 空位形成的弛豫能 [J]。只进 R_1e 的多声子
+    # 线型（E_rel1/ℏω₀ 作为式 T10 的参数），与输运用的材料 Huang-Rhys 因子 huang_rhys 无关（ADR-030）
     precursor_relaxation_energy: float
     dipole_moment: float  # p₀：前驱有效偶极矩均值 [C·m]（式 T2/T3）
 

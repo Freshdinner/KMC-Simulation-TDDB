@@ -341,8 +341,7 @@ def test_example_configs_load():
 def test_tddb_example_matches_leakage_reference_preset():
     """zro2_tddb.yaml 的材料、缺陷、电极与默认盒子 single_run.yaml 逐项相同（材料名之外），
     只把侧向尺寸改成 20×20 nm 小盒子，网格步长跟默认盒子取最接近的整数格点（ADR-025）；
-    前驱的 E_t1 与 O 空位预设相同（ADR-028）；E_rel1 是氧空位生成的弛豫能，与材料的
-    huang_rhys 各自取值（ADR-029）。"""
+    前驱的 E_t1 与 O 空位预设相同（ADR-028）；E_rel1 与材料的 huang_rhys 各自取值（ADR-030）。"""
     root = pathlib.Path(__file__).resolve().parents[1]
     tddb = load_config(str(root / "examples" / "zro2_tddb.yaml"))
     ref = load_config(str(root / "examples" / "single_run.yaml"))
@@ -370,6 +369,6 @@ def test_tddb_example_matches_leakage_reference_preset():
     assert len(tddb.seeds) == 30  # 小盒子的系综个数（ADR-026）
     assert tddb.tddb.activation_energy == pytest.approx(4.0 * EV)
     assert tddb.tddb.precursor_ionization_energy == pytest.approx(tddb.defects.level.ED)
-    assert tddb.tddb.precursor_relaxation_energy == pytest.approx(0.04 * EV)
+    assert tddb.tddb.precursor_relaxation_energy == pytest.approx(1.0 * EV)
     assert tddb.tddb.dipole_moment == pytest.approx(7.1 * constants.elementary_charge * 1e-10)
     assert ref.tddb is None

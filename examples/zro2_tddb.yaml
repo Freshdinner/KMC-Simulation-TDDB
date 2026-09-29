@@ -22,7 +22,7 @@ materials:
     m_vb_me: 2.5         # 价带边有效质量（裸带边质量）
     m_di_me: 1.2         # 隧穿有效质量，速率公式实际使用；现设为 = m_cb
     phonon_energy_eV: 0.04       # ℏω₀
-    huang_rhys_S: 1.0            # O 空位的 S，E_rel = S·ℏω₀
+    huang_rhys_S: 1.0            # O 空位的 Huang-Rhys 因子 S，进输运 R4/R5 的声子权重
     attempt_frequency_s: 1.0e13  # ν0，R6/R7/R8 共用
 
 layers:
@@ -93,11 +93,12 @@ ensemble:
 # 并换算到 SI；待定参数以注释占位，定值后在用到它的 Phase 加入解析。
 tddb:
   activation_energy_eV: 4.0    # E_A：无场下形成 Frenkel 对的激活能（式 T2；双电子机制下即 E_A,2e）
-  # 前驱单步俘获参数（式 T4/T9/T12）
+  # 前驱单步俘获参数（式 T4/T9/T10）
   precursor_ionization_energy_eV: 1.15   # E_t1，取与 O 空位预设相同的值（= defects.level.ED_eV，ADR-028）
-  # E_rel1：氧空位生成的弛豫能（论文 SiO₂ 里是 Si-O 键断裂的弛豫能，1.5 eV）。只进生成率：
-  # S₁ = E_rel1/ℏω₀ 进 R_1e 的多声子线型，与输运用的 huang_rhys_S 无关。0.04 eV 是待定占位值（ADR-029）
-  precursor_relaxation_energy_eV: 0.04
+  # E_rel1：第一次电子俘获导致 O-Zr-O 键断裂、O 空位形成的弛豫能（论文 SiO₂ 里对应 Si-O 键，
+  # 1.5 eV）。只进生成率：E_rel1/ℏω₀ 作为 R_1e 多声子线型的参数，与输运用的 huang_rhys_S 无关。
+  # 暂取 1.0 eV（ADR-030）
+  precursor_relaxation_energy_eV: 1.0
   # p₀：前驱有效偶极矩均值 [e·Å]（式 T2/T3）。与 E_A 成套选：按 3 V / 25 °C 下
   # t_BD ≈ 100 s 定的初值，有效势垒 0.45 eV；3.4 V 以上 P_bb 饱和（ADR-028）
   dipole_moment_eA: 7.1

@@ -11,10 +11,11 @@ docs/rate_equations.md 的 R1–R8 不对应::
   代码里叫 `single_electron_capture_rate`。
 - 1/τ_c,12（T5–T11）复用输运引擎的 R2 + R4，对两侧电极求和，与 kmc.py 处理真实
   陷阱的口径逐项一致。前驱用自己的参数：E_t1 决定能级、局域化半径与 R2 前置因子，
-  S₁ = E_rel1/ℏω₀（T12）决定多声子线型。E_rel1 是氧空位生成的弛豫能，只在这里进入
-  计算，与输运引擎用的材料 Huang-Rhys 因子 S 无关（ADR-029）。
+  E_rel1/ℏω₀ 作为多声子线型 L(m)（T10）的参数。E_rel1 是第一次电子俘获导致 O-Zr-O
+  键断裂、O 空位形成的弛豫能，只在这里进入计算，与输运引擎用的材料 Huang-Rhys 因子
+  S 无关（ADR-030）。
 - G 里的 k 是相对介电常数，取介质的静态 κ（Lorentz 局域场修正，与镜像力无关），
-  ε_opt 不进这里。p₀ 是前驱有效偶极矩（T3：p₀ = n·Valence·e·d），配置直接给均值。
+  ε_opt 不进这里。p₀ 是前驱有效偶极矩（T3：p₀ = ½·n·Valence·e·d），配置直接给均值。
 - G 的俘获速率作为参数传入：后期换成双电子俘获 R_2e（T4′）时只改调用方。
 
 全部量为 SI 单位。
@@ -68,13 +69,16 @@ def single_electron_capture_rate(
     `field` 是前驱处局域电场大小，进 R4 的 c_MP。`ionization_energy` = E_t1（能级
     相对局部导带底的深度）、`relaxation_energy` = E_rel1 是前驱参数，
     `phonon_energy` = ℏω₀、`band_gap`、`m_di` 取宿主介质的值。R4 对声子数
-    p = 0..n_phonon−1 求和，n_phonon 要覆盖 S₁ = E_rel1/ℏω₀ 的多声子线型：S₁ = 1 时
-    引擎的 12 项已收敛，S₁ 在 10–40 时要约 200 项（ADR-027）。
+    p = 0..n_phonon−1 求和，n_phonon 要覆盖前驱的多声子线型：E_rel1/ℏω₀ ≈ 1 时引擎的
+    12 项已收敛，E_rel1 = 1.0 eV（E_rel1/ℏω₀ = 25）时要约 100 项（ADR-030）。
     """
     energy = np.asarray(conduction_band, dtype=float) - ionization_energy
     phonon_index = np.arange(n_phonon)
-    huang_rhys = relaxation_energy / phonon_energy  # 式 T12：E_rel = S·ℏω₀
-    weights = phonon_transition_probability(phonon_index, huang_rhys, phonon_energy, temperature)
+    # 前驱俘获线型 L(m)（式 T10）的参数取 E_rel1/ℏω₀，与材料的 Huang-Rhys 因子 S 无关
+    lineshape_parameter = relaxation_energy / phonon_energy
+    weights = phonon_transition_probability(
+        phonon_index, lineshape_parameter, phonon_energy, temperature
+    )
     energies_p = energy[:, None] + phonon_index * phonon_energy
     coupling = multiphonon_coupling(
         localization_radius(ionization_energy, m_di), field, band_gap, m_di
