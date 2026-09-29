@@ -7,6 +7,17 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **E_rel1 的含义写清：氧空位生成的弛豫能，与输运的 Huang-Rhys 因子 S 无关**（新增 ADR-029，
+  ADR-028 的 E_rel1 部分标 superseded；`PROJECT_CONTEXT_TDDB.md` §2 新增第 5 条、§3 参数表；
+  `zro2_tddb.yaml`、`config.TDDBConfig`、`rates/generation.py` 的注释；README；
+  `test_config_io.py` 去掉"E_rel1 = 材料 S·ℏω₀"的断言，改为直接核对 0.04 eV）。
+  **原因**：按用户说明，E_rel1（论文 1.5 eV 是 Si-O 键断裂的弛豫能，本项目是 ZrO₂ 中氧空位生成
+  的弛豫能）只用于 TDDB 空位生成的计算——经 S₁ = E_rel1/ℏω₀ 进 R_1e 的多声子线型——而
+  Phase 1 的配置注释、测试与 ADR-028 把它写成"与 O 空位预设相同"、等于输运侧 S·ℏω₀，把两个
+  物理量绑在了一起。代码本来就各走各的（R_1e 不读材料的 S），计算结果不变；0.04 eV 保留为
+  待定占位值。另测：0.04 eV 换成 1.5 eV 时 p₀ 推算仍是 7.145 eÅ（ADR-029）。不涉及 R 编号，
+  涉及 T10/T12。`pytest tests/ -v` 245 passed。
+
 - **TDDB Phase 1：生成速率纯函数与前驱参数配置**（新增 `rates/generation.py`：
   `single_electron_capture_rate`（式 T4）、`effective_activation_energy` / `bond_break_probability`
   （式 T2）、`bond_break_generation_rate`（式 T1）、`CaptureElectrode`；`config.TDDBConfig` 与

@@ -412,7 +412,9 @@ class TDDBConfig:
 
     activation_energy: float  # E_A：无场下形成 Frenkel 对的激活能 [J]（式 T2；双电子机制下即 E_A,2e）
     precursor_ionization_energy: float  # E_t1：前驱能级相对局部导带底的深度 [J]（式 T4/T9）
-    precursor_relaxation_energy: float  # E_rel1：前驱单步俘获的弛豫能 [J]（式 T12，S₁ = E_rel1/ℏω₀）
+    # E_rel1：氧空位生成的弛豫能 [J]，只进 R_1e 的多声子线型（式 T12，S₁ = E_rel1/ℏω₀），
+    # 与输运用的材料 Huang-Rhys 因子 huang_rhys 无关（ADR-029）
+    precursor_relaxation_energy: float
     dipole_moment: float  # p₀：前驱有效偶极矩均值 [C·m]（式 T2/T3）
 
 
