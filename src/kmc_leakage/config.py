@@ -402,6 +402,18 @@ class EnsembleConfig:
 
 
 @dataclass(frozen=True)
+class TDDBConfig:
+    """TDDB 缺陷生成参数（PROJECT_CONTEXT_TDDB.md 第 3 节参数表，ADR-024）。
+
+    只收已定取值的参数，每个字段在用到它的 Phase 加入。p₀、N_T、E_t1/E_rel1、
+    k_TH 等待定参数在 YAML 里以注释占位。G 场加速项里的相对介电常数 k 取介质
+    材料的静态 κ，不在这里另设。
+    """
+
+    activation_energy: float  # E_A：无场下形成 Frenkel 对的激活能 [J]（式 T2；双电子机制下即 E_A,2e）
+
+
+@dataclass(frozen=True)
 class Config:
     """完整配置。"""
 
@@ -409,6 +421,7 @@ class Config:
     simulation: SimulationConfig
     sweep: Optional[SweepConfig] = None
     ensemble: Optional[EnsembleConfig] = None
+    tddb: Optional[TDDBConfig] = None  # 省略 = 纯漏电流仿真（稳态 run/sweep/plot 不读它）
 
     @property
     def seeds(self) -> Tuple[int, ...]:

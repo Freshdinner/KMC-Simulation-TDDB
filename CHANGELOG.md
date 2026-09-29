@@ -7,6 +7,30 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **TDDB Phase 0：ZrO₂ 单层 TDDB 配置与小盒子稳态本底验证**（新增 `examples/zro2_tddb.yaml`；
+  `config.py` 新增 `TDDBConfig` 与 `Config.tddb`，`io.py` 新增 `_tddb`，解析可选的顶层 `tddb`
+  段；新增 `docs/adr/tddb-decisions.md`（ADR-024–026）；`tests/test_config_io.py` 新增 2 个测试；
+  逐种子原始数据存入 `results/9.29/tddb_phase0_box20nm.csv` 与 `tddb_phase0_box50nm.csv`；同步
+  README、`PROJECT_CONTEXT_TDDB.md` §8.3）。
+
+  **做法**：材料（名为 `ZrO2`）、缺陷段、电极、接触势垒、层厚与 `single_run.yaml` 逐项相同，由
+  测试保证；只把侧向尺寸改成 20×20 nm 小盒子（§6.3，10 个初始缺陷），横向格点取与默认步长
+  1.5625 nm 最接近的 13（hx ≈ 1.538 nm，ADR-025），`ensemble.count = 30`（ADR-026）。`tddb` 段的
+  字段在用到它的 Phase 逐个加入，现在只有 E_A = 4 eV（式 T2，`activation_energy_eV`，必须为正），
+  p₀、N_T、E_t1/E_rel1、k_TH 等待定参数以注释占位；G 场加速项的 k 直接取材料 `kappa`（ADR-024）。
+
+  **验证**（§10 Phase 0 判据）：小盒子 M=128、默认盒子 M=32，每个实现 20000 事件扫
+  {2,3,4} V × {25,125} °C（口径同 `run_ensemble_sweep`，脚本并行跑种子）。六个工作点的系综均值
+  之差都在合成标准误的 2 倍以内，比值 0.62–1.30；4 V 两点小盒子偏高 20–30%（1.4σ 与 1.7σ），
+  这两点共用同一批实现，是否系统偏高要更大的 M 才能判断。3 V、25 °C 小盒子
+  J = 6.66e-3 ± 0.88e-3 A/cm²，TAT 占 99.9%，R1 为 2e-12 A/cm²，I-t 从 TAT 本底起步。小盒子单个
+  实现的散布 σ(log₁₀J) = 0.9–1.4（默认盒子 0.28–0.58），单条轨迹之间可差 5–6 个数量级；同一
+  标准误下两种盒子的总机时相当。2 V 下两种盒子都有部分实现未通过验证（占据与 p̂ 偏差超限、
+  计数交叉校验超差），3–4 V 下几乎全部通过。`plot --kind defects|bands` 在新配置上跑通；CLI `run`
+  （新抽 30 个种子，3 V、25 °C）给出 J = 4.80e-3 ± 1.52e-3 A/cm²、TAT 占 99.9%，28/30 通过验证，
+  未通过的两个是占据与 p̂ 偏差 0.114、0.120（门槛 0.1）。
+  涉及 T2（E_A 配置项），R1–R8 无改动。`pytest tests/ -v`（`.venv`，Python 3.8）239 passed。
+
 - **TDDB 阶段初始状态**：新增 `PROJECT_CONTEXT_TDDB.md`（TDDB 搭建规格，取代已删除的
   `CLAUDE_TDDB.md`）；`CLAUDE.md` 改为指向它，并补充输出风格、环境、单位约定与 TDDB 常用
   命令；原 `CLAUDE.md` 里的代码规范、测试要求、提交规范移入 `PROJECT_CONTEXT.md`。

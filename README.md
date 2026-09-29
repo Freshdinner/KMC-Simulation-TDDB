@@ -57,6 +57,11 @@ python -m kmc_leakage plot --config examples/single_run.yaml --kind bands   --ou
 # 配置，逐份跑同一条 sweep 命令再比对三个 CSV（t₂=0 是单层退化点）
 python -m kmc_leakage sweep --config examples/stack_t2_2nm.yaml --out t2_2nm.csv
 python -m kmc_leakage plot  --config examples/stack_t2_2nm.yaml --kind bands --out t2_2nm_bands.png
+
+# TDDB 起点：ZrO₂ 单层、20×20×8 nm 小盒子（规格见 PROJECT_CONTEXT_TDDB.md）。现在能跑的
+# 是初始缺陷集合下的稳态本底，TDDB 瞬态运行的子命令随瞬态驱动一起加
+python -m kmc_leakage run   --config examples/zro2_tddb.yaml
+python -m kmc_leakage sweep --config examples/zro2_tddb.yaml --out tddb_background.csv
 ```
 
 `run` 的输出长这样（示例配置带 `ensemble` 段，逐个实现跑完再取算术平均）：
@@ -493,6 +498,34 @@ ensemble:
 （2 V 差 8%，4 V 差 0.8%），侧向尺寸没有引入系统性偏移。改成 8 nm 默认之前的 50×50×9 nm
 （N=68，20000 事件）实测 M=5 给出 2 V 下 11.7% 的相对标准误、σ(log₁₀J)=0.128。
 
+### TDDB 配置 `examples/zro2_tddb.yaml`
+
+TDDB 阶段（规格见 `PROJECT_CONTEXT_TDDB.md`，决策记录见 `docs/adr/tddb-decisions.md`）的
+配置。材料（名为 `ZrO2`）、缺陷段、电极、接触势垒、层厚与 `single_run.yaml` 逐项相同，
+t=0 的初始缺陷按这份缺陷段生成，应力生成的 O 空位也用它。与默认盒子不同的只有三处：
+
+| 项 | 取值 | 原因 |
+|---|---|---|
+| 侧向尺寸 | 20 × 20 nm（10 个初始缺陷） | 击穿需要的空位数随面积增长，TDDB 在小盒子里跑 |
+| `grid` | 13/13/80（hx ≈ 1.538 nm） | 网格步长跟着尺寸走，13 是与默认 1.5625 nm 最接近的整数格点（ADR-025） |
+| `ensemble.count` | 30 | 小盒子单个实现的散布大得多（σ(log₁₀J) ≈ 0.9–1.4），M=30 的精度与默认盒子 M=5 相当（ADR-026） |
+
+顶层 `tddb` 段放 TDDB 缺陷生成参数，由 `io.py` 读成 `Config.tddb`（SI 单位），整段省略
+即纯漏电流仿真（`Config.tddb = None`）。字段在用到它的阶段逐个加入，现在只有一个：
+
+```yaml
+tddb:
+  activation_energy_eV: 4.0   # E_A：无场下形成 Frenkel 对的激活能（必须为正）
+```
+
+p₀、N_T、E_t1/E_rel1、k_TH 等待定参数在 YAML 里以注释占位。生成率场加速项里的相对介电
+常数 k 直接取材料的 `kappa`，不另设配置项。
+
+这份配置的稳态本底与默认盒子一致：2–4 V、25/125 °C 六个工作点上，小盒子（M=128）与
+默认盒子（M=32）的系综均值都在合成标准误的 2 倍以内；3–4 V 下 TAT 占总电流 92% 以上。
+小盒子的单条轨迹之间可差 5–6 个数量级，结论只能看系综（完整对比表见 ADR-026，逐种子
+原始数据在 `results/9.29/tddb_phase0_box{20,50}nm.csv`）。
+
 ### 几个约定
 
 - **能量零点 = 阴极费米能级**，阳极费米能级在 −eU
@@ -632,7 +665,7 @@ R1 按构造与缺陷实现无关（见上文第 3 条），M 个实现给出逐
 ## 测试
 
 ```bash
-pytest tests/ -v      # 218 个测试，约 72 s
+pytest tests/ -v      # 239 个测试，约 110 s
 ```
 
 | 文件 | 覆盖内容 |
@@ -643,7 +676,7 @@ pytest tests/ -v      # 218 个测试，约 72 s
 | `test_stack_physics.py` | **变 κ 泊松 + 分段能带 + 界面单侧场**（Phase 3）：无电荷解析分压、串联电容 C/A=ε0/S_κ、面电荷电位移跳变 = σ、变系数离散残差、界面对齐校验、同材料多层退回单层求解器、响应互易；E_C 真实台阶与显式 ΔE_C 覆盖、V_bi = (B_c+ΣΔE_C−B_a)/q；界面单侧场按 κ 比跳变、`field_vectors_at` 按 field_side 选侧、体缺陷回归锚点 |
 | `test_kmc_consistency.py` | **各分量之和 = 总电流**（机制分解、缺陷分解两条）、可复现性、三个估计量互相印证、零偏压电流可忽略、跃迁通道只走 R7、**近邻表在保留对上与稠密 (N,N) 矩阵逐位相同且截掉的总速率在双精度噪声以下**、**R1 两项等于理想梯形势垒上的公式值且与 seed / 事件数无关** |
 | `test_defects.py` | 缺陷数 = 浓度×体积、最小距离（含到界面）、r_D 公式、高斯能级统计、界面富集轮廓与解析积分对比、近邻表与"稠密矩阵+掩码"逐位一致（强制走多块路径）、截断半径命中给定容差 |
-| `test_config_io.py` | 单位换算逐项核对、两种有效质量保持独立、势垒显式优先于推算、内建电势、默认扫描范围、两个示例配置的缺陷段同构；**新 schema 结构校验**（材料引用存在、层厚为正、interfaces 数量 = 层数-1）与**旧键拒绝**（顶层 `dielectric` / `defects`、`device.Lz_nm` 各自报错提示新写法） |
+| `test_config_io.py` | 单位换算逐项核对、两种有效质量保持独立、势垒显式优先于推算、内建电势、默认扫描范围、两个示例配置的缺陷段同构；**新 schema 结构校验**（材料引用存在、层厚为正、interfaces 数量 = 层数-1）与**旧键拒绝**（顶层 `dielectric` / `defects`、`device.Lz_nm` 各自报错提示新写法）；**`tddb` 段**可省略、E_A 换算与取值检查，**`zro2_tddb.yaml` 与 `single_run.yaml` 的材料/缺陷/电极逐项相同**、只改侧向尺寸且网格步长跟随（ADR-024/025） |
 | `test_stack_schema.py` | `DielectricStack` 统一查询接口（`Lz` 求和、`single_material` / `bulk_defects` 在多材料/多层时抛错）、**单元素 layers 退化用例**（YAML 解析与直接构造的单层叠层逐位相同：确定性量 rtol ≤ 1e-12、同种子轨迹 rtol ≤ 1e-9）、ZAZ 三层 schema 完整解析、**ZAZ 端到端跑通并给出机制分解**（Phase 4 打通，各分量之和 = 总电流、按缺陷分解 + R1 = 总电流） |
 | `test_stack_rates.py` | **分段 WKB + 按材料取速率参数 + 分段 G_ab + 截断重推**（Phase 4）：WKB 逐段 m_di、界面双值台阶不插斜坡、R1 势垒顶落在 Al₂O₃、分段 G_ab 同质退回闭式且跨层用 Al₂O₃ 低质量（路径传播质量，F08）、ZAZ 里 R7 正反细致平衡（F02 事件能量差不变）、截断半径按最慢材料推（ADR-013/F05）、R8 逐缺陷取 ε_opt/ν、**三层同材料 + ΔE_C=0 的速率表（rtol ≤ 1e-12）与轨迹（rtol ≤ 1e-9）退回单层**（ADR-018） |
 | `test_pf_collection.py` | **F03 PF 收集概率**（Phase 5）：带偏压 Al₂O₃ 势垒（矩形/梯形/三角）的 WKB 与解析闭式一致、0≤P_A≤1 且随偏压单调、阻挡层检测、**位置感知**（阴极侧穿层 P_A<1、阳极侧立即收集 P_A=1，界面缺陷按宿主侧判定）、反偏收集电极翻转、R8_eff=P_A·R8 折进事件表、单层 P_A≡1 逐位退回 |
@@ -710,8 +743,8 @@ src/kmc_leakage/
   ensemble.py          多个缺陷实现的算术平均 + CSV 输出
   visualization.py     缺陷分布、能带结构、I-V / I-T 曲线（只返回 Figure）
   __main__.py          命令行入口
-tests/                 232 个测试
-examples/              single_run.yaml、iv_sweep.yaml、stack_t2_{0,2,4}nm.yaml（t₂ 结构对照）、stack_t2_2nm_custom.yaml（不对称自定义算例）
+tests/                 239 个测试
+examples/              single_run.yaml、iv_sweep.yaml、stack_t2_{0,2,4}nm.yaml（t₂ 结构对照）、stack_t2_2nm_custom.yaml（不对称自定义算例）、zro2_tddb.yaml（TDDB 起点，20×20×8 nm 小盒子）
 docs/                  物理规格（改 rates/ 或 electrostatics.py 前先读）
 ```
 

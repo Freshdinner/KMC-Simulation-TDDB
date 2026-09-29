@@ -4,6 +4,7 @@
 （materials + layers + interfaces）的结构校验与旧 schema 顶层键的拒绝。
 """
 
+import dataclasses
 import pathlib
 import textwrap
 
@@ -11,6 +12,7 @@ import numpy as np
 import pytest
 from scipy import constants
 
+from kmc_leakage.defects import defect_count
 from kmc_leakage.io import celsius_to_kelvin, config_from_dict, load_config
 
 EV = constants.electron_volt
@@ -95,6 +97,20 @@ def test_fast_trap_rate_is_optional_and_positive():
     assert config_from_dict(raw).simulation.fast_trap_rate == pytest.approx(1.0e9)
     raw["simulation"]["fast_trap_rate_s"] = 0.0
     with pytest.raises(ValueError, match="fast_trap_rate_s"):
+        config_from_dict(raw)
+
+
+def test_tddb_section_is_optional_and_converted():
+    """tddb 段缺省为 None（纯漏电流仿真）；E_A 从 eV 换算成 J，必须给出且为正（ADR-024）。"""
+    raw = _base_dict()
+    assert config_from_dict(raw).tddb is None
+    raw["tddb"] = {"activation_energy_eV": 4.0}
+    assert config_from_dict(raw).tddb.activation_energy == pytest.approx(4.0 * EV)
+    raw["tddb"] = {"activation_energy_eV": 0.0}
+    with pytest.raises(ValueError, match="activation_energy_eV"):
+        config_from_dict(raw)
+    raw["tddb"] = {}
+    with pytest.raises(KeyError):
         config_from_dict(raw)
 
 
@@ -302,3 +318,35 @@ def test_example_configs_load():
         assert cfg.defects.level.sigma > 0.0
         assert cfg.defects.spatial.enrichment > 1.0
         assert cfg.defects.spatial.decay_length > 0.0
+
+
+def test_tddb_example_matches_leakage_reference_preset():
+    """zro2_tddb.yaml 的材料、缺陷、电极与默认盒子 single_run.yaml 逐项相同（材料名之外），
+    只把侧向尺寸改成 20×20 nm 小盒子，网格步长跟默认盒子取最接近的整数格点（ADR-025）。"""
+    root = pathlib.Path(__file__).resolve().parents[1]
+    tddb = load_config(str(root / "examples" / "zro2_tddb.yaml"))
+    ref = load_config(str(root / "examples" / "single_run.yaml"))
+
+    material = tddb.device.stack.single_material
+    ref_material = ref.device.stack.single_material
+    assert material.name == "ZrO2"
+    assert dataclasses.replace(material, name=ref_material.name) == ref_material
+    assert tddb.defects == ref.defects
+    assert tddb.device.cathode == ref.device.cathode
+    assert tddb.device.anode == ref.device.anode
+    assert tddb.device.barrier_height == ref.device.barrier_height
+    assert tddb.device.Lz == ref.device.Lz
+    assert len(tddb.device.stack.layers) == 1
+
+    assert tddb.device.Lx == pytest.approx(20e-9)
+    assert tddb.device.Ly == pytest.approx(20e-9)
+    assert defect_count(tddb.device, tddb.defects) == 10
+    grid, ref_grid = tddb.simulation.grid, ref.simulation.grid
+    assert grid.nx == round(tddb.device.Lx / (ref.device.Lx / ref_grid.nx))
+    assert grid.ny == round(tddb.device.Ly / (ref.device.Ly / ref_grid.ny))
+    assert grid.nz == ref_grid.nz
+    assert tddb.simulation.n_events == ref.simulation.n_events
+
+    assert len(tddb.seeds) == 30  # 小盒子的系综个数（ADR-026）
+    assert tddb.tddb.activation_energy == pytest.approx(4.0 * EV)
+    assert ref.tddb is None

@@ -1,0 +1,106 @@
+# TDDB 仿真配置：ZrO₂ 单层 MIM（TDDB 阶段的起点，规格见 PROJECT_CONTEXT_TDDB.md）
+#
+# 材料与缺陷沿用漏电流侧的参考预设（docs/physics_model.md），与
+# examples/single_run.yaml 逐项相同（材料名之外）。t=0 的初始缺陷集合由现有
+# generate_defects 按下面的 defects 段生成；应力生成的 O 空位与初始缺陷是同一物种，
+# 共用这一段（能级分布、S、m_di、Z=+1），不另设物种参数（第 1 节、6.7）。
+#
+# 与默认盒子（single_run.yaml，50×50×8 nm、60 个缺陷）的差别只在侧向尺寸及随之
+# 配套的网格与系综个数：TDDB 在 20×20 nm 小盒子里跑（6.3），
+# 20×20×8 nm、3×10^18 cm^-3 → 10 个初始缺陷（ADR-025/026）。
+#
+# 现在能跑的是初始缺陷集合下的稳态本底（run / sweep / plot 照常用）；tddb 段
+# 由 io.py 读入，供后续 Phase 的生成率与瞬态驱动使用。
+
+materials:
+  ZrO2:
+    kappa: 38.0          # 静态介电常数：泊松方程，也是生成率 G 场加速项里的 k（8.1）
+    eps_opt: 5.6         # 光学介电常数，只用于 PF 发射 (R8)
+    band_gap_eV: 5.4
+    electron_affinity_eV: 2.86   # 与 Φ_m=4.6 一起给出 E_B=1.74 eV
+    m_cb_me: 1.2         # 导带边有效质量（裸带边质量）
+    m_vb_me: 2.5         # 价带边有效质量（裸带边质量）
+    m_di_me: 1.2         # 隧穿有效质量，速率公式实际使用；现设为 = m_cb
+    phonon_energy_eV: 0.04       # ℏω₀
+    huang_rhys_S: 1.0            # O 空位的 S，E_rel = S·ℏω₀
+    attempt_frequency_s: 1.0e13  # ν0，R6/R7/R8 共用
+
+layers:
+  - material: ZrO2
+    thickness_nm: 8.0
+    defects:
+      # 初始缺陷与生成的 O 空位共用这一段；生成的空位出生即占据（6.7），
+      # 那是瞬态驱动给的初值，不属于这段缺陷配置
+      concentration_cm3: 3.0e18    # 只管 t=0 的初始缺陷个数
+      charge_state_Z: 1.0          # 施主型，未占据时 +1，不可双占据
+      min_separation_nm: 0.5       # 缺陷两两之间 + 缺陷到电极界面的最小距离
+      level:
+        mode: gaussian
+        ED_eV: 1.15
+        sigma_eV: 0.15
+      spatial:
+        mode: interface
+        enrichment: 5.0
+        decay_length_nm: 1.0
+
+device:
+  Lx_nm: 20.0
+  Ly_nm: 20.0
+  barrier_height_eV: 1.74
+
+electrodes:
+  cathode: &electrode
+    name: TiN
+    work_function_eV: 4.6
+    effective_mass_me: 1.0
+    fermi_energy_eV: 5.0
+  anode: *electrode
+
+simulation:
+  # 应力电压与温度待实验数据确定（第 1 节"待确认"），先取 3 V / 25 °C
+  voltage_V: 3.0
+  temperature_C: 25.0
+  n_events: 20000
+  burn_in_fraction: 0.2
+  seed: 12345        # 只在没有 ensemble 段时生效，否则由 ensemble 随机抽取的种子逐个覆盖
+  grid:
+    # 网格步长跟默认盒子保持一致（ADR-025）：20 nm / 1.5625 nm 不是整数，取最接近的
+    # nx = ny = 13（hx = hy ≈ 1.538 nm），hz = 0.1 nm 不变。团簇需要的 0.25–0.3 nm
+    # 细网格（6.5）在 Phase 3 按收敛测试定，届时 nx/ny 同步改
+    nx: 13
+    ny: 13
+    nz: 80
+
+# 初始缺陷集合下的稳态本底，覆盖应力电压附近与高温两档。Phase 0 与默认盒子的对比
+# 就在这 6 个工作点上做（ADR-026）
+sweep:
+  voltage_V:
+    start: 2.0
+    stop: 4.0
+    step: 1.0
+  temperature_C:
+    start: 25.0
+    stop: 125.0
+    step: 100.0
+
+# 小盒子里单个实现的电流散布大得多：实测 σ(log₁₀J) ≈ 0.9–1.4（默认盒子 0.28–0.58），
+# 一次实现不能代表器件。M = 30 在 3 V / 25 °C 给出约 27% 的相对标准误，精度与默认
+# 盒子 M = 5（约 34%）相当（ADR-026）
+ensemble:
+  count: 30
+
+# TDDB 缺陷生成参数（第 3 节参数表，ADR-024）。已定取值的参数写成键，由 io.py 读入
+# 并换算到 SI；待定参数以注释占位，定值后在用到它的 Phase 加入解析。
+tddb:
+  activation_energy_eV: 4.0    # E_A：无场下形成 Frenkel 对的激活能（式 T2；双电子机制下即 E_A,2e）
+  # 待定参数：
+  #   p₀         前驱有效偶极矩均值（式 T3）。与 E_A 成套选：Phase 1 按 8.1 在应力电压
+  #              范围内算出有效势垒 E_A − p₀·(2+κ)/3·E 后定初值
+  #   N_T        前驱位点浓度，进 G 只作前置因子（6.1）
+  #   E_t1       前驱单步俘获的电离能（式 T4/T9，Phase 1）
+  #   E_rel1     前驱单步俘获的弛豫能，S₁ = E_rel1/ℏω₀（Phase 1）
+  #   恒压应力   应力电压与温度，实验数据到手后定
+  #   生成网格   生成率单元网格粒度（6.1，Phase 3）
+  #   k_TH       ZrO₂ 热导率（式 T14，Phase 4）
+  #   d_c        渗流判据的连边截断，0.6–0.9 nm 之间（6.3，Phase 4）
+  #   限流值     current compliance（Phase 4）

@@ -8,7 +8,8 @@ cm^-2, degC），换算系数一律取自 `scipy.constants`，不写字面量；
 各引用材料、给 `thickness_nm`、配 `defects`）+ `interfaces`（可选，数量 =
 层数-1，携带 ΔE_C 覆盖、σ、界面缺陷）+ `device`（几何与接触势垒）+
 `electrodes`。`Lz` 由层厚求和。旧 schema 的顶层 `dielectric` / `defects` 与
-`device.Lz_nm` 一律直接报错并提示新写法（不做运行时兼容层）。
+`device.Lz_nm` 一律直接报错并提示新写法（不做运行时兼容层）。可选的顶层 `tddb`
+段给 TDDB 缺陷生成参数（ADR-024），省略即纯漏电流仿真。
 """
 
 from typing import Any, Dict, Optional
@@ -33,6 +34,7 @@ from .config import (
     Layer,
     SimulationConfig,
     SweepConfig,
+    TDDBConfig,
 )
 
 # --- 单位换算系数（全部来自 scipy.constants） ---
@@ -286,6 +288,16 @@ def _ensemble(raw: Optional[Dict[str, Any]]) -> Optional[EnsembleConfig]:
     return EnsembleConfig(seeds=_draw_seeds(count))
 
 
+def _tddb(raw: Optional[Dict[str, Any]]) -> Optional[TDDBConfig]:
+    """TDDB 缺陷生成参数（ADR-024）；整段省略返回 None，即纯漏电流仿真。"""
+    if raw is None:
+        return None
+    activation = float(_require(raw, "activation_energy_eV", "tddb"))
+    if not activation > 0.0:
+        raise ValueError("tddb.activation_energy_eV 必须为正（单位 eV），收到 {!r}".format(activation))
+    return TDDBConfig(activation_energy=activation * EV)
+
+
 _LEGACY_TOP_KEYS = {
     "dielectric": (
         "顶层 dielectric 属于旧 schema：介质材料改配在 materials（按名字典）里，各层在 "
@@ -323,6 +335,7 @@ def config_from_dict(raw: Dict[str, Any]) -> Config:
         simulation=_simulation(_require(raw, "simulation", "<root>")),
         sweep=_sweep(raw.get("sweep")),
         ensemble=_ensemble(raw.get("ensemble")),
+        tddb=_tddb(raw.get("tddb")),
     )
 
 
