@@ -375,6 +375,51 @@ def plot_iv_curves(
     )
 
 
+def plot_current_transient(
+    time: np.ndarray,
+    current_density: np.ndarray,
+    end_time: float,
+    fit: Optional[Tuple[float, float, np.ndarray]] = None,
+) -> Figure:
+    """TDDB 应力下的电流演化 J(t)，双对数坐标（PROJECT_CONTEXT_TDDB.md §7-8）。
+
+    参数
+    ----
+    time : 各状态的起始时刻 [s]，time[0] = 0 是初始缺陷集合，即 `TDDBResult.time`
+    current_density : 各状态的电流密度 [A/m²]，与 `time` 等长；状态 k 保持到 time[k+1]，
+        最后一个保持到 `end_time`
+    end_time : 轨迹终点 [s]
+    fit : 幂律拟合 (n, A, 取样时刻)，J = A·tⁿ（A 以 A/m² 计），画在取样时刻的范围上并标出 n
+
+    t = 0 在对数轴上画不出来，初始状态的电流画成水平虚线；第一次生成之后的状态画成阶梯。
+    """
+    time = np.asarray(time, dtype=float)
+    density = np.asarray(current_density, dtype=float) * _PER_CM2
+    figure = _new_figure((7.0, 5.0))
+    axes = figure.add_subplot(1, 1, 1)
+    color = _shades(_TOTAL_CMAP, 1)[0]
+    axes.axhline(density[0], color="0.45", ls="--", lw=1.0, label="t = 0 background")
+    if time.size > 1:
+        edges = np.append(time[1:], end_time)
+        axes.step(edges, np.append(density[1:], density[-1]), where="post", color=color, lw=1.5, label="simulation")
+        axes.set_xscale("log")
+    if fit is not None:
+        exponent, prefactor, times = fit
+        times = np.asarray(times, dtype=float)
+        axes.plot(
+            times, prefactor * times ** exponent * _PER_CM2,
+            color="#c00000", ls="--", lw=1.2, label="power law, n = {:.3g}".format(exponent),
+        )
+    axes.set_yscale("log")
+    axes.set_xlabel("t (s)")
+    axes.set_ylabel(r"J (A/cm$^2$)")
+    axes.set_title("Current under constant-voltage stress")
+    axes.grid(True, which="both", ls=":", lw=0.5, alpha=0.6)
+    axes.legend(loc="best", fontsize=9)
+    figure.tight_layout()
+    return figure
+
+
 def plot_it_curves(
     voltages: np.ndarray,
     temperatures: np.ndarray,

@@ -9,7 +9,7 @@ B_ℓ、层/界面标签，以及一个"读场侧"标记（界面缺陷用单侧
 全器件可以无缺陷（空集合），此时走 R1-only 路径（ADR-005 / review F07）。
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import List, Tuple
 
 import numpy as np
@@ -108,6 +108,38 @@ def empty_ensemble() -> DefectEnsemble:
         ED=z, r_D=z, charge_state=z, m_di=z, eps_opt=z, band_gap=z,
         phonon_energy=z, huang_rhys=z, attempt_frequency=z, band_reference=z,
         layer_id=zi, interface_id=zi, field_side=zi,
+    )
+
+
+def append_defects(ensemble: DefectEnsemble, extra: DefectEnsemble) -> DefectEnsemble:
+    """把 `extra` 逐字段接在 `ensemble` 后面，原有缺陷的编号不变（TDDB 生成空位用）。"""
+    return DefectEnsemble(
+        **{
+            item.name: np.concatenate([getattr(ensemble, item.name), getattr(extra, item.name)])
+            for item in fields(DefectEnsemble)
+        }
+    )
+
+
+def layer_bulk_defects(
+    device: DeviceConfig, layer_index: int, positions: np.ndarray, rng: np.random.Generator
+) -> DefectEnsemble:
+    """在给定位置放第 `layer_index` 层的体缺陷。
+
+    能级按该层缺陷配置的分布抽样，电荷态 Z 取该层配置，其余物性取层材料，与
+    `generate_defects` 生成体缺陷的口径相同。TDDB 应力生成的 O 空位与初始缺陷是同一
+    物种（PROJECT_CONTEXT_TDDB.md §6.7），就用它生成。
+    """
+    positions = np.atleast_2d(np.asarray(positions, dtype=float))
+    layer = device.stack.layers[layer_index]
+    cfg = layer.defects
+    return DefectEnsemble.uniform(
+        positions,
+        _sample_ED(positions.shape[0], cfg.level, rng),
+        device.stack.material_of(layer),
+        float(device.layer_band_references()[layer_index]),
+        charge_state=cfg.charge_state,
+        layer_id=layer_index,
     )
 
 

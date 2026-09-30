@@ -289,10 +289,18 @@ def _ensemble(raw: Optional[Dict[str, Any]]) -> Optional[EnsembleConfig]:
     return EnsembleConfig(seeds=_draw_seeds(count))
 
 
-def _tddb(raw: Optional[Dict[str, Any]]) -> Optional[TDDBConfig]:
-    """TDDB 缺陷生成参数（ADR-024/028）；整段省略返回 None，即纯漏电流仿真。
+def _positive_int(value: Any, where: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError("{} 必须是 >= 1 的整数，收到 {!r}".format(where, value))
+    return value
 
-    三个能量（E_A、E_t1、E_rel1）必须为正；p₀ 必须 ≥ 0，取 0 即关掉场加速。
+
+def _tddb(raw: Optional[Dict[str, Any]]) -> Optional[TDDBConfig]:
+    """TDDB 缺陷生成参数（ADR-024/028/033）；整段省略返回 None，即纯漏电流仿真。
+
+    三个能量（E_A、E_t1、E_rel1）必须为正；p₀ 必须 ≥ 0，取 0 即关掉场加速；N_T 必须 ≥ 0，
+    取 0 即关掉生成（G = 0）。生成网格三个方向的单元数、空位数上限都是正整数，应力时间
+    上限必须为正。
     """
     if raw is None:
         return None
@@ -306,11 +314,29 @@ def _tddb(raw: Optional[Dict[str, Any]]) -> Optional[TDDBConfig]:
     dipole = float(_require(raw, "dipole_moment_eA", "tddb"))
     if not dipole >= 0.0:
         raise ValueError("tddb.dipole_moment_eA 必须 ≥ 0（单位 e·Å），收到 {!r}".format(dipole))
+    concentration = float(_require(raw, "precursor_concentration_cm3", "tddb"))
+    if not concentration >= 0.0:
+        raise ValueError(
+            "tddb.precursor_concentration_cm3 必须 ≥ 0（单位 cm⁻³），收到 {!r}".format(concentration)
+        )
+    grid = _require(raw, "generation_grid", "tddb")
+    stop_time = float(_require(raw, "stop_time_s", "tddb"))
+    if not stop_time > 0.0:
+        raise ValueError("tddb.stop_time_s 必须为正（单位 s），收到 {!r}".format(stop_time))
     return TDDBConfig(
         activation_energy=energy("activation_energy_eV"),
         precursor_ionization_energy=energy("precursor_ionization_energy_eV"),
         precursor_relaxation_energy=energy("precursor_relaxation_energy_eV"),
         dipole_moment=dipole * E_ANGSTROM,
+        precursor_concentration=concentration * PER_CM3,
+        generation_grid=tuple(
+            _positive_int(_require(grid, axis, "tddb.generation_grid"), "tddb.generation_grid." + axis)
+            for axis in ("nx", "ny", "nz")
+        ),
+        max_generated_vacancies=_positive_int(
+            _require(raw, "max_generated_vacancies", "tddb"), "tddb.max_generated_vacancies"
+        ),
+        stop_time=stop_time,
     )
 
 

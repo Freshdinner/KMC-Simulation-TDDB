@@ -64,11 +64,10 @@ simulation:
   burn_in_fraction: 0.2
   seed: 12345        # 只在没有 ensemble 段时生效，否则由 ensemble 随机抽取的种子逐个覆盖
   grid:
-    # 网格步长跟默认盒子保持一致（ADR-025）：20 nm / 1.5625 nm 不是整数，取最接近的
-    # nx = ny = 13（hx = hy ≈ 1.538 nm），hz = 0.1 nm 不变。团簇需要的 0.25–0.3 nm
-    # 细网格（6.5）在 Phase 3 按收敛测试定，届时 nx/ny 同步改
-    nx: 13
-    ny: 13
+    # 横向 hx = hy = 0.25 nm、hz = 0.1 nm（ADR-032）：0.5–0.9 nm 间距空位对的库仑能与
+    # nx = 100 相差 ≤ 4%；原先跟默认盒子的 1.54 nm 步长只给出收敛值的 40–60%（6.5）
+    nx: 80
+    ny: 80
     nz: 80
 
 # 初始缺陷集合下的稳态本底，覆盖应力电压附近与高温两档。Phase 0 与默认盒子的对比
@@ -102,10 +101,21 @@ tddb:
   # p₀：前驱有效偶极矩均值 [e·Å]（式 T2/T3）。与 E_A 成套选：按 3 V / 25 °C 下
   # t_BD ≈ 100 s 定的初值，有效势垒 0.45 eV；3.4 V 以上 P_bb 饱和（ADR-028）
   dipole_moment_eA: 7.1
+  # N_T：前驱位点浓度，体积生成率 N_T·R_1e·P_bb 的前置因子（6.1 模型 C）。暂借 SiO₂ 论文值，
+  # 与 p₀ 的推算同一取值（ADR-028/033）；只改变时间标尺，不改变 I-t 的形状
+  precursor_concentration_cm3: 4.0e19
+  # 生成单元网格：铺满 20×20 nm × z ∈ [0.5, 7.5] nm 的可采样窗口，外层 Gillespie 在单元表上
+  # 抽生成事件（6.1，ADR-033）
+  generation_grid:
+    nx: 16
+    ny: 16
+    nz: 70
+  # Phase 3 还没有击穿判据（渗流判据在 Phase 4），按生成空位数或应力时间上限停止。
+  # 每个空位约 4 s 机时（单进程），300 个约 20 分钟
+  max_generated_vacancies: 300
+  stop_time_s: 1.0e4
+  # 恒压应力取 simulation 段的 voltage_V / temperature_C（ADR-033），实验数据到手后改那里
   # 待定参数：
-  #   N_T        前驱位点浓度，进 G 只作前置因子（6.1）
-  #   恒压应力   应力电压与温度，实验数据到手后定
-  #   生成网格   生成率单元网格粒度（6.1，Phase 3）
   #   k_TH       ZrO₂ 热导率（式 T14，Phase 4）
   #   d_c        渗流判据的连边截断，0.6–0.9 nm 之间（6.3，Phase 4）
   #   限流值     current compliance（Phase 4）

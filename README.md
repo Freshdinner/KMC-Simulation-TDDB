@@ -58,10 +58,12 @@ python -m kmc_leakage plot --config examples/single_run.yaml --kind bands   --ou
 python -m kmc_leakage sweep --config examples/stack_t2_2nm.yaml --out t2_2nm.csv
 python -m kmc_leakage plot  --config examples/stack_t2_2nm.yaml --kind bands --out t2_2nm_bands.png
 
-# TDDB 起点：ZrO₂ 单层、20×20×8 nm 小盒子（规格见 PROJECT_CONTEXT_TDDB.md）。现在能跑的
-# 是初始缺陷集合下的稳态本底，TDDB 瞬态运行的子命令随瞬态驱动一起加
+# TDDB：ZrO₂ 单层、20×20×8 nm 小盒子（规格见 PROJECT_CONTEXT_TDDB.md）。run / sweep 给初始
+# 缺陷集合下的稳态本底；tddb 跑一条等温恒压应力下的 I-t 轨迹（一个缺陷实现，--seed 换实现），
+# 落轨迹 CSV 与双对数 I-t 图
 python -m kmc_leakage run   --config examples/zro2_tddb.yaml
 python -m kmc_leakage sweep --config examples/zro2_tddb.yaml --out tddb_background.csv
+python -m kmc_leakage tddb  --config examples/zro2_tddb.yaml --seed 1 --out it.csv --plot it.png
 ```
 
 `run` 的输出长这样（示例配置带 `ensemble` 段，逐个实现跑完再取算术平均）：
@@ -507,11 +509,11 @@ t=0 的初始缺陷按这份缺陷段生成，应力生成的 O 空位也用它�
 | 项 | 取值 | 原因 |
 |---|---|---|
 | 侧向尺寸 | 20 × 20 nm（10 个初始缺陷） | 击穿需要的空位数随面积增长，TDDB 在小盒子里跑 |
-| `grid` | 13/13/80（hx ≈ 1.538 nm） | 网格步长跟着尺寸走，13 是与默认 1.5625 nm 最接近的整数格点（ADR-025） |
+| `grid` | 80/80/80（hx = hy = 0.25 nm，hz = 0.1 nm） | 0.5–0.9 nm 间距空位对的库仑能与 nx = 100 相差 ≤ 3.6%，默认盒子的 1.56 nm 步长算低 30–57%；t=0 本底的系综均值变化 < 1%（ADR-032） |
 | `ensemble.count` | 30 | 小盒子单个实现的散布大得多（σ(log₁₀J) ≈ 0.9–1.4），M=30 的精度与默认盒子 M=5 相当（ADR-026） |
 
 顶层 `tddb` 段放 TDDB 缺陷生成参数，由 `io.py` 读成 `Config.tddb`（SI 单位），整段省略
-即纯漏电流仿真（`Config.tddb = None`）。字段在用到它的阶段逐个加入，现在有四个，都必须给出：
+即纯漏电流仿真（`Config.tddb = None`）。字段在用到它的阶段逐个加入，现在有八个，都必须给出：
 
 ```yaml
 tddb:
@@ -519,14 +521,21 @@ tddb:
   precursor_ionization_energy_eV: 1.15   # E_t1：前驱能级相对局部导带底的深度（必须为正）
   precursor_relaxation_energy_eV: 1.0    # E_rel1：第一次电子俘获导致键断裂、O 空位形成的弛豫能（必须为正）
   dipole_moment_eA: 7.1                  # p₀：前驱有效偶极矩均值 [e·Å]（必须 ≥ 0，取 0 即关掉场加速）
+  precursor_concentration_cm3: 4.0e19    # N_T：前驱浓度，体积生成率的前置因子（必须 ≥ 0，取 0 即关掉生成）
+  generation_grid: {nx: 16, ny: 16, nz: 70}  # 生成单元数，铺满 z ∈ [standoff, Lz−standoff]（正整数）
+  max_generated_vacancies: 300           # 生成空位数达到此值即停（Phase 3 还没有击穿判据）
+  stop_time_s: 1.0e4                     # 应力时间上限 [s]
 ```
+
+恒压应力取 `simulation` 段的 `voltage_V` / `temperature_C`，不另设字段（ADR-033）。
 
 E_t1 取与 O 空位预设相同的值。E_rel1 是第一次电子俘获导致 O-Zr-O 键断裂、O 空位形成的
 弛豫能（论文 SiO₂ 里对应 Si-O 键，取 1.5 eV），只用于空位生成的计算——E_rel1/ℏω₀ 作为 R_1e
 多声子线型的参数——与电子输运用的材料 `huang_rhys_S` 无关，现在暂取 1.0 eV（ADR-030）。p₀ 按
-"3 V / 25 °C 下 t_BD ≈ 100 s"定的初值，这时有效势垒 E_A − p₀·(2+κ)/3·E = 0.45 eV，3.4 V 以上降到 0、P_bb 饱和（ADR-028）。
-N_T、k_TH 等待定参数在 YAML 里以注释占位。生成率场加速项里的相对介电常数 k 直接取材料的
-`kappa`，前驱的 ℏω₀ 取材料的 `phonon_energy_eV`，都不另设配置项。
+"3 V / 25 °C 下 t_BD ≈ 100 s"定的初值，这时有效势垒 E_A − p₀·(2+κ)/3·E = 0.45 eV，3.4 V 以上降到 0、P_bb 饱和（ADR-028）；
+这个估算只用外加场，计入空间电荷后不成立（见下文"TDDB 瞬态运行"）。N_T 暂借 SiO₂ 论文值 4×10¹⁹ cm⁻³，
+只改变时间标尺（ADR-033）。k_TH 等待定参数在 YAML 里以注释占位。生成率场加速项里的相对介电常数 k
+直接取材料的 `kappa`，前驱的 ℏω₀ 取材料的 `phonon_energy_eV`，都不另设配置项。
 
 生成速率的纯函数在 `rates/generation.py`（式 T1–T4，ADR-027）：`single_electron_capture_rate`
 给前驱单步俘获速率 R_1e = Σ_两侧电极 (R2 + R4)，与引擎处理真实陷阱的口径逐项一致；
@@ -555,6 +564,34 @@ again = solve_mean_field(sim, occupancy=result.occupancy)  # 热启动：外层�
 20000 事件的 KMC 要 30–50 s；与开快陷阱的长窗口 KMC 在 2–4 V、25/125 °C 六个工作点上系综均值一致
 到 5×10⁻⁵。浓度提高到 3×10¹⁹ cm⁻³（N=96）时 10–11 次、约 0.3 s，与长窗口 KMC 之比 0.997，在统计误差
 以内（对拍见 ADR-031，逐实现数据在 `results/9.29/tddb_phase2_mf_vs_kmc.csv`）。
+
+**TDDB 瞬态运行**（`tddb.py`，ADR-033）：`run_tddb(config)` 跑一条等温恒压应力下的轨迹。外层在生成
+单元表上做 Gillespie：各缺陷净电荷 q·(Z − p) 与外加偏压解一次泊松方程，在单元中心对虚拟前驱求
+R_1e（两侧 R2 + R4）与 P_bb，单元生成率 = N_T·V_cell·R_1e·P_bb（§6.1 模型 C）；选中单元内连续随机落点
+（离已有缺陷 ≥ min_separation，中心离已有缺陷不到 min_separation 的单元生成率为 0）。新空位与初始缺陷
+同一物种、出生即占据。内层每步按当前缺陷集合重建 `KMCSimulation`、从上一步占据热启动求平均场稳态，
+静电耦合增量扩展（每个新空位 1 次正向 + 3 次伴随泊松求解），近邻表与强耦合簇从头算。
+
+```python
+from kmc_leakage.io import load_config
+from kmc_leakage.tddb import fit_transient, run_tddb
+
+result = run_tddb(load_config("examples/zro2_tddb.yaml"))  # 一个缺陷实现（simulation.seed）
+result.time, result.current_density        # 第 k 个状态从 time[k] 保持到 time[k+1]（最后一个到 end_time）
+result.generation_rate, result.space_charge, result.empty_generated   # ΣG、净空间电荷、空态生成空位数
+result.converged, result.max_cluster_size, result.n_split             # 平均场收敛、簇大小与切分数
+fit, times = fit_transient(result)         # 按 log t 等间距取样后做双对数拟合：fit.exponent、fit.r_squared
+```
+
+N_T 取 0 即关掉生成，这时电流逐位等于同一实现的稳态平均场结果、保持到 `stop_time_s`。每个空位约 4 s
+机时（单进程，主要花在 R_1e 的 100 个声子项上）。
+
+**当前参数下生成会失控**（ADR-034）：参考参数（E_A = 4 eV、p₀ = 7.1 eÅ）下，空态缺陷带 +e，它的库仑场
+经 p₀·(2+κ)/3 = 94.7 eÅ 放大后把近旁 P_bb 抬到饱和，t = 0 的总生成率就比零空间电荷估算高 5 个数量级；
+生成贴着阴极，新空位多半空着，正空间电荷越积越多，300 个空位在几十微秒内生成完，I-t 是"平台 → 陡升"，
+不是双对数直线。p₀ 降到 1 eÅ（配套调 E_A）失控推迟到约 1 s；P_bb 改用横向平均场也挡不住。N_T 只改时间
+标尺，E_A 基本只改时间标尺。P_bb 的场口径、E_A/p₀ 标定与生成空位的电荷态要在 Phase 4 之前定。15 条
+轨迹的逐记录数据在 `results/9.30/tddb_phase3_*.csv`。
 
 这份配置的稳态本底与默认盒子一致：2–4 V、25/125 °C 六个工作点上，小盒子（M=128）与
 默认盒子（M=32）的系综均值都在合成标准误的 2 倍以内；3–4 V 下 TAT 占总电流 92% 以上。
@@ -700,7 +737,7 @@ R1 按构造与缺陷实现无关（见上文第 3 条），M 个实现给出逐
 ## 测试
 
 ```bash
-pytest tests/ -v      # 253 个测试，约 100 s
+pytest tests/ -v      # 268 个测试，约 110 s
 ```
 
 | 文件 | 覆盖内容 |
@@ -712,7 +749,7 @@ pytest tests/ -v      # 253 个测试，约 100 s
 | `test_stack_physics.py` | **变 κ 泊松 + 分段能带 + 界面单侧场**（Phase 3）：无电荷解析分压、串联电容 C/A=ε0/S_κ、面电荷电位移跳变 = σ、变系数离散残差、界面对齐校验、同材料多层退回单层求解器、响应互易；E_C 真实台阶与显式 ΔE_C 覆盖、V_bi = (B_c+ΣΔE_C−B_a)/q；界面单侧场按 κ 比跳变、`field_vectors_at` 按 field_side 选侧、体缺陷回归锚点 |
 | `test_kmc_consistency.py` | **各分量之和 = 总电流**（机制分解、缺陷分解两条）、可复现性、三个估计量互相印证、零偏压电流可忽略、跃迁通道只走 R7、**近邻表在保留对上与稠密 (N,N) 矩阵逐位相同且截掉的总速率在双精度噪声以下**、**R1 两项等于理想梯形势垒上的公式值且与 seed / 事件数无关** |
 | `test_defects.py` | 缺陷数 = 浓度×体积、最小距离（含到界面）、r_D 公式、高斯能级统计、界面富集轮廓与解析积分对比、近邻表与"稠密矩阵+掩码"逐位一致（强制走多块路径）、截断半径命中给定容差 |
-| `test_config_io.py` | 单位换算逐项核对、两种有效质量保持独立、势垒显式优先于推算、内建电势、默认扫描范围、两个示例配置的缺陷段同构；**新 schema 结构校验**（材料引用存在、层厚为正、interfaces 数量 = 层数-1）与**旧键拒绝**（顶层 `dielectric` / `defects`、`device.Lz_nm` 各自报错提示新写法）；**`tddb` 段**可省略、E_A / E_t1 / E_rel1 / p₀ 的换算、取值检查与缺项报错，**`zro2_tddb.yaml` 与 `single_run.yaml` 的材料/缺陷/电极逐项相同**、只改侧向尺寸且网格步长跟随、前驱 E_t1 与 O 空位预设相同、E_rel1 单独取值（ADR-024/025/028/030） |
+| `test_config_io.py` | 单位换算逐项核对、两种有效质量保持独立、势垒显式优先于推算、内建电势、默认扫描范围、两个示例配置的缺陷段同构；**新 schema 结构校验**（材料引用存在、层厚为正、interfaces 数量 = 层数-1）与**旧键拒绝**（顶层 `dielectric` / `defects`、`device.Lz_nm` 各自报错提示新写法）；**`tddb` 段**可省略、E_A / E_t1 / E_rel1 / p₀ / N_T / 生成网格 / 空位数上限 / 应力时间上限的换算、取值检查与缺项报错，**`zro2_tddb.yaml` 与 `single_run.yaml` 的材料/缺陷/电极逐项相同**、横向网格 0.25 nm、生成单元 z 步长 = hz、前驱 E_t1 与 O 空位预设相同、E_rel1 单独取值（ADR-024/028/030/032/033） |
 | `test_stack_schema.py` | `DielectricStack` 统一查询接口（`Lz` 求和、`single_material` / `bulk_defects` 在多材料/多层时抛错）、**单元素 layers 退化用例**（YAML 解析与直接构造的单层叠层逐位相同：确定性量 rtol ≤ 1e-12、同种子轨迹 rtol ≤ 1e-9）、ZAZ 三层 schema 完整解析、**ZAZ 端到端跑通并给出机制分解**（Phase 4 打通，各分量之和 = 总电流、按缺陷分解 + R1 = 总电流） |
 | `test_stack_rates.py` | **分段 WKB + 按材料取速率参数 + 分段 G_ab + 截断重推**（Phase 4）：WKB 逐段 m_di、界面双值台阶不插斜坡、R1 势垒顶落在 Al₂O₃、分段 G_ab 同质退回闭式且跨层用 Al₂O₃ 低质量（路径传播质量，F08）、ZAZ 里 R7 正反细致平衡（F02 事件能量差不变）、截断半径按最慢材料推（ADR-013/F05）、R8 逐缺陷取 ε_opt/ν、**三层同材料 + ΔE_C=0 的速率表（rtol ≤ 1e-12）与轨迹（rtol ≤ 1e-9）退回单层**（ADR-018） |
 | `test_pf_collection.py` | **F03 PF 收集概率**（Phase 5）：带偏压 Al₂O₃ 势垒（矩形/梯形/三角）的 WKB 与解析闭式一致、0≤P_A≤1 且随偏压单调、阻挡层检测、**位置感知**（阴极侧穿层 P_A<1、阳极侧立即收集 P_A=1，界面缺陷按宿主侧判定）、反偏收集电极翻转、R8_eff=P_A·R8 折进事件表、单层 P_A≡1 逐位退回 |
@@ -721,10 +758,11 @@ pytest tests/ -v      # 253 个测试，约 100 s
 | `test_master_equation.py` | **条件通量的独立主方程基准**（Phase 5，ADR-021 F04）：复现 review 4 态反例（条件通量比真实稳态低 25%）、单陷阱下条件通量 = 真实稳态、π 是合法分布且 πQ=0、**强耦合对连成簇后 KMC 估计量 = 精确稳态**（rtol 1e-10，单陷阱估计量在同一体系上只有约 1.5%）且短轨迹、换种子不变、长 KMC 轨迹的条件通量收敛到主方程期望 |
 | `test_fast_traps.py` | **快陷阱移出事件预算**（ADR-023）：没有陷阱达到 R_cut 时与不配置逐位相同、三陷阱小体系开启后电流仍等于主方程精确稳态（rtol 1e-4）且窗口延长 6 个数量级以上、全局守恒计入快↔慢跃迁 (I_C−I_A)Δt=q(ΔN−fast_exchange)、全部陷阱都快时判未通过、时间尺度分离不足判未通过；配置项 `fast_trap_rate_s` 的解析与取值检查在 `test_config_io.py` |
 | `test_mean_field.py` | **簇级平均场内层求解器**（TDDB Phase 2，ADR-031）：孤立强耦合簇上 = 主方程精确稳态（rtol 1e-10）、簇外还有弱耦合陷阱时差 <1e-9 而逐陷阱平均场高 2.4%、无强耦合时逐位退回逐陷阱平均场且与独立的阻尼迭代同一不动点、占据 9e-11 的供给陷阱按相对残差收敛到位、不动点与初值无关且从不动点热启动一次即收敛、未收敛如实标出、分解之和 = 总电流、无缺陷只剩 R1 |
+| `test_tddb.py` | **TDDB 瞬态驱动**（Phase 3，ADR-033）：增量静电耦合与从头计算一致（初始块逐位相同）、**新空位出生占据 = 1** 且与初始缺陷同一物种、出生前后其余缺陷处的电势/电场不变、外层从上一步不动点热启动；**G = 0 时 I(t) 恒定且逐位等于同一实现的稳态平均场结果**；每步的强耦合簇与新建 `KMCSimulation` 相同、终态电流与从头求解一致；**单元生成率 = N_T·V·R_1e·P_bb**，R_1e 与引擎在单元中心放前驱参数探针的两侧 R2 + R4 一致（含空间电荷）、离已有缺陷 < min_separation 的单元为 0；N_T 只改变时间标尺；已满单元被跳过；幂律拟合还原 n、带噪声时拟合优度合理；CSV 与 CLI |
 | `test_clusters.py` | **强耦合簇的纯函数**（ADR-022）：耦合强度与分簇、超限分量在最弱处切开、GTH 稳态分布与线性解一致且在速率跨 1e-20…1e14 时逐分量相对精度 ≤1e-12、簇内条件稳态在 4 态反例上给出精确 0.4、生成矩阵事件口径与 KMC 一致、无耦合时逐成员退回单陷阱公式（含贴阳极 1e13 s⁻¹ 交换、净通量 0.4 s⁻¹ 的成员） |
 | `test_numerics_convergence.py` | `kmc.py` 里各积分点数的收敛性依据 |
 | `test_ensemble.py` | 平均确实是**算术平均**、每个种子确实换了一整套缺陷、M=1 退化为普通单点仿真、标准误 = σ/√M、**R1 分量在系综里零散布**（按构造与缺陷无关）、CSV 保留各实现原始值 |
-| `test_sweep.py` / `test_visualization.py` | 扫描形状与单调性、缺陷实现复用、**高斯能级与界面富集在扫描里同样生效**（扫描用的缺陷与按同一配置同一种子直接生成的逐位相同）、CSV 往返、`--plot-prefix` 落两张图；绘图只返回 Figure、不落盘不 show，I-V/I-T 曲线的数据换算（A/cm²、°C）、**给了标准误就画 J±SEM 误差棒**、**只画总电流**（不接受机制分解参数、图例无机制条目、行序在蓝色系里逐行变深且最浅档仍可见）；**叠层叠画**（ADR-016 ①②）：缺陷图两幅都叠层边界与界面位置、界面缺陷单独标色且柱子只统计体缺陷，能带图界面双值台阶（高度 = ΔE_C、两侧值就是各层 B_ℓ−eφ），单层两幅图逐位退回 |
+| `test_sweep.py` / `test_visualization.py` | 扫描形状与单调性、缺陷实现复用、**高斯能级与界面富集在扫描里同样生效**（扫描用的缺陷与按同一配置同一种子直接生成的逐位相同）、CSV 往返、`--plot-prefix` 落两张图；绘图只返回 Figure、不落盘不 show，I-V/I-T 曲线的数据换算（A/cm²、°C）、TDDB 的 I-t 图（双对数阶梯 + 本底虚线 + 拟合直线、没有生成事件时只画本底）、**给了标准误就画 J±SEM 误差棒**、**只画总电流**（不接受机制分解参数、图例无机制条目、行序在蓝色系里逐行变深且最浅档仍可见）；**叠层叠画**（ADR-016 ①②）：缺陷图两幅都叠层边界与界面位置、界面缺陷单独标色且柱子只统计体缺陷，能带图界面双值台阶（高度 = ΔE_C、两侧值就是各层 B_ℓ−eφ），单层两幅图逐位退回 |
 
 ---
 
@@ -746,6 +784,9 @@ pytest tests/ -v      # 253 个测试，约 100 s
   (N,N) 实现给出逐位相同的 J 与机制分解。叠层里几何因子沿路径按材料分段衰减（ADR-010），
   截断半径按所有材料里最慢的衰减推、判据用被丢弃的总速率上界 < 机制表最小速率
   （`kmc._hop_cutoff_radius`，ADR-013/F05），不是写死的长度；单一材料叠层逐位退回闭式
+- **TDDB 瞬态驱动在参考参数下生成失控**（ADR-034）：I-t 是"平台 → 陡升"而不是双对数直线，
+  P_bb 的场口径、E_A/p₀ 标定与生成空位的电荷态待定；式 T2 用的含点电荷近场的局域场让生成率对
+  生成网格不收敛（16×16 与更细网格差 2–4 倍）。Phase 3 还没有击穿判据与热反馈，按空位数或时间上限停
 - **电子跳跃轨迹输出未实现**——规格里标的是"可选"，且对应绘图项列在"后续可能添加"
 - **侧向胞元尺寸的收敛性检查标准未定**。现在的 50 nm 与之前的 100 nm 都是按成本选的，
   不是收敛性结论；两者的均值在各自标准误内一致，但"多大才算收敛"仍未测。网格分辨率
@@ -778,11 +819,12 @@ src/kmc_leakage/
   clusters.py          强耦合陷阱簇：分簇、GTH 稳态分布、簇内条件稳态（纯函数）
   master_equation.py   小状态空间主方程稳态解（条件通量的独立基准，仅验证用）
   mean_field.py        簇级平均场内层求解器：占据不动点 + 与 KMC 同一估计量的电流（TDDB 内层默认路径）
+  tddb.py              TDDB 瞬态驱动：外层生成事件 Gillespie（模型 C 单元生成率）+ 内层平均场、增量静电耦合、I-t 幂律拟合、轨迹 CSV
   sweep.py             I-V / I-T 扫描 + CSV 输出
   ensemble.py          多个缺陷实现的算术平均 + CSV 输出
-  visualization.py     缺陷分布、能带结构、I-V / I-T 曲线（只返回 Figure）
+  visualization.py     缺陷分布、能带结构、I-V / I-T 曲线、TDDB 的 I-t 演化（只返回 Figure）
   __main__.py          命令行入口
-tests/                 253 个测试
+tests/                 268 个测试
 examples/              single_run.yaml、iv_sweep.yaml、stack_t2_{0,2,4}nm.yaml（t₂ 结构对照）、stack_t2_2nm_custom.yaml（不对称自定义算例）、zro2_tddb.yaml（TDDB 起点，20×20×8 nm 小盒子）
 docs/                  物理规格（改 rates/ 或 electrostatics.py 前先读）
 ```
@@ -799,6 +841,7 @@ docs/                  物理规格（改 rates/ 或 electrostatics.py 前先读
 | `plot_band_diagram` | 沿 z 的能带剖面（不画镜像力圆化）；叠层时导带/价带在界面处画真实台阶（界面双值，不连斜坡） | `BandProfile`，可选缺陷 z 与能级 |
 | `plot_iv_curves` | I-V：横轴电压，一条曲线一个温度；只画总电流 | 电压 [V]、温度 [K]、J 矩阵 [A/m²] |
 | `plot_it_curves` | I-T：横轴温度（°C），一条曲线一个电压；只画总电流 | 同上（同一份数据按电压切） |
+| `plot_current_transient` | TDDB 恒压应力下的 J(t)，双对数：t = 0 本底画水平虚线，之后的状态画阶梯（最后一段到终点），可叠加幂律拟合直线并标出 n | `TDDBResult.time`、`current_density` [A/m²]、`end_time`，可选 (n, A, 取样时刻) |
 
 两条曲线函数吃的就是 `SweepResult` / `EnsembleSweepResult` 的
 `voltages`、`temperatures`、`current_density`（矩阵形状 `(温度点数, 电压点数)`）：

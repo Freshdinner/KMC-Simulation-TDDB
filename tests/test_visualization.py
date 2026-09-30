@@ -26,6 +26,7 @@ from kmc_leakage.io import load_config
 from kmc_leakage.kmc import KMCSimulation
 from kmc_leakage.visualization import (
     plot_band_diagram,
+    plot_current_transient,
     plot_defect_clusters,
     plot_defect_distribution,
     plot_it_curves,
@@ -43,6 +44,9 @@ INTERFACE_DEFECT_COLOR = "#c00000"
 VOLTAGES = np.array([2.0, 3.0, 4.0])
 TEMPERATURES = np.array([298.15, 398.15])
 DENSITY = np.array([[1e-4, 3e-4, 9e-4], [2e-3, 6e-3, 1.8e-2]])  # [A/m^2]
+# 一条假 I-t 轨迹：t = 0 的本底加 3 次生成，终点 2 s
+TRANSIENT_TIME = np.array([0.0, 0.01, 0.1, 1.0])
+TRANSIENT_DENSITY = np.array([1e-4, 2e-4, 5e-4, 1e-3])  # [A/m^2]
 
 
 def _scatters(axes):
@@ -313,7 +317,33 @@ def test_plot_functions_do_not_touch_the_filesystem(tmp_path, monkeypatch, defec
     plot_defect_clusters(make_device(), defects, [np.array([0, 1])])
     plot_iv_curves(VOLTAGES, TEMPERATURES, DENSITY)
     plot_it_curves(VOLTAGES, TEMPERATURES, DENSITY)
+    plot_current_transient(TRANSIENT_TIME, TRANSIENT_DENSITY, 2.0)
     assert not list(tmp_path.iterdir())
+
+
+def test_current_transient_is_log_log_steps_with_background_and_fit():
+    """I-t：双对数坐标，t = 0 的本底画成水平虚线，之后的状态画成阶梯（最后一段到 end_time），
+    幂律拟合画在取样时刻范围上并在图例里标出 n；换算成 A/cm²。"""
+    times = np.logspace(-2, np.log10(2.0), 11)
+    figure = plot_current_transient(TRANSIENT_TIME, TRANSIENT_DENSITY, 2.0, fit=(0.5, 3e-4, times))
+    axes = figure.axes[0]
+    assert axes.get_xscale() == "log" and axes.get_yscale() == "log"
+    background, steps, fit = axes.lines
+    assert np.allclose(background.get_ydata(), TRANSIENT_DENSITY[0] * PER_CM2)
+    assert np.array_equal(steps.get_xdata(), [0.01, 0.1, 1.0, 2.0])
+    assert np.allclose(steps.get_ydata(), np.array([2e-4, 5e-4, 1e-3, 1e-3]) * PER_CM2)
+    assert steps.get_drawstyle() == "steps-post"
+    assert np.allclose(fit.get_xdata(), times)
+    assert np.allclose(fit.get_ydata(), 3e-4 * times ** 0.5 * PER_CM2)
+    labels = [text.get_text() for text in axes.get_legend().get_texts()]
+    assert labels[-1] == "power law, n = 0.5"
+
+
+def test_current_transient_without_generation_shows_only_the_background():
+    """没有生成事件（G = 0）时只有本底水平线。"""
+    axes = plot_current_transient(np.array([0.0]), np.array([1e-4]), 10.0).axes[0]
+    assert len(axes.lines) == 1
+    assert np.allclose(axes.lines[0].get_ydata(), 1e-4 * PER_CM2)
 
 
 def test_iv_curves_one_curve_per_temperature():

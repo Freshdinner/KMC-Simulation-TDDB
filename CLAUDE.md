@@ -54,6 +54,7 @@
 - I-V/I-T 扫描：`python -m kmc_leakage sweep --config examples/zro2_tddb.yaml`
 - 可视化：`python -m kmc_leakage plot --config examples/zro2_tddb.yaml --kind defects`（或 `bands`）
 
-新增（`tddb.py` 与 CLI 子命令落地后补全，与现有 `run/sweep/plot` 并列）：TDDB 瞬态
-运行、I-t / t_BD 系综、I-t / Weibull 出图的命令。落地时同步更新本节与 `CLAUDE.md`
-的命令段。
+新增（与现有 `run/sweep/plot` 并列）：
+
+- TDDB 瞬态运行（一个缺陷实现的等温 I-t 轨迹，Phase 3）：`python -m kmc_leakage tddb --config examples/zro2_tddb.yaml --seed 1 --out it.csv --plot it.png`
+- I-t / t_BD 系综与 Weibull 出图：Phase 5 落地时补全本节。

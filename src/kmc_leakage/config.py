@@ -405,9 +405,9 @@ class EnsembleConfig:
 class TDDBConfig:
     """TDDB 缺陷生成参数（PROJECT_CONTEXT_TDDB.md 第 3 节参数表，ADR-024/028）。
 
-    只收已定取值的参数，每个字段在用到它的 Phase 加入。N_T、k_TH 等待定参数在
-    YAML 里以注释占位。G 场加速项里的相对介电常数 k 取介质材料的静态 κ，前驱俘获
-    线型用的声子能量 ℏω₀ 取宿主介质的值，都不在这里另设。
+    只收已定取值的参数，每个字段在用到它的 Phase 加入。k_TH 等待定参数在 YAML 里以
+    注释占位。G 场加速项里的相对介电常数 k 取介质材料的静态 κ，前驱俘获线型用的声子
+    能量 ℏω₀ 取宿主介质的值，应力电压与温度取 simulation 段的工作点，都不在这里另设。
     """
 
     activation_energy: float  # E_A：无场下形成 Frenkel 对的激活能 [J]（式 T2；双电子机制下即 E_A,2e）
@@ -416,6 +416,14 @@ class TDDBConfig:
     # 线型（E_rel1/ℏω₀ 作为式 T10 的参数），与输运用的材料 Huang-Rhys 因子 huang_rhys 无关（ADR-030）
     precursor_relaxation_energy: float
     dipole_moment: float  # p₀：前驱有效偶极矩均值 [C·m]（式 T2/T3）
+    # --- 瞬态驱动（Phase 3，ADR-033）---
+    # N_T：前驱位点浓度 [1/m^3]，体积生成率 N_T·R_1e·P_bb 的前置因子（§6.1 模型 C）。0 = 关掉生成
+    precursor_concentration: float
+    # 生成单元网格 (nx, ny, nz)：单元铺满 [0,Lx)×[0,Ly)×[standoff, Lz−standoff]，外层 Gillespie
+    # 在单元表上抽生成事件（§6.1）。与泊松网格分开配置
+    generation_grid: Tuple[int, int, int]
+    max_generated_vacancies: int  # 生成的空位数达到此值即停（Phase 3 还没有击穿判据）
+    stop_time: float  # 应力时间上限 [s]
 
 
 @dataclass(frozen=True)

@@ -4,6 +4,8 @@
     python -m kmc_leakage sweep --config examples/iv_sweep.yaml [--out results.csv]
                                 [--plot-prefix scan]
     python -m kmc_leakage plot  --config examples/single_run.yaml --kind defects|bands
+    python -m kmc_leakage tddb  --config examples/zro2_tddb.yaml [--seed N] [--out it.csv]
+                                [--plot it.png]
 """
 
 import os
@@ -21,6 +23,7 @@ from .ensemble import EnsembleResult, run_ensemble, run_ensemble_sweep, write_en
 from .io import load_config
 from .kmc import MECHANISM_LABELS, MECHANISMS, KMCSimulation, SimulationResult
 from .sweep import run_sweep, write_csv
+from .tddb import TDDBResult, fit_transient, run_tddb, write_tddb_csv
 
 app = typer.Typer(add_completion=False, help="MIM 电容器漏电流 KMC 仿真")
 
@@ -327,6 +330,78 @@ def plot(
 
     figure.savefig(path, dpi=150)
     typer.echo("已写入 {}（seed = {} 的缺陷实现）".format(path, seed))
+
+
+def _report_tddb(result: TDDBResult) -> None:
+    """打印一条 TDDB 瞬态轨迹的摘要。"""
+    density = result.current_density * _PER_CM2
+    reasons = {
+        "max_generated": "生成空位数达到上限",
+        "stop_time": "应力时间达到上限",
+        "no_generation": "总生成率为 0（G = 0），电流保持初始值",
+    }
+    typer.echo(
+        "终止：{}，t_end = {:.4e} s，生成 {} 个空位（初始缺陷 {} 个）".format(
+            reasons[result.stop_reason], result.end_time,
+            int(result.n_generated[-1]), result.n_initial,
+        )
+    )
+    typer.echo("  J(t=0) = {:.4e} A/cm²   J(t_end) = {:.4e} A/cm²".format(density[0], density[-1]))
+    if result.time.size > 1:
+        fit, _ = fit_transient(result)
+        typer.echo(
+            "  双对数拟合（第一次生成到 t_end，按 log t 等间距取样）：n = {:.3f}，R² = {:.3f}".format(
+                fit.exponent, fit.r_squared
+            )
+        )
+    typer.echo(
+        "  平均场：{}/{} 个状态收敛，最多 {} 次迭代".format(
+            int(result.converged.sum()), result.converged.size, int(result.iterations.max())
+        )
+    )
+    typer.echo(
+        "  强耦合簇：最大簇 {} 个陷阱，切分前最大分量 {} 个，被切开的分量最多 {} 个".format(
+            int(result.max_cluster_size.max()), int(result.largest_component.max()), int(result.n_split.max())
+        )
+    )
+
+
+@app.command()
+def tddb(
+    config: str = typer.Option(..., "--config", help="YAML 配置文件路径（需要 tddb 段）"),
+    seed: Optional[int] = typer.Option(None, "--seed", help="缺陷实现与生成事件的种子，缺省用 simulation.seed"),
+    out: Optional[str] = typer.Option(None, "--out", help="轨迹 CSV 输出路径"),
+    plot: Optional[str] = typer.Option(None, "--plot", help="I-t 双对数图输出路径"),
+) -> None:
+    """TDDB 瞬态运行（等温、恒压应力）：一个缺陷实现的 I-t 轨迹。"""
+    from dataclasses import replace
+
+    cfg = load_config(config)
+    if seed is not None:
+        cfg = replace(cfg, simulation=replace(cfg.simulation, seed=seed))
+    typer.echo(
+        "TDDB 应力：U = {:.2f} V, T = {:.1f} °C，seed = {}".format(
+            cfg.simulation.voltage, cfg.simulation.temperature - constants.zero_Celsius, cfg.simulation.seed
+        )
+    )
+
+    def progress(n_generated: int, time: float, density: float) -> None:
+        typer.echo("  [{:>5d}] t = {:.4e} s   J = {:.4e} A/cm²".format(n_generated, time, density * _PER_CM2))
+
+    result = run_tddb(cfg, progress=progress)
+    _report_tddb(result)
+    if out is not None:
+        write_tddb_csv(result, out)
+        typer.echo("已写入 {}".format(out))
+    if plot is not None:
+        from .visualization import plot_current_transient
+
+        fit = None
+        if result.time.size > 1:
+            power_law, times = fit_transient(result)
+            fit = (power_law.exponent, power_law.prefactor, times)
+        plot_current_transient(result.time, result.current_density, result.end_time, fit).savefig(plot, dpi=150)
+        typer.echo("已写入 {}".format(plot))
 
 
 def main() -> None:

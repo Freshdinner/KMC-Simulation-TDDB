@@ -7,6 +7,46 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **TDDB Phase 3：等温瞬态驱动**（新增 `tddb.py`：`run_tddb`、`TDDBResult`、`IncrementalCoupling`、
+  `generation_cells` / `generation_rates` / `admissible_cells`、`fit_power_law` / `fit_transient`、
+  `write_tddb_csv`；`electrostatics.PoissonSolver.field_readout_sources`（增量耦合的伴随源）；
+  `defects.append_defects` / `layer_bulk_defects`；`config.TDDBConfig` 与 `io._tddb` 新增 N_T、生成网格、
+  空位数上限、应力时间上限四个字段；`visualization.plot_current_transient`；CLI 新增 `tddb` 子命令；
+  `zro2_tddb.yaml` 网格改为 80/80/80 并填入新字段；新增 `tests/test_tddb.py`（13 项），
+  `test_config_io.py`、`test_visualization.py` 相应改写与新增；新增 ADR-032–034，ADR-025 标 superseded；
+  逐轨迹数据存入 `results/9.30/`；同步 README、`CLAUDE.md` 命令段、`PROJECT_CONTEXT_TDDB.md` §3、§6.1、
+  §6.4、§6.5、§6.9、§8.6、§9、§10）。
+
+  **做法**（§5 的准静态双层循环，ADR-033）：外层在生成单元表上做 Gillespie——各缺陷净电荷 q·(Z − p)
+  与外加偏压解一次泊松方程，在单元中心对虚拟前驱求 R_1e（两侧 R2 + R4，100 个声子项）与 P_bb，
+  G_cell = N_T·V_cell·R_1e·P_bb（式 T1/T2/T4，§6.1 模型 C）；选中单元内连续随机落点、受 min_separation
+  约束。新空位与初始缺陷同一物种、出生占据 = 1（§6.7）。内层每步按当前缺陷集合重建 `KMCSimulation`、
+  从上一步占据热启动求簇级平均场稳态；静电耦合按 §6.4 增量扩展（1 次正向 + 3 次伴随求解），近邻表与
+  强耦合簇从头算。每步记录电流与分解、ΣG、空间电荷、平均场收敛、簇大小与切分数。
+
+  **与规格不同的三处**（都写进 ADR 与 PROJECT_CONTEXT_TDDB.md）：
+  1. §6.9 的"增量分簇"改为每步从头分簇：分簇按全空组态的速率算，新空位在全空组态里带 +e，会改变已有
+     缺陷对的耦合强度（实测相对变化中位数 3%，20 次生成里 1 步分簇不同）；重建每步只要约 0.25 s。
+  2. 生成网格与泊松网格分开配置：R_1e 每个单元约 0.2 ms，直接用 80×80×70 个泊松单元每步要 90 s。
+  3. 单元中心离已有缺陷 < min_separation 的单元生成率记 0：带电缺陷近旁的 P_bb 饱和，按原做法 ΣG 随
+     生成网格加密发散（4/8/16/32 格：46 → 5.5×10⁷ s⁻¹）。
+  另外，网格按团簇库仑能收敛测试定为 hx = hy = 0.25 nm（0.5–0.9 nm 对与 nx = 100 相差 ≤ 3.6%，原 1.54 nm
+  步长算低 30–57%；t=0 本底系综均值变化 < 1%，ADR-032）。
+
+  **验证**：G = 0 时 I(t) 恒定且电流、分解、占据逐位等于同一实现的稳态平均场结果；增量耦合与从头计算
+  差 4×10⁻¹⁶；出生前后其余缺陷处的电势/电场不变；每步分簇与新建 `KMCSimulation` 相同；单元生成率与
+  引擎在单元中心放前驱参数探针的 R2 + R4 一致（rtol 1e-9，含空间电荷）；N_T 只改时间标尺（翻 10 倍时
+  事件序列逐位相同、时刻 ×1/10）；幂律拟合精确还原 n。
+
+  **物理结果**（ADR-034，15 条轨迹各 300 个空位）：**"击穿前 I-t 双对数近似直线、斜率为正"不满足**。
+  参考参数（E_A = 4 eV、p₀ = 7.1 eÅ）下 t = 0 的 ΣG 已是零空间电荷估算的 10⁵ 倍：空态缺陷带 +e，
+  它的库仑场经 (2+κ)/3·p₀ = 94.7 eÅ 放大，把近旁 P_bb 抬高到饱和；生成贴着阴极（z ≈ 0.55–0.8 nm），
+  新空位 67–92% 空着，正空间电荷一路累积，300 个空位在 3–41 μs 内生成完，I-t 是"平台 → 近乎竖直的
+  陡升"。p₀ 降到 3 / 1 eÅ（配套调 E_A 保持 3 V 有效势垒）时失控推迟到 10–130 ms / 约 1 s，P_bb 改用横向
+  平均场的对照在 0.2 s 失控。控制形状的是 p₀·(2+κ)/3 经空间电荷的正反馈，N_T 与 E_A 基本只改时间标尺。
+  ADR-028 的 t_BD ≈ 100 s 估算因此不成立。P_bb 的场口径、E_A/p₀ 标定与生成空位的电荷态需要在 Phase 4
+  之前定。涉及 T1/T2/T4（经 R2/R4），R1–R8 无改动。`pytest tests/ -v`（`.venv`，Python 3.8）268 passed。
+
 - **TDDB Phase 2：簇级平均场内层求解器**（新增 `mean_field.py`：`solve_mean_field`、`MeanFieldResult`；
   新增 `tests/test_mean_field.py`（8 项）与 ADR-031；逐实现对拍数据存入
   `results/9.29/tddb_phase2_mf_vs_kmc.csv`；同步 README、`PROJECT_CONTEXT_TDDB.md` §6.2）。

@@ -240,6 +240,30 @@ class PoissonSolver:
             fz = np.where(field_side > 0, fz_upper, np.where(field_side < 0, fz_lower, fz))
         return np.stack([fx, fy, fz])
 
+    def field_readout_sources(self, position: np.ndarray) -> np.ndarray:
+        """体缺陷位置 `position` 处读场的伴随源 s_c，形状 (3, nx, ny, nz+1)。
+
+        `field_vectors_at` 对体缺陷（field_side = 0）读出的场是网格电势的线性泛函：
+        E_c(r) = −⟨s_c, φ⟩（对全部节点求和），s_c = D_cᵀ·w_r，w_r 是 r 处的 CIC 权重，
+        D_c 是 `electric_field` 用的差分算子（xy 周期中心差分，z 为 np.gradient 的内点
+        中心差分、两端单侧差分）。泊松算子对称，所以解 ψ_c = solve(s_c, 0) 之后，任一
+        电荷密度 ρ 在 r 处产生的场分量就是 −⟨ψ_c, ρ⟩：三次求解给出全部已有电荷在 r 处
+        的场（TDDB 增量静电耦合的伴随求解，PROJECT_CONTEXT_TDDB.md §6.4）。改
+        `electric_field` 的差分格式时这里要同步改。
+        """
+        w = self.deposit(position, self.hx * self.hy * self.hz)  # deposit 除以单元体积，这里得到权重本身
+        sx = (np.roll(w, 1, axis=0) - np.roll(w, -1, axis=0)) / (2.0 * self.hx)
+        sy = (np.roll(w, 1, axis=1) - np.roll(w, -1, axis=1)) / (2.0 * self.hy)
+        sz = np.zeros_like(w)
+        # np.gradient 的转置：内点行 k 给第 k±1 列 ±1/(2hz)，两端行是单侧差分 ∓1/hz
+        sz[..., 2:] += w[..., 1:-1] / (2.0 * self.hz)
+        sz[..., :-2] -= w[..., 1:-1] / (2.0 * self.hz)
+        sz[..., 0] -= w[..., 0] / self.hz
+        sz[..., 1] += w[..., 0] / self.hz
+        sz[..., -2] -= w[..., -1] / self.hz
+        sz[..., -1] += w[..., -1] / self.hz
+        return np.stack([sx, sy, sz])
+
     @staticmethod
     def lateral_average(field: np.ndarray) -> np.ndarray:
         """对 xy 求平均，得到沿 z 的一维剖面。"""
