@@ -403,11 +403,11 @@ class EnsembleConfig:
 
 @dataclass(frozen=True)
 class TDDBConfig:
-    """TDDB 缺陷生成参数（PROJECT_CONTEXT_TDDB.md 第 3 节参数表，ADR-024/028）。
+    """TDDB 缺陷生成参数（PROJECT_CONTEXT_TDDB.md 第 3 节参数表，ADR-024/028/035/036）。
 
-    只收已定取值的参数，每个字段在用到它的 Phase 加入。k_TH 等待定参数在 YAML 里以
-    注释占位。G 场加速项里的相对介电常数 k 取介质材料的静态 κ，前驱俘获线型用的声子
-    能量 ℏω₀ 取宿主介质的值，应力电压与温度取 simulation 段的工作点，都不在这里另设。
+    只收已定取值的参数，每个字段在用到它的 Phase 加入。G 场加速项里的相对介电常数 k 取
+    介质材料的静态 κ，前驱俘获线型用的声子能量 ℏω₀ 取宿主介质的值，应力电压与环境温度
+    取 simulation 段的工作点，都不在这里另设。
     """
 
     activation_energy: float  # E_A：无场下形成 Frenkel 对的激活能 [J]（式 T2；双电子机制下即 E_A,2e）
@@ -422,8 +422,15 @@ class TDDBConfig:
     # 生成单元网格 (nx, ny, nz)：单元铺满 [0,Lx)×[0,Ly)×[standoff, Lz−standoff]，外层 Gillespie
     # 在单元表上抽生成事件（§6.1）。与泊松网格分开配置
     generation_grid: Tuple[int, int, int]
-    max_generated_vacancies: int  # 生成的空位数达到此值即停（Phase 3 还没有击穿判据）
+    max_generated_vacancies: int  # 生成的空位数达到此值即停（机时上限）
     stop_time: float  # 应力时间上限 [s]
+    # --- 击穿判据与热反馈（Phase 4，ADR-036）---
+    # d_c：渗流判据的连边截断 [m]。间距 < d_c 的缺陷连边，某个连通分量同时触到两个电极即击穿（§6.3）
+    percolation_distance: float
+    # 限流值 [A/m^2]：电流密度达到它即停，是击穿的第二停止条件（渗流仍是主判据）
+    compliance_current_density: float
+    # k_TH：介质热导率 [W/(m·K)]（式 T14）。None = 等温，温度固定为环境值（Phase 3 的口径）
+    thermal_conductivity: Optional[float] = None
 
 
 @dataclass(frozen=True)

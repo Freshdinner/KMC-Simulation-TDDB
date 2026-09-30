@@ -31,6 +31,7 @@ from kmc_leakage.visualization import (
     plot_defect_distribution,
     plot_it_curves,
     plot_iv_curves,
+    plot_stress_transient,
 )
 
 EV = constants.electron_volt
@@ -47,6 +48,7 @@ DENSITY = np.array([[1e-4, 3e-4, 9e-4], [2e-3, 6e-3, 1.8e-2]])  # [A/m^2]
 # 一条假 I-t 轨迹：t = 0 的本底加 3 次生成，终点 2 s
 TRANSIENT_TIME = np.array([0.0, 0.01, 0.1, 1.0])
 TRANSIENT_DENSITY = np.array([1e-4, 2e-4, 5e-4, 1e-3])  # [A/m^2]
+TRANSIENT_TEMPERATURE = np.array([298.15, 298.2, 299.0, 305.0])  # [K]
 
 
 def _scatters(axes):
@@ -318,6 +320,7 @@ def test_plot_functions_do_not_touch_the_filesystem(tmp_path, monkeypatch, defec
     plot_iv_curves(VOLTAGES, TEMPERATURES, DENSITY)
     plot_it_curves(VOLTAGES, TEMPERATURES, DENSITY)
     plot_current_transient(TRANSIENT_TIME, TRANSIENT_DENSITY, 2.0)
+    plot_stress_transient(TRANSIENT_TIME, TRANSIENT_DENSITY, TRANSIENT_TEMPERATURE, 2.0, stop="breakdown")
     assert not list(tmp_path.iterdir())
 
 
@@ -344,6 +347,41 @@ def test_current_transient_without_generation_shows_only_the_background():
     axes = plot_current_transient(np.array([0.0]), np.array([1e-4]), 10.0).axes[0]
     assert len(axes.lines) == 1
     assert np.allclose(axes.lines[0].get_ydata(), 1e-4 * PER_CM2)
+
+
+def test_stress_transient_marks_breakdown_and_shows_temperature():
+    """TDDB 应力图：上图与 plot_current_transient 相同的双对数 J(t)，击穿时在终点 (end_time, J)
+    画标记并在图例里写出时刻；下图是温度（°C）的阶梯，横轴共用、取对数。"""
+    times = np.logspace(-2, np.log10(2.0), 11)
+    figure = plot_stress_transient(
+        TRANSIENT_TIME, TRANSIENT_DENSITY, TRANSIENT_TEMPERATURE, 2.0, fit=(0.5, 3e-4, times), stop="breakdown"
+    )
+    top, bottom = figure.axes
+    reference = plot_current_transient(TRANSIENT_TIME, TRANSIENT_DENSITY, 2.0, fit=(0.5, 3e-4, times)).axes[0]
+    assert top.get_xscale() == "log" and top.get_yscale() == "log"
+    for line, expected in zip(top.lines[:3], reference.lines):
+        assert np.array_equal(line.get_xdata(), expected.get_xdata())
+        assert np.array_equal(line.get_ydata(), expected.get_ydata())
+    marker = top.lines[3]
+    assert marker.get_xdata().tolist() == [2.0]
+    assert np.allclose(marker.get_ydata(), TRANSIENT_DENSITY[-1] * PER_CM2)
+    labels = [text.get_text() for text in top.get_legend().get_texts()]
+    assert labels[-1] == "breakdown (percolation), t = 2 s"
+
+    background, steps = bottom.lines
+    assert np.allclose(background.get_ydata(), TRANSIENT_TEMPERATURE[0] - constants.zero_Celsius)
+    assert np.array_equal(steps.get_xdata(), [0.01, 0.1, 1.0, 2.0])
+    assert np.allclose(steps.get_ydata(), np.array([298.2, 299.0, 305.0, 305.0]) - constants.zero_Celsius)
+    assert bottom.get_xscale() == "log"
+
+
+def test_stress_transient_marks_only_breakdown_and_compliance():
+    """限流停止也画终点标记；达到空位数或时间上限不画。"""
+    compliance = plot_stress_transient(TRANSIENT_TIME, TRANSIENT_DENSITY, TRANSIENT_TEMPERATURE, 2.0, stop="compliance")
+    assert len(compliance.axes[0].lines) == 3
+    assert compliance.axes[0].get_legend().get_texts()[-1].get_text() == "compliance reached, t = 2 s"
+    capped = plot_stress_transient(TRANSIENT_TIME, TRANSIENT_DENSITY, TRANSIENT_TEMPERATURE, 2.0, stop="max_generated")
+    assert len(capped.axes[0].lines) == 2
 
 
 def test_iv_curves_one_curve_per_temperature():

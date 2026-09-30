@@ -465,6 +465,22 @@ class _Cluster:
     out_target: np.ndarray
 
 
+@dataclass(frozen=True)
+class _ClusterTable:
+    """一个强耦合簇在给定环境占据下、簇内每个组态 s 的能级与速率（`_cluster_tables`）。
+
+    成员按 `cluster.members` 的局部编号排列；跃迁速率按 `cluster.pairs` 的列排列。
+    """
+
+    cluster: _Cluster
+    energy: np.ndarray  # (S, N) 组态 s 下全部陷阱的能级（簇外占据取环境值）
+    block: np.ndarray  # (9, S, k) 成员的电极速率块
+    weighted: Optional[np.ndarray]  # (9, S, k) 按替换的声子线型再算的电极速率块，未请求时为 None
+    hop: np.ndarray  # (S, P) 与簇有关的有序对的跃迁速率
+    hop_in: np.ndarray  # (S, k) 簇外陷阱跳入成员的总速率（已乘源的环境占据）
+    hop_out: np.ndarray  # (S, k) 成员跳往簇外的总速率（已乘目标空的环境概率）
+
+
 class KMCSimulation:
     """单个偏压/温度点的 KMC 仿真。"""
 
@@ -806,6 +822,7 @@ class KMCSimulation:
         barrier_c: np.ndarray,
         barrier_a: np.ndarray,
         idx: Optional[np.ndarray] = None,
+        weights: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """电极↔陷阱的 9 块速率（R2–R5 两侧 + R8_eff），形状 (9, 行数)。
 
@@ -813,6 +830,11 @@ class KMCSimulation:
         `barrier_*` 是这一行所处组态下的陷阱能级、局域场大小与电极→陷阱路径上的
         势垒。同一缺陷可以在不同组态下出现多行（簇内条件稳态），`_rates` 与簇内
         条件稳态共用这一份速率公式。
+
+        `weights` 替换 R4/R5 求和里的声子线型 L_p（形状同 `_phonon_weights`，缺省就用
+        它）。传 L_p·p·ℏω 时 R4/R5 四块给出的是单位时间随俘获放给晶格、随逃逸从晶格
+        吸收的声子能量 [J/s]，TDDB 的功率 ΔE·R（式 T13，`thermal.heat_release`）由此与
+        速率走同一套公式；其余五块不受影响。
         """
         device, sim = self.device, self.sim
         defects = self.defects
@@ -822,7 +844,7 @@ class KMCSimulation:
 
         ED = pick(defects.ED)
         m_di = pick(defects.m_di)
-        phonon_weights = pick(self._phonon_weights)
+        phonon_weights = pick(self._phonon_weights if weights is None else weights)
         phonon_offsets = pick(self._phonon_offsets)
         blocks = np.zeros((_N_BLOCKS, energy.shape[0]))
         # R4/R5 的 c_MP 常数因子（含局域场 F²）：用物种质量与物种带隙，两侧电极共用
@@ -897,25 +919,30 @@ class KMCSimulation:
         质量** m_di(s)（沿路径按所在层取，`self._m_di_path_*`）。单层退化时两者
         相等、逐点恒定，逐位退回旧标量口径。
         """
-        sim = self.sim
-        defects = self.defects
+        energy, field_at, barrier_c, barrier_a = self._trap_state(occ)
+        blocks = self._electrode_blocks(energy, field_at, barrier_c, barrier_a)
+        return blocks, self._hop_rates(energy)
 
+    def _trap_state(self, occ: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """组态 `occ` 下的 (陷阱能级, 局域场大小, 阴极侧路径势垒, 阳极侧路径势垒)。"""
         phi_at, field_at, phi_bar = self._electrostatics(occ)
-        energy = trap_levels(defects.band_reference, phi_at, defects.ED)  # 陷阱上电子的总能量
+        energy = trap_levels(self.defects.band_reference, phi_at, self.defects.ED)  # 陷阱上电子的总能量
         band = conduction_band_edge(self.device, self._z_nodes, phi_bar)  # 一维导带底剖面（含台阶）
         barrier_c, barrier_a = self._path_barriers(band)
-        blocks = self._electrode_blocks(energy, field_at, barrier_c, barrier_a)
+        return energy, field_at, barrier_c, barrier_a
 
-        # --- R7：陷阱→陷阱（R6 的几何因子 × MA 能量因子），只在近邻表上算 ---
-        # 终态 b 的能级取"电子已离开 a"之后的值 energy[b] − U_ab：当前组态里
-        # energy[b] 含出发陷阱 a 上电子的贡献，跳跃发生后这部分消失。这样 MA 因子
-        # 用的是完整事件能量差 ΔH_{a→b} = (E_b − E_a) − U_ab，正反向满足细致平衡
-        # （见 docs/rate_equations.md R7 一节与 ADR-021 F02）。
+    def _hop_rates(self, energy: np.ndarray) -> np.ndarray:
+        """R7：近邻表上各有序对的陷阱→陷阱跃迁速率（R6 的几何因子 × MA 能量因子）。
+
+        终态 b 的能级取"电子已离开 a"之后的值 energy[b] − U_ab：当前组态里
+        energy[b] 含出发陷阱 a 上电子的贡献，跳跃发生后这部分消失。这样 MA 因子
+        用的是完整事件能量差 ΔH_{a→b} = (E_b − E_a) − U_ab，正反向满足细致平衡
+        （见 docs/rate_equations.md R7 一节与 ADR-021 F02）。
+        """
         pairs = self._pairs
-        hop = self._hop_geometric * miller_abrahams_factor(
-            energy[pairs.a], energy[pairs.b] - self._hop_U_ab, sim.temperature
+        return self._hop_geometric * miller_abrahams_factor(
+            energy[pairs.a], energy[pairs.b] - self._hop_U_ab, self.sim.temperature
         )
-        return blocks, hop
 
     def _hop_sums(
         self, hop: np.ndarray, occf: np.ndarray, empty: np.ndarray
@@ -974,12 +1001,38 @@ class KMCSimulation:
         """全部强耦合簇在环境占据 `occf` 下的条件稳态，结果写回簇成员（ADR-022）。
 
         每个簇枚举簇内 2^k 个组态：按组态的真实电荷分布重算簇成员的电极速率和与
-        簇有关的跃迁速率（库仑作用按组态精确计入），簇外占据固定为 `occf`，解簇内
-        主方程稳态，把成员的 (TAT, PF, 占据期望) 写进 `tat`/`pf`/`p_hat`。所有簇的
-        全部组态拼在一起做一次静电叠加、一次电极速率计算，省掉逐簇调用的开销。
+        簇有关的跃迁速率（库仑作用按组态精确计入，`_cluster_tables`），簇外占据固定为
+        `occf`，解簇内主方程稳态，把成员的 (TAT, PF, 占据期望) 写进 `tat`/`pf`/`p_hat`。
+        """
+        for table in self._cluster_tables(occf):
+            c, block = table.cluster, table.block
+            members = c.members
+            tat[members], pf[members], p_hat[members] = cluster_steady_state(
+                c.states,
+                capture_anode=block[_B_R2A] + block[_B_R4A],
+                capture_other=block[_B_R2C] + block[_B_R4C] + table.hop_in,
+                escape_anode=block[_B_R3A] + block[_B_R5A],
+                pf=block[_B_R8],
+                escape_other=block[_B_R3C] + block[_B_R5C] + table.hop_out,
+                intra_a=c.intra_a,
+                intra_b=c.intra_b,
+                intra_rate=table.hop[:, c.intra_cols],
+            )
+
+    def _cluster_tables(
+        self, occf: np.ndarray, weights: Optional[np.ndarray] = None
+    ) -> List["_ClusterTable"]:
+        """全部强耦合簇在环境占据 `occf` 下、簇内每个组态的能级与速率表（ADR-022）。
+
+        每个簇枚举簇内 2^k 个组态，按组态的真实电荷分布重算簇成员的电极速率和与簇有关的
+        跃迁速率，簇外占据固定为 `occf`。所有簇的全部组态拼在一起做一次静电叠加、一次
+        电极速率计算，省掉逐簇调用的开销。`weights` 给出时另按它再算一遍电极速率块
+        （`_electrode_blocks` 的同名参数），放进 `weighted`。
         """
         sim, defects = self.sim, self.defects
         clusters = self._clusters
+        if not clusters:
+            return []
 
         # 全部簇的全部组态按簇拼成 (R, N)；簇 c 占第 row_start[c] 起的 2^k 行
         occ_states = np.concatenate(
@@ -1006,21 +1059,24 @@ class KMCSimulation:
             rows.append(np.repeat(np.arange(start, stop), c.members.size))
             idx.append(np.tile(c.members, stop - start))
         rows, idx = np.concatenate(rows), np.concatenate(idx)
-        blocks = self._electrode_blocks(
+        rate_inputs = (
             energy[rows, idx],
             field_at[rows, idx],
             np.concatenate(barrier_c),
             np.concatenate(barrier_a),
             idx,
         )
+        blocks = self._electrode_blocks(*rate_inputs)
+        weighted = None if weights is None else self._electrode_blocks(*rate_inputs, weights)
 
+        tables = []
         offset = 0
         for c, start, stop in zip(clusters, row_start[:-1], row_start[1:]):
             n_states, k = c.states.shape
-            block = blocks[:, offset : offset + n_states * k].reshape(_N_BLOCKS, n_states, k)
+            columns = slice(offset, offset + n_states * k)
             offset += n_states * k
 
-            # 与簇有关的跃迁速率，终态能级扣掉出发陷阱电子的库仑贡献（同 _rates）
+            # 与簇有关的跃迁速率，终态能级扣掉出发陷阱电子的库仑贡献（同 _hop_rates）
             sel = c.pairs
             e = energy[start:stop]
             hop = self._hop_geometric[sel] * miller_abrahams_factor(
@@ -1030,19 +1086,18 @@ class KMCSimulation:
             hop_out = np.zeros((n_states, k))
             np.add.at(hop_in.T, c.in_member, (occf[c.in_source] * hop[:, c.in_cols]).T)
             np.add.at(hop_out.T, c.out_member, ((1.0 - occf[c.out_target]) * hop[:, c.out_cols]).T)
-
-            members = c.members
-            tat[members], pf[members], p_hat[members] = cluster_steady_state(
-                c.states,
-                capture_anode=block[_B_R2A] + block[_B_R4A],
-                capture_other=block[_B_R2C] + block[_B_R4C] + hop_in,
-                escape_anode=block[_B_R3A] + block[_B_R5A],
-                pf=block[_B_R8],
-                escape_other=block[_B_R3C] + block[_B_R5C] + hop_out,
-                intra_a=c.intra_a,
-                intra_b=c.intra_b,
-                intra_rate=hop[:, c.intra_cols],
+            tables.append(
+                _ClusterTable(
+                    cluster=c,
+                    energy=e,
+                    block=blocks[:, columns].reshape(_N_BLOCKS, n_states, k),
+                    weighted=None if weighted is None else weighted[:, columns].reshape(_N_BLOCKS, n_states, k),
+                    hop=hop,
+                    hop_in=hop_in,
+                    hop_out=hop_out,
+                )
             )
+        return tables
 
     # ------------------------------------------------------------------
     # 主循环

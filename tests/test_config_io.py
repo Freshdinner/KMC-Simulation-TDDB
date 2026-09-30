@@ -103,7 +103,8 @@ def test_fast_trap_rate_is_optional_and_positive():
 def test_tddb_section_is_optional_and_converted():
     """tddb 段缺省为 None（纯漏电流仿真）；三个能量从 eV 换算成 J、必须为正，p₀ 从 e·Å
     换算成 C·m、必须 ≥ 0，N_T 从 cm⁻³ 换算成 m⁻³、必须 ≥ 0，生成网格与空位数上限是正整数，
-    应力时间上限必须为正，各项都必须给出（ADR-024/028/033）。"""
+    应力时间上限必须为正，d_c 从 nm 换算成 m、限流值从 A/cm² 换算成 A/m²，都必须为正，以上各项
+    都必须给出；k_TH 可省略（等温），给出时必须为正（ADR-024/028/033/036）。"""
     raw = _base_dict()
     assert config_from_dict(raw).tddb is None
     section = {
@@ -115,6 +116,8 @@ def test_tddb_section_is_optional_and_converted():
         "generation_grid": {"nx": 16, "ny": 12, "nz": 70},
         "max_generated_vacancies": 300,
         "stop_time_s": 1.0e4,
+        "percolation_distance_nm": 0.9,
+        "compliance_current_density_A_cm2": 1.0e4,
     }
     raw["tddb"] = dict(section)
     tddb = config_from_dict(raw).tddb
@@ -126,6 +129,15 @@ def test_tddb_section_is_optional_and_converted():
     assert tddb.generation_grid == (16, 12, 70)
     assert tddb.max_generated_vacancies == 300
     assert tddb.stop_time == pytest.approx(1.0e4)
+    assert tddb.percolation_distance == pytest.approx(0.9e-9)
+    assert tddb.compliance_current_density == pytest.approx(1.0e8)
+    assert tddb.thermal_conductivity is None  # 省略 k_TH：等温
+    raw["tddb"] = dict(section, thermal_conductivity_W_mK=1.5)
+    assert config_from_dict(raw).tddb.thermal_conductivity == 1.5
+    for bad in (0.0, -1.0):
+        raw["tddb"] = dict(section, thermal_conductivity_W_mK=bad)
+        with pytest.raises(ValueError, match="thermal_conductivity_W_mK"):
+            config_from_dict(raw)
     for key in ("activation_energy_eV", "precursor_ionization_energy_eV", "precursor_relaxation_energy_eV"):
         raw["tddb"] = dict(section, **{key: 0.0})
         with pytest.raises(ValueError, match=key):
@@ -140,6 +152,8 @@ def test_tddb_section_is_optional_and_converted():
         ("max_generated_vacancies", 0),
         ("max_generated_vacancies", 2.5),
         ("stop_time_s", 0.0),
+        ("percolation_distance_nm", 0.0),
+        ("compliance_current_density_A_cm2", -1.0),
     ):
         raw["tddb"] = dict(section, **{key: bad})
         with pytest.raises(ValueError, match=key):
@@ -367,7 +381,8 @@ def test_tddb_example_matches_leakage_reference_preset():
     """zro2_tddb.yaml 的材料、缺陷、电极与默认盒子 single_run.yaml 逐项相同（材料名之外），
     只把侧向尺寸改成 20×20 nm 小盒子；横向网格按团簇库仑能收敛取 hx = hy = 0.25 nm、hz 不变
     （ADR-032）；前驱的 E_t1 与 O 空位预设相同（ADR-028）；E_rel1 与材料的 huang_rhys 各自取值
-    （ADR-030）；生成单元在 z 方向与泊松网格同步长（ADR-033）。"""
+    （ADR-030）；生成单元在 z 方向与泊松网格同步长（ADR-033）；E_A = 0.95 eV、p₀ = 1 eÅ、
+    N_T = 3×10¹⁸ cm⁻³、k_TH = 1 W/(m·K)（ADR-035），d_c = 0.9 nm（ADR-036）。"""
     root = pathlib.Path(__file__).resolve().parents[1]
     tddb = load_config(str(root / "examples" / "zro2_tddb.yaml"))
     ref = load_config(str(root / "examples" / "single_run.yaml"))
@@ -393,11 +408,15 @@ def test_tddb_example_matches_leakage_reference_preset():
     assert tddb.simulation.n_events == ref.simulation.n_events
 
     assert len(tddb.seeds) == 30  # 小盒子的系综个数（ADR-026）
-    assert tddb.tddb.activation_energy == pytest.approx(4.0 * EV)
+    assert tddb.tddb.activation_energy == pytest.approx(0.95 * EV)
     assert tddb.tddb.precursor_ionization_energy == pytest.approx(tddb.defects.level.ED)
     assert tddb.tddb.precursor_relaxation_energy == pytest.approx(1.0 * EV)
-    assert tddb.tddb.dipole_moment == pytest.approx(7.1 * constants.elementary_charge * 1e-10)
-    assert tddb.tddb.precursor_concentration == pytest.approx(4.0e19 * constants.centi ** -3)
+    assert tddb.tddb.dipole_moment == pytest.approx(1.0 * constants.elementary_charge * 1e-10)
+    assert tddb.tddb.precursor_concentration == pytest.approx(tddb.defects.concentration)
+    assert tddb.tddb.precursor_concentration == pytest.approx(3.0e18 * constants.centi ** -3)
+    assert tddb.tddb.thermal_conductivity == pytest.approx(1.0)
+    assert tddb.tddb.percolation_distance == pytest.approx(0.9e-9)
+    assert tddb.tddb.compliance_current_density > 0.0
     hz = tddb.device.Lz / grid.nz
     window = tddb.device.Lz - 2.0 * tddb.defects.min_separation
     assert window / tddb.tddb.generation_grid[2] == pytest.approx(hz)

@@ -393,16 +393,38 @@ def plot_current_transient(
 
     t = 0 在对数轴上画不出来，初始状态的电流画成水平虚线；第一次生成之后的状态画成阶梯。
     """
-    time = np.asarray(time, dtype=float)
-    density = np.asarray(current_density, dtype=float) * _PER_CM2
     figure = _new_figure((7.0, 5.0))
     axes = figure.add_subplot(1, 1, 1)
-    color = _shades(_TOTAL_CMAP, 1)[0]
-    axes.axhline(density[0], color="0.45", ls="--", lw=1.0, label="t = 0 background")
+    _draw_current_transient(axes, time, current_density, end_time, fit)
+    axes.set_xlabel("t (s)")
+    axes.legend(loc="best", fontsize=9)
+    figure.tight_layout()
+    return figure
+
+
+def _draw_state_steps(axes: Axes, time: np.ndarray, values: np.ndarray, end_time: float, label: str) -> None:
+    """t = 0 的状态画成水平虚线，之后的状态画成阶梯（最后一段到 `end_time`），横轴取对数。"""
+    axes.axhline(values[0], color="0.45", ls="--", lw=1.0, label="t = 0 " + label)
     if time.size > 1:
         edges = np.append(time[1:], end_time)
-        axes.step(edges, np.append(density[1:], density[-1]), where="post", color=color, lw=1.5, label="simulation")
+        axes.step(
+            edges, np.append(values[1:], values[-1]), where="post",
+            color=_shades(_TOTAL_CMAP, 1)[0], lw=1.5, label="simulation",
+        )
         axes.set_xscale("log")
+
+
+def _draw_current_transient(
+    axes: Axes,
+    time: np.ndarray,
+    current_density: np.ndarray,
+    end_time: float,
+    fit: Optional[Tuple[float, float, np.ndarray]],
+) -> np.ndarray:
+    """在 `axes` 上画 J(t) 的阶梯与幂律拟合（双对数），返回换算成 A/cm² 的电流密度。"""
+    time = np.asarray(time, dtype=float)
+    density = np.asarray(current_density, dtype=float) * _PER_CM2
+    _draw_state_steps(axes, time, density, end_time, "background")
     if fit is not None:
         exponent, prefactor, times = fit
         times = np.asarray(times, dtype=float)
@@ -411,11 +433,53 @@ def plot_current_transient(
             color="#c00000", ls="--", lw=1.2, label="power law, n = {:.3g}".format(exponent),
         )
     axes.set_yscale("log")
-    axes.set_xlabel("t (s)")
     axes.set_ylabel(r"J (A/cm$^2$)")
     axes.set_title("Current under constant-voltage stress")
     axes.grid(True, which="both", ls=":", lw=0.5, alpha=0.6)
-    axes.legend(loc="best", fontsize=9)
+    return density
+
+
+# TDDB 轨迹的终止方式 → 终点标记的图例（渗流击穿是主判据，限流是第二停止条件）
+_STOP_LABELS = {"breakdown": "breakdown (percolation)", "compliance": "compliance reached"}
+
+
+def plot_stress_transient(
+    time: np.ndarray,
+    current_density: np.ndarray,
+    temperature: np.ndarray,
+    end_time: float,
+    fit: Optional[Tuple[float, float, np.ndarray]] = None,
+    stop: Optional[str] = None,
+) -> Figure:
+    """TDDB 应力下的电流 J(t) 与温度 T(t)，标出击穿点（PROJECT_CONTEXT_TDDB.md §7-8）。
+
+    参数
+    ----
+    time, current_density, end_time, fit : 同 `plot_current_transient`
+    temperature : 各状态的温度 [K]，与 `time` 等长（`TDDBResult.effective_temperature`）
+    stop : 轨迹的终止方式；"breakdown"（渗流判据）或 "compliance"（限流）时在终点
+        (end_time, J) 画标记并在图例里写出时刻，其余取值不画
+
+    上图是双对数的 J(t)（与 `plot_current_transient` 相同），下图是温度（°C），横轴共用。
+    """
+    time = np.asarray(time, dtype=float)
+    figure = _new_figure((7.0, 7.0))
+    top = figure.add_subplot(2, 1, 1)
+    bottom = figure.add_subplot(2, 1, 2, sharex=top)
+    density = _draw_current_transient(top, time, current_density, end_time, fit)
+    if stop in _STOP_LABELS:
+        top.plot(
+            [end_time], [density[-1]], ls="none", marker="X", ms=9, color="k",
+            label="{}, t = {:.3g} s".format(_STOP_LABELS[stop], end_time),
+        )
+    top.legend(loc="best", fontsize=9)
+
+    celsius = np.asarray(temperature, dtype=float) - constants.zero_Celsius
+    _draw_state_steps(bottom, time, celsius, end_time, "state")
+    bottom.set_xlabel("t (s)")
+    bottom.set_ylabel("T (°C)")
+    bottom.grid(True, which="both", ls=":", lw=0.5, alpha=0.6)
+    bottom.legend(loc="best", fontsize=9)
     figure.tight_layout()
     return figure
 

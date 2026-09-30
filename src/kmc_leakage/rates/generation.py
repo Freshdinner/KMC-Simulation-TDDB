@@ -21,7 +21,7 @@ docs/rate_equations.md 的 R1–R8 不对应::
 全部量为 SI 单位。
 """
 
-from typing import NamedTuple, Sequence
+from typing import NamedTuple, Sequence, Union
 
 import numpy as np
 from scipy import constants
@@ -58,7 +58,7 @@ def single_electron_capture_rate(
     phonon_energy: float,
     band_gap: float,
     m_di: float,
-    temperature: float,
+    temperature: Union[float, np.ndarray],
     n_phonon: int,
 ) -> np.ndarray:
     """R_1e：前驱单步俘获一个电子的速率 1/τ_c,12 [1/s]（式 T4，T5–T11）。
@@ -71,13 +71,17 @@ def single_electron_capture_rate(
     `phonon_energy` = ℏω₀、`band_gap`、`m_di` 取宿主介质的值。R4 对声子数
     p = 0..n_phonon−1 求和，n_phonon 要覆盖前驱的多声子线型：E_rel1/ℏω₀ ≈ 1 时引擎的
     12 项已收敛，E_rel1 = 1.0 eV（E_rel1/ℏω₀ = 25）时要约 100 项（ADR-030）。
+    `temperature` 可以是标量，也可以是与 `conduction_band` 等长的逐前驱温度（Phase 4 按
+    单元局域温度求值，§6.6），声子线型与电极费米分布都取这个温度。
     """
     energy = np.asarray(conduction_band, dtype=float) - ionization_energy
+    temperature = np.asarray(temperature, dtype=float)
+    column = temperature[..., None]  # 标量 → (1,)，逐前驱 (N,) → (N, 1)，对声子数广播
     phonon_index = np.arange(n_phonon)
     # 前驱俘获线型 L(m)（式 T10）的参数取 E_rel1/ℏω₀，与材料的 Huang-Rhys 因子 S 无关
     lineshape_parameter = relaxation_energy / phonon_energy
     weights = phonon_transition_probability(
-        phonon_index, lineshape_parameter, phonon_energy, temperature
+        phonon_index, lineshape_parameter, phonon_energy, column
     )
     energies_p = energy[:, None] + phonon_index * phonon_energy
     coupling = multiphonon_coupling(
@@ -94,7 +98,7 @@ def single_electron_capture_rate(
         transmission_p = wkb_transmission(
             side.path[:, None, :], side.barrier[:, None, :], energies_p, side.m_di_path[:, None, :]
         )
-        occupancy_p = fermi_dirac(energies_p, side.fermi_level, temperature)
+        occupancy_p = fermi_dirac(energies_p, side.fermi_level, column)
         dos_p = free_electron_dos(energies_p - side.band_bottom, side.mass)
         rate = rate + r4_multiphonon_capture(coupling, dos_p, occupancy_p, transmission_p, weights)
     return rate
@@ -117,12 +121,13 @@ def bond_break_probability(
     dipole_moment: float,
     kappa: float,
     field: np.ndarray,
-    temperature: float,
+    temperature: Union[float, np.ndarray],
 ) -> np.ndarray:
     """断键概率 P_bb = exp[−(E_A − p₀·(2+k)/3·E)/k_BT]（式 T2）。
 
     有效势垒降到 0 以下时断键不再需要热激活，P_bb 饱和为 1，生成率只剩俘获
-    速率限制（PROJECT_CONTEXT_TDDB.md §8.1）。
+    速率限制（PROJECT_CONTEXT_TDDB.md §8.1）。`temperature` 可以是与 `field` 等长的
+    逐前驱温度。
     """
     barrier = effective_activation_energy(activation_energy, dipole_moment, kappa, field)
     return np.exp(-np.clip(barrier, 0.0, None) / (constants.Boltzmann * temperature))
@@ -134,7 +139,7 @@ def bond_break_generation_rate(
     dipole_moment: float,
     kappa: float,
     field: np.ndarray,
-    temperature: float,
+    temperature: Union[float, np.ndarray],
 ) -> np.ndarray:
     """单个前驱的 O 空位生成速率 G = R_1e·P_bb [1/s]（式 T1）。
 

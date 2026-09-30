@@ -1,34 +1,43 @@
-"""TDDB 瞬态驱动（等温）：准静态双层循环。
+"""TDDB 瞬态驱动：准静态双层循环，含热反馈与击穿判据。
 
-规格见 PROJECT_CONTEXT_TDDB.md §5、§6，决策记录见 ADR-032–034。公式编号 T1–T4 是 TDDB 的
+规格见 PROJECT_CONTEXT_TDDB.md §5、§6，决策记录见 ADR-032–036。公式编号 T1–T14 是 TDDB 的
 编号（PROJECT_CONTEXT_TDDB.md 第 3 节），与 docs/rate_equations.md 的 R1–R8 不对应。
 
 电子输运事件的时间尺度（~10⁻¹³…10⁻⁶ s）比缺陷生成（秒以上）短十几个数量级，所以输运相对
 生成瞬间达到稳态（§5）。外层是缺陷生成的 Gillespie 循环，每步：
 
-1. **内层稳态**：按当前缺陷集合重建 `KMCSimulation`（静电耦合用 `IncrementalCoupling` 逐个
-   追加的那份），从上一步的占据热启动，求簇级平均场不动点（`mean_field.solve_mean_field`），
-   得到电流、分解与各缺陷占据 p。近邻表、强耦合簇与截断半径都随缺陷集合从头重算，与对同一
-   缺陷集合新建的 `KMCSimulation` 逐项相同（ADR-033）。
-2. **生成率表**（§6.1 模型 C）：各缺陷净电荷 q·(Z − p) 与外加偏压一起解一次泊松方程，在每个
+1. **内层稳态**：按当前缺陷集合与输运温度重建 `KMCSimulation`（静电耦合用
+   `IncrementalCoupling` 逐个追加的那份），从上一步的占据热启动，求簇级平均场不动点
+   （`mean_field.solve_mean_field`），得到电流、分解与各缺陷占据 p。近邻表、强耦合簇与截断
+   半径都随缺陷集合从头重算，与对同一缺陷集合新建的 `KMCSimulation` 逐项相同（ADR-033）。
+2. **功率与温度**（式 T13/T14，`thermal.py`）：在内层稳态上逐事件累加放热 ΔE·R，介质内的
+   功率解稳态热方程得到温度场（两电极恒温 T_amb）。配置了 k_TH 才开热反馈：温度场在生成
+   单元中心的值进下一步的生成率，缺陷处按放热加权的平均温度作为下一步内层输运的全局标量
+   温度 T(t)（§6.6）。输运与热不迭代自洽，每步只走一遍"输运 → 功率 → 温度"（§8.4），
+   所以第 k 条记录的电流是在第 k−1 条记录的功率给出的温度下求的；温度随生成一步步爬升，
+   这一步的滞后可以忽略。没有 k_TH 时温度固定为环境值（Phase 3 的等温口径）。
+3. **生成率表**（§6.1 模型 C）：各缺陷净电荷 q·(Z − p) 与外加偏压一起解一次泊松方程，在每个
    生成单元中心对一个虚拟前驱求单步俘获速率 R_1e（式 T4，两侧电极 R2 + R4，与引擎处理真实
    陷阱同一口径）与断键概率 P_bb（式 T2），单元生成率 G_cell = N_T·V_cell·R_1e·P_bb（式 T1）。
    单元中心离已有缺陷不到 min_separation 的单元放不下新空位，生成率记 0。
-3. **抽事件**：Δt = −ln(r)/ΣG，按 G_cell 选单元，在单元内连续随机落点，与已有缺陷的距离小于
+4. **击穿判据**（§6.3）：间距 < d_c 的缺陷连边，某个连通分量同时触到两个电极（离电极界面
+   < d_c）即击穿，这一刻就是 t_BD；电流密度达到限流值是第二停止条件。论文的"25 个空位、
+   间距 ≤ 6 Å"团簇只作标志记录，不作判据。
+5. **抽事件**：Δt = −ln(r)/ΣG，按 G_cell 选单元，在单元内连续随机落点，与已有缺陷的距离小于
    min_separation 就在单元内重抽（§6.1、§6.8）。
-4. **出生**：新空位与初始缺陷同一物种（能级按缺陷预设的分布抽样，Z、S、m_di 取预设），出生
-   占据 = 1（§6.7）：它此刻净电荷为 0，不改变其余缺陷处的电势与电场。静电耦合增量扩一行
-   一列（§6.4），回到 1。
+6. **出生**：新空位与初始缺陷同一物种（能级按缺陷预设的分布抽样，S、m_di 取预设），出生时
+   被前驱俘获的那个电子占据，电荷态为 0（中性）；电子发射后空位才带 +1（施主约定，代码里
+   `charge_state` = +1 是电子离开后的电荷，§6.7、ADR-035）。所以它出生这一刻不改变其余缺陷
+   处的电势与电场。静电耦合增量扩一行一列（§6.4），回到 1。
 
-温度固定为环境值（Phase 3 等温，§6.6）；击穿判据（渗流）属于 Phase 4，这里按生成空位数上限或
-应力时间上限停止。
+未击穿时按生成空位数上限或应力时间上限停止。
 
 **电荷记账**：新空位出生时带的那个电子来自前驱俘获，不经过电极，不计入输运电流（§6.7）。
 平均场没有时间推进，每条记录的电流就是该缺陷集合下的稳态电流。
 """
 
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -52,6 +61,7 @@ from .defects import (
     generate_defects,
     layer_bulk_defects,
     minimum_image_delta,
+    neighbor_pairs,
 )
 from .electrostatics import PoissonSolver
 from .kmc import (
@@ -66,10 +76,15 @@ from .kmc import (
 )
 from .mean_field import solve_mean_field
 from .rates import CaptureElectrode, bond_break_generation_rate, single_electron_capture_rate
+from .thermal import heat_release, power_map, solve_temperature, transport_temperature
 
 # 前驱俘获 R4 的声子项数：E_rel1 = 1.0 eV（E_rel1/ℏω₀ = 25）时 80 项最大相对误差 1e-4、
 # 100 项到机器精度（ADR-030）
 _PRECURSOR_N_PHONON = 100
+# 论文的致密团簇标志"25 个空位、间距 ≤ 6 Å"（§6.3）：只记录最大团簇的大小与首次达到的时刻，
+# 不作击穿判据（那是针对 ~2.7 nm 膜定的）
+_DENSE_CLUSTER_DISTANCE = 0.6 * constants.nano
+_DENSE_CLUSTER_SIZE = 25
 # 生成单元分块求 R_1e：每块 (块长, 声子数, 路径点) 的数组约 0.4 MB，留在缓存里。16×16×70 单元上
 # 实测单进程 256 块 4.3 s、8 块 3.6 s；16 个进程并发时 256 块 36 s（内存带宽占满）、8 块 9–14 s
 _CELL_CHUNK = 8
@@ -221,7 +236,11 @@ def admissible_cells(cells: GenerationCells, positions: np.ndarray, device: Devi
 
 
 def generation_rates(
-    inner: KMCSimulation, occupancy: np.ndarray, tddb: TDDBConfig, cells: GenerationCells
+    inner: KMCSimulation,
+    occupancy: np.ndarray,
+    tddb: TDDBConfig,
+    cells: GenerationCells,
+    temperature: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """各生成单元的 O 空位生成速率 G_cell = N_T·V_cell·R_1e·P_bb [1/s]（式 T1，§6.1 模型 C）。
 
@@ -234,18 +253,23 @@ def generation_rates(
     - R_1e = Σ_两侧电极 (R2 + R4)（式 T4，`single_electron_capture_rate`，R4 取
       `_PRECURSOR_N_PHONON` 个声子项）；P_bb 的场加速项 p₀·(2+k)/3·E 里 k 取静态 κ（式 T2）。
 
+    `temperature` 是各单元中心的局域温度（长度 = 单元数，热反馈时取温度场的值，§6.6），
+    R_1e 的声子线型与电极费米分布、P_bb 都按它求值；缺省用内层的工作点温度。
+
     单元中心落在已有缺陷 min_separation 之内的单元记 0（`admissible_cells`）：那里放不下新空位，
     而带电缺陷近旁的库仑场经 (2+κ)/3 放大后会把 P_bb 压到饱和，把这个速率算给整个单元会让
     ΣG 随生成网格加密发散（ADR-033）。
     """
     device, solver, defects = inner.device, inner.solver, inner.defects
-    voltage, temperature = inner.sim.voltage, inner.sim.temperature
+    voltage = inner.sim.voltage
     material = device.stack.single_material
     q = constants.elementary_charge
     rates = np.zeros(len(cells))
     live = np.flatnonzero(admissible_cells(cells, defects.positions, device))
     if live.size == 0 or tddb.precursor_concentration == 0.0:
         return rates
+    local = temperature is not None
+    temperature = np.asarray(temperature, dtype=float)[live] if local else inner.sim.temperature
 
     rho = solver.deposit(defects.positions, q * (defects.charge_state - occupancy))
     phi = solver.solve(rho, top_boundary_potential(device, voltage))
@@ -294,7 +318,7 @@ def generation_rates(
             material.phonon_energy,
             material.band_gap,
             material.m_di,
-            temperature,
+            temperature[rows] if local else temperature,
             _PRECURSOR_N_PHONON,
         )
     per_precursor = bond_break_generation_rate(
@@ -374,9 +398,30 @@ def _cluster_diagnostics(inner: KMCSimulation) -> Tuple[int, int, int, int]:
     return len(members), max_cluster, int(sizes.max()), int(np.sum(sizes > _CLUSTER_MAX_SIZE))
 
 
+def percolation_clusters(
+    positions: np.ndarray, device: DeviceConfig, distance: float
+) -> Tuple[np.ndarray, np.ndarray]:
+    """渗流团簇（§6.3）：间距 < `distance` 的缺陷连边后的连通分量。
+
+    返回 (各缺陷所在分量的编号 (N,), 各分量是否同时触到两个电极 (分量数,))。电极当作一个
+    节点、与缺陷按同一截断连边：缺陷离电极界面 < `distance` 就算触到该电极。xy 取最小镜像。
+    与强耦合簇（按速率连边、用于电流估计，ADR-022）是两回事。
+    """
+    n = positions.shape[0]
+    if n == 0:
+        return np.zeros(0, dtype=int), np.zeros(0, dtype=bool)
+    pairs = neighbor_pairs(positions, device.Lx, device.Ly, distance)
+    graph = coo_matrix((np.ones(len(pairs)), (pairs.a, pairs.b)), shape=(n, n))
+    count, labels = connected_components(graph, directed=False)
+    z = positions[:, 2]
+    cathode = np.bincount(labels, z < distance, count) > 0
+    anode = np.bincount(labels, z > device.Lz - distance, count) > 0
+    return labels, cathode & anode
+
+
 @dataclass
 class TDDBResult:
-    """一条 TDDB 瞬态轨迹（恒压应力、等温）。
+    """一条 TDDB 瞬态轨迹（恒压应力）。
 
     第 k 条记录是第 k 次生成之后的输运稳态（k = 0 为 t = 0 的初始缺陷集合），电流在
     [time[k], time[k+1]) 上保持不变，最后一条保持到 `end_time`。电流均为净值，正号 = 电子由
@@ -384,7 +429,7 @@ class TDDBResult:
     """
 
     voltage: float  # [V]
-    temperature: float  # [K]
+    temperature: float  # 环境温度（电极恒温）[K]
     area: float  # 电极面积 [m^2]
     seed: int
     time: np.ndarray  # (K,) 各记录的时刻 [s]
@@ -401,17 +446,38 @@ class TDDBResult:
     max_cluster_size: np.ndarray  # (K,) 最大簇大小（≤ 簇大小上限）
     largest_component: np.ndarray  # (K,) 切分之前的最大强耦合分量
     n_split: np.ndarray  # (K,) 超过簇大小上限、被切开的分量数
-    end_time: float  # 轨迹终点 [s]
-    stop_reason: str  # "max_generated" | "stop_time" | "no_generation"
+    # --- 热（式 T13/T14，§6.6）---
+    power: np.ndarray  # (K,) 介质内放出的总功率 [W]（负值 = 净吸热）
+    transport_temperature: np.ndarray  # (K,) 内层输运用的全局标量温度 [K]（上一条记录的功率给出）
+    effective_temperature: np.ndarray  # (K,) 本条记录功率下、缺陷处按放热加权的平均温度 [K]
+    peak_temperature: np.ndarray  # (K,) 本条记录温度场的最高值 [K]
+    # --- 击穿判据（§6.3）---
+    percolation_size: np.ndarray  # (K,) 最大渗流团簇（间距 < d_c）的缺陷数
+    dense_cluster_size: np.ndarray  # (K,) 最大致密团簇（间距 < 6 Å，论文的标志）的缺陷数
+    end_time: float  # 轨迹终点 [s]；击穿时就是 t_BD
+    # "breakdown"（渗流）| "compliance"（限流）| "max_generated" | "stop_time" | "no_generation"
+    stop_reason: str
     n_initial: int  # 初始缺陷个数：编号 < n_initial 的是初始缺陷，其余是应力生成的空位
     birth_time: np.ndarray  # (N,) 各缺陷的出生时刻 [s]，初始缺陷记 0
     defects: DefectEnsemble  # 终态缺陷集合
     occupancy: np.ndarray  # 终态的平均场占据
+    thermal: bool  # 是否开了热反馈（配置了 k_TH）
 
     @property
     def current_density(self) -> np.ndarray:
         """各记录的电流密度 [A/m^2]。"""
         return self.current / self.area
+
+    @property
+    def breakdown_time(self) -> Optional[float]:
+        """渗流判据触发的时刻 t_BD [s]；没有击穿时为 None。"""
+        return self.end_time if self.stop_reason == "breakdown" else None
+
+    @property
+    def dense_cluster_time(self) -> Optional[float]:
+        """最大致密团簇首次达到 25 个空位的时刻 [s]（论文的标志）；没有达到时为 None。"""
+        reached = np.flatnonzero(self.dense_cluster_size >= _DENSE_CLUSTER_SIZE)
+        return float(self.time[reached[0]]) if reached.size else None
 
     @property
     def n_generated(self) -> np.ndarray:
@@ -435,8 +501,9 @@ def run_tddb(
     """按 `config` 跑一条 TDDB 瞬态轨迹（模块文档的双层循环）。
 
     初始缺陷与 `KMCSimulation(config)` 是同一个实现：同一个种子的随机数流先生成初始缺陷，
-    之后的生成事件接着用同一个流。应力工况取 `simulation.voltage` / `temperature`，生成参数取
-    `config.tddb`。本阶段只做单层（PROJECT_CONTEXT_TDDB.md §1）。
+    之后的生成事件接着用同一个流。应力工况取 `simulation.voltage`，环境温度取
+    `simulation.temperature`，生成、热与击穿参数取 `config.tddb`。本阶段只做单层
+    （PROJECT_CONTEXT_TDDB.md §1）。
 
     `progress(已生成空位数, 时刻 [s], 电流密度 [A/m^2])` 每求完一个状态调用一次。
     """
@@ -457,15 +524,30 @@ def run_tddb(
     full = np.zeros(len(cells), dtype=bool)
     birth_time = np.zeros(n_initial)
     occupancy: Optional[np.ndarray] = None
+    thermal = tddb.thermal_conductivity is not None
+    ambient = sim.temperature
+    transport = ambient  # 内层输运的全局标量温度，第一步取环境温度
     time = 0.0
     records: List[dict] = []
 
     while True:
-        inner = KMCSimulation(config, defects=defects, coupling=coupling, solver=solver)
+        step_config = replace(config, simulation=replace(sim, temperature=transport))
+        inner = KMCSimulation(step_config, defects=defects, coupling=coupling, solver=solver)
         mf = solve_mean_field(inner, occupancy)
         occupancy = mf.occupancy
-        rates = np.where(full, 0.0, generation_rates(inner, occupancy, tddb, cells))
+        heat = heat_release(inner, occupancy)
+        cell_temperature, effective, peak = None, ambient, ambient
+        if thermal:
+            temperature_field = solve_temperature(
+                solver, power_map(solver, defects.positions, heat.defect), tddb.thermal_conductivity, ambient
+            )
+            cell_temperature = solver.interpolate(temperature_field, cells.centers)
+            effective = transport_temperature(solver, temperature_field, defects.positions, heat.defect, ambient)
+            peak = float(temperature_field.max())
+        rates = np.where(full, 0.0, generation_rates(inner, occupancy, tddb, cells, cell_temperature))
         n_clusters, max_cluster, largest, n_split = _cluster_diagnostics(inner)
+        labels, spanning = percolation_clusters(defects.positions, device, tddb.percolation_distance)
+        dense_labels, _ = percolation_clusters(defects.positions, device, _DENSE_CLUSTER_DISTANCE)
         records.append(
             dict(
                 time=time,
@@ -482,11 +564,23 @@ def run_tddb(
                 max_cluster_size=max_cluster,
                 largest_component=largest,
                 n_split=n_split,
+                power=heat.dielectric,
+                transport_temperature=transport,
+                effective_temperature=effective,
+                peak_temperature=peak,
+                percolation_size=int(np.bincount(labels).max(initial=0)),
+                dense_cluster_size=int(np.bincount(dense_labels).max(initial=0)),
             )
         )
         if progress is not None:
             progress(len(defects) - n_initial, time, mf.current_density)
 
+        if np.any(spanning):
+            end_time, stop_reason = time, "breakdown"
+            break
+        if mf.current_density >= tddb.compliance_current_density:
+            end_time, stop_reason = time, "compliance"
+            break
         if len(defects) - n_initial >= tddb.max_generated_vacancies:
             end_time, stop_reason = time, "max_generated"
             break
@@ -501,8 +595,9 @@ def run_tddb(
         time += dt
         defects = append_defects(defects, layer_bulk_defects(device, 0, position, rng))
         coupling = coupling.extended(position)
-        occupancy = np.append(occupancy, 1.0)  # §6.7：出生即占据，此刻净电荷为 0
+        occupancy = np.append(occupancy, 1.0)  # §6.7：出生即被一个电子占据，电荷态为 0
         birth_time = np.append(birth_time, time)
+        transport = effective
 
     def column(key: str, dtype=float) -> np.ndarray:
         return np.array([record[key] for record in records], dtype=dtype)
@@ -528,12 +623,19 @@ def run_tddb(
         max_cluster_size=column("max_cluster_size", int),
         largest_component=column("largest_component", int),
         n_split=column("n_split", int),
+        power=column("power"),
+        transport_temperature=column("transport_temperature"),
+        effective_temperature=column("effective_temperature"),
+        peak_temperature=column("peak_temperature"),
+        percolation_size=column("percolation_size", int),
+        dense_cluster_size=column("dense_cluster_size", int),
         end_time=end_time,
         stop_reason=stop_reason,
         n_initial=n_initial,
         birth_time=birth_time,
         defects=defects,
         occupancy=occupancy,
+        thermal=thermal,
     )
 
 
@@ -603,6 +705,8 @@ def write_tddb_csv(result: TDDBResult, path: str) -> None:
                 "generation_rate_s", "space_charge_C", "empty_generated",
                 "mf_iterations", "mf_residual", "mf_converged",
                 "n_clusters", "max_cluster_size", "largest_component", "n_split",
+                "power_W", "T_transport_K", "T_effective_K", "T_peak_K",
+                "percolation_size", "dense_cluster_size",
             ]
         )
         for k in range(result.time.size):
@@ -621,5 +725,11 @@ def write_tddb_csv(result: TDDBResult, path: str) -> None:
                     str(int(result.max_cluster_size[k])),
                     str(int(result.largest_component[k])),
                     str(int(result.n_split[k])),
+                    "{:.6e}".format(result.power[k]),
+                    "{:.6f}".format(result.transport_temperature[k]),
+                    "{:.6f}".format(result.effective_temperature[k]),
+                    "{:.6f}".format(result.peak_temperature[k]),
+                    str(int(result.percolation_size[k])),
+                    str(int(result.dense_cluster_size[k])),
                 ]
             )

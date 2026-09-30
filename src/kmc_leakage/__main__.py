@@ -336,6 +336,8 @@ def _report_tddb(result: TDDBResult) -> None:
     """打印一条 TDDB 瞬态轨迹的摘要。"""
     density = result.current_density * _PER_CM2
     reasons = {
+        "breakdown": "击穿（渗流团簇连通两个电极），t_end 即 t_BD",
+        "compliance": "电流密度达到限流值",
         "max_generated": "生成空位数达到上限",
         "stop_time": "应力时间达到上限",
         "no_generation": "总生成率为 0（G = 0），电流保持初始值",
@@ -347,6 +349,23 @@ def _report_tddb(result: TDDBResult) -> None:
         )
     )
     typer.echo("  J(t=0) = {:.4e} A/cm²   J(t_end) = {:.4e} A/cm²".format(density[0], density[-1]))
+    dense_time = result.dense_cluster_time
+    typer.echo(
+        "  渗流团簇最大 {} 个缺陷；致密团簇（间距 < 6 Å）最大 {} 个，{}".format(
+            int(result.percolation_size[-1]), int(result.dense_cluster_size.max()),
+            "未达到 25 个" if dense_time is None else "t = {:.4e} s 首次达到 25 个".format(dense_time),
+        )
+    )
+    if result.thermal:
+        typer.echo(
+            "  热反馈：介质功率最高 {:.3e} W，缺陷处加权温度最高 {:.2f} °C，温度场最高 {:.2f} °C".format(
+                float(result.power.max()),
+                float(result.effective_temperature.max()) - constants.zero_Celsius,
+                float(result.peak_temperature.max()) - constants.zero_Celsius,
+            )
+        )
+    else:
+        typer.echo("  等温（未配置 tddb.thermal_conductivity_W_mK）")
     if result.time.size > 1:
         fit, _ = fit_transient(result)
         typer.echo(
@@ -371,9 +390,9 @@ def tddb(
     config: str = typer.Option(..., "--config", help="YAML 配置文件路径（需要 tddb 段）"),
     seed: Optional[int] = typer.Option(None, "--seed", help="缺陷实现与生成事件的种子，缺省用 simulation.seed"),
     out: Optional[str] = typer.Option(None, "--out", help="轨迹 CSV 输出路径"),
-    plot: Optional[str] = typer.Option(None, "--plot", help="I-t 双对数图输出路径"),
+    plot: Optional[str] = typer.Option(None, "--plot", help="I-t（双对数）与温度演化图输出路径"),
 ) -> None:
-    """TDDB 瞬态运行（等温、恒压应力）：一个缺陷实现的 I-t 轨迹。"""
+    """TDDB 瞬态运行（恒压应力，热反馈与渗流击穿判据）：一个缺陷实现的 I-t 轨迹。"""
     from dataclasses import replace
 
     cfg = load_config(config)
@@ -394,13 +413,16 @@ def tddb(
         write_tddb_csv(result, out)
         typer.echo("已写入 {}".format(out))
     if plot is not None:
-        from .visualization import plot_current_transient
+        from .visualization import plot_stress_transient
 
         fit = None
         if result.time.size > 1:
             power_law, times = fit_transient(result)
             fit = (power_law.exponent, power_law.prefactor, times)
-        plot_current_transient(result.time, result.current_density, result.end_time, fit).savefig(plot, dpi=150)
+        plot_stress_transient(
+            result.time, result.current_density, result.effective_temperature, result.end_time,
+            fit, result.stop_reason,
+        ).savefig(plot, dpi=150)
         typer.echo("已写入 {}".format(plot))
 
 

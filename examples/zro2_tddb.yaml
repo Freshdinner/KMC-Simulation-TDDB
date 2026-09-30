@@ -1,16 +1,16 @@
-# TDDB 仿真配置：ZrO₂ 单层 MIM（TDDB 阶段的起点，规格见 PROJECT_CONTEXT_TDDB.md）
+# TDDB 仿真配置：ZrO₂ 单层 MIM（规格见 PROJECT_CONTEXT_TDDB.md）
 #
 # 材料与缺陷沿用漏电流侧的参考预设（docs/physics_model.md），与
 # examples/single_run.yaml 逐项相同（材料名之外）。t=0 的初始缺陷集合由现有
 # generate_defects 按下面的 defects 段生成；应力生成的 O 空位与初始缺陷是同一物种，
-# 共用这一段（能级分布、S、m_di、Z=+1），不另设物种参数（第 1 节、6.7）。
+# 共用这一段（能级分布、S、m_di、施主型 charge_state_Z），不另设物种参数（第 1 节、6.7）。
 #
 # 与默认盒子（single_run.yaml，50×50×8 nm、60 个缺陷）的差别只在侧向尺寸及随之
 # 配套的网格与系综个数：TDDB 在 20×20 nm 小盒子里跑（6.3），
 # 20×20×8 nm、3×10^18 cm^-3 → 10 个初始缺陷（ADR-025/026）。
 #
-# 现在能跑的是初始缺陷集合下的稳态本底（run / sweep / plot 照常用）；tddb 段
-# 由 io.py 读入，供后续 Phase 的生成率与瞬态驱动使用。
+# 初始缺陷集合下的稳态本底用 run / sweep / plot；TDDB 瞬态轨迹用
+# python -m kmc_leakage tddb --config examples/zro2_tddb.yaml --seed 1 --out it.csv --plot it.png
 
 materials:
   ZrO2:
@@ -29,10 +29,11 @@ layers:
   - material: ZrO2
     thickness_nm: 8.0
     defects:
-      # 初始缺陷与生成的 O 空位共用这一段；生成的空位出生即占据（6.7），
-      # 那是瞬态驱动给的初值，不属于这段缺陷配置
+      # 初始缺陷与生成的 O 空位共用这一段。生成的空位出生时被前驱俘获的那个电子占据，
+      # 电荷态为 0（中性），电子发射后才带 +1（6.7、ADR-035）；出生占据是瞬态驱动给的初值，
+      # 不属于这段缺陷配置
       concentration_cm3: 3.0e18    # 只管 t=0 的初始缺陷个数
-      charge_state_Z: 1.0          # 施主型，未占据时 +1，不可双占据
+      charge_state_Z: 1.0          # 施主型：电子离开后（未占据）+1，占据一个电子时中性，不可双占据
       min_separation_nm: 0.5       # 缺陷两两之间 + 缺陷到电极界面的最小距离
       level:
         mode: gaussian
@@ -88,34 +89,34 @@ sweep:
 ensemble:
   count: 30
 
-# TDDB 缺陷生成参数（第 3 节参数表，ADR-024）。已定取值的参数写成键，由 io.py 读入
-# 并换算到 SI；待定参数以注释占位，定值后在用到它的 Phase 加入解析。
+# TDDB 缺陷生成、热反馈与击穿判据参数（第 3 节参数表，ADR-024/035/036）。由 io.py 读入并换算到 SI。
 tddb:
-  activation_energy_eV: 4.0    # E_A：无场下形成 Frenkel 对的激活能（式 T2；双电子机制下即 E_A,2e）
+  # E_A：无场下形成 Frenkel 对的激活能（式 T2；双电子机制下即 E_A,2e）。与 p₀ 成套选：
+  # p₀ = 1 eÅ 时 3 V / 8 nm 下场加速项压低 0.5 eV，有效势垒 0.45 eV（ADR-035）
+  activation_energy_eV: 0.95
   # 前驱单步俘获参数（式 T4/T9/T10）
   precursor_ionization_energy_eV: 1.15   # E_t1，取与 O 空位预设相同的值（= defects.level.ED_eV，ADR-028）
   # E_rel1：第一次电子俘获导致 O-Zr-O 键断裂、O 空位形成的弛豫能（论文 SiO₂ 里对应 Si-O 键，
   # 1.5 eV）。只进生成率：E_rel1/ℏω₀ 作为 R_1e 多声子线型的参数，与输运用的 huang_rhys_S 无关。
   # 暂取 1.0 eV（ADR-030）
   precursor_relaxation_energy_eV: 1.0
-  # p₀：前驱有效偶极矩均值 [e·Å]（式 T2/T3）。与 E_A 成套选：按 3 V / 25 °C 下
-  # t_BD ≈ 100 s 定的初值，有效势垒 0.45 eV；3.4 V 以上 P_bb 饱和（ADR-028）
-  dipole_moment_eA: 7.1
-  # N_T：前驱位点浓度，体积生成率 N_T·R_1e·P_bb 的前置因子（6.1 模型 C）。暂借 SiO₂ 论文值，
-  # 与 p₀ 的推算同一取值（ADR-028/033）；只改变时间标尺，不改变 I-t 的形状
-  precursor_concentration_cm3: 4.0e19
+  dipole_moment_eA: 1.0   # p₀：前驱有效偶极矩均值 [e·Å]（式 T2/T3，ADR-035）
+  # N_T：前驱位点浓度，体积生成率 N_T·R_1e·P_bb 的前置因子（6.1 模型 C）。与初始缺陷浓度相同
+  # （ADR-035）；只改变时间标尺，不改变 I-t 的形状
+  precursor_concentration_cm3: 3.0e18
   # 生成单元网格：铺满 20×20 nm × z ∈ [0.5, 7.5] nm 的可采样窗口，外层 Gillespie 在单元表上
   # 抽生成事件（6.1，ADR-033）
   generation_grid:
     nx: 16
     ny: 16
     nz: 70
-  # Phase 3 还没有击穿判据（渗流判据在 Phase 4），按生成空位数或应力时间上限停止。
-  # 每个空位约 4 s 机时（单进程），300 个约 20 分钟
-  max_generated_vacancies: 300
+  # 击穿判据（6.3，ADR-036）：间距 < d_c 的空位连边，某个连通分量同时触到两个电极即击穿
+  percolation_distance_nm: 0.9
+  # 限流值：电流密度达到它即停，是击穿的第二停止条件（ADR-036）
+  compliance_current_density_A_cm2: 1.0e4
+  # k_TH：ZrO₂ 热导率（式 T14，非晶/ALD 薄膜量级，ADR-035）。删掉这一项即等温运行
+  thermal_conductivity_W_mK: 1.0
+  # 未击穿时按生成空位数或应力时间上限停止（机时上限）
+  max_generated_vacancies: 3000
   stop_time_s: 1.0e4
-  # 恒压应力取 simulation 段的 voltage_V / temperature_C（ADR-033），实验数据到手后改那里
-  # 待定参数：
-  #   k_TH       ZrO₂ 热导率（式 T14，Phase 4）
-  #   d_c        渗流判据的连边截断，0.6–0.9 nm 之间（6.3，Phase 4）
-  #   限流值     current compliance（Phase 4）
+  # 恒压应力取 simulation 段的 voltage_V、环境温度取 temperature_C（ADR-033），实验数据到手后改那里

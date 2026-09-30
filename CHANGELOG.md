@@ -7,6 +7,49 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **TDDB Phase 4：热反馈、渗流击穿判据与限流**（新增 `thermal.py`：`heat_release`、`HeatRelease`、`power_map`、
+  `solve_temperature`、`transport_temperature`；`tddb.py` 新增 `percolation_clusters`，`run_tddb` 接入热反馈、
+  渗流判据与限流，`TDDBResult` 新增功率 / 三种温度 / 渗流与致密团簇大小 / `breakdown_time` / `dense_cluster_time`，
+  CSV 加列；`generation_rates` 接受逐单元温度，`single_electron_capture_rate` 与 `bond_break_*` 接受逐前驱温度；
+  `kmc.py` 拆出 `_trap_state`、`_hop_rates`、`_cluster_tables`，`_electrode_blocks` 加 `weights` 参数（结果逐位不变）；
+  `config.TDDBConfig` / `io._tddb` 新增 `percolation_distance_nm`、`compliance_current_density_A_cm2`、
+  `thermal_conductivity_W_mK`；`visualization.plot_stress_transient`，CLI `tddb` 的摘要与 `--plot` 相应改写；
+  `zro2_tddb.yaml` 改为 E_A = 0.95 eV、p₀ = 1 eÅ、N_T = 3×10¹⁸ cm⁻³ 并填入新字段；新增 `tests/test_thermal.py`
+  （10 项），`test_tddb.py` 新增 6 项，`test_config_io.py`、`test_visualization.py` 相应改写与新增；新增
+  ADR-035–037；逐轨迹数据与图存入 `results/9.30/phase4/`；同步 README、`CLAUDE.md` 命令段、
+  `PROJECT_CONTEXT_TDDB.md` §1、§3、§6.3、§6.6、§6.7、§8.1、§8.4、§8.6、§9、§10）。
+
+  **进入 Phase 4 前的决定**（ADR-035）：p₀ 预设 1 eÅ、N_T 预设 3×10¹⁸ cm⁻³；E_A 配套取 0.95 eV（3 V / 8 nm 下
+  有效势垒 0.45 eV；仍取 4 eV 时有效势垒 3.5 eV，几乎不生成）；k_TH = 1 W/(m·K)；d_c 暂取 0.9 nm、做成配置项；
+  限流值作第二停止条件。生成空位的电荷态：出生时被前驱俘获的电子占据、电荷态 0（中性），电子发射后才为 +1——
+  这就是施主约定，代码里 `charge_state_Z` = +1 是电子离开后的电荷，代码不改、文档措辞改写，ADR-034 待定第 3 条关闭。
+
+  **做法**（ADR-036）：式 T13 在内层稳态上逐事件累加 ΔE·R——弹性隧穿在陷阱处不放热，R4/R5 的 p 声子项放出 /
+  吸收 p·ℏω（按声子数加权的求和与速率走同一套公式），R7 放出的能量平分给两端，R8 在陷阱处吸收 E_D、导带电子的
+  能量进阳极；孤立陷阱用平均场能级，强耦合簇按组态与主方程稳态分布精确记账。式 T14 直接调用
+  `PoissonSolver.solve`（ρ = P·κε₀/k_TH）。温度场在生成单元中心的值进生成率；缺陷处按放热加权的平均温度作为
+  下一步内层输运的全局标量 T(t)；输运与热每步只走一遍（§8.4）。渗流判据按几何距离 < d_c 连边、电极当节点，
+  第一条连通两个电极的记录结束轨迹（t_BD）；电流密度达到限流值是第二停止条件。`PROJECT_CONTEXT_TDDB.md` §3 的
+  T14 原写作 P = k_TH·∇²T，与 §4 与表格行的 ∇²T = −P/k_TH 符号相反，改为 P = −k_TH·∇²T。
+
+  **验证**：均匀功率的温度剖面逐点等于解析抛物线；介质 + 电极放热 = U·I_陷阱（孤立陷阱、整体成簇两种情形到
+  平均场收敛残差，混合情形 ≤ 1.3×10⁻⁹）；零偏压热平衡占据下陷阱处的声子放热相消；开热反馈的轨迹上每步的输运
+  温度 = 上一步功率给出的加权温度，功率与温度记录与按该步稳态重算的逐位相同；开热反馈时 G = 0 仍逐位等于稳态
+  结果；渗流判据对构造的缺陷链判对连通 / 不连通，轨迹停在第一条连通的记录上，限流停在第一条达到限流值的记录。
+  `kmc.py` 拆分后在 96 个缺陷、17 个强耦合簇的体系上 KMC、平均场与短 TDDB 轨迹与改动前逐位相同，等温 TDDB 轨迹
+  与改动前逐位相同。
+
+  **物理结果**（ADR-037，8 nm 参考工况 seed 1–4 各 400 个空位，另有 3 nm 薄膜对照）：**Phase 4 的三条物理验收都
+  不满足**。前驱俘获速率 R_1e 只算电极隧穿，阴极侧 0.5–1.5 nm 是约 1e7 s⁻¹ 的平台，过了约 1.6 nm 每纳米降约 e¹⁷，
+  生成的空位全部落在 z ≤ 1.69 nm，最大渗流团簇就是阴极侧这一层，离阳极还差 5 nm 以上，渗流判据触发不了（3 nm
+  膜也没有连通）。空态空位的正空间电荷让生成越来越快，I-t 是"台阶 → 陡升"（双对数拟合 R² 0.39–0.83）。击穿前
+  J ≤ 1.9 A/cm²，缺陷处升温不到 2×10⁻⁴ K（3 nm 膜 ≤ 0.01 K），开 / 关热反馈生成的是同一串事件。另外暴露出内层
+  求解器的两处不自洽：强耦合分量被切开后簇级平均场不守恒电流（410 个缺陷的终态上阴极净注入与阳极净收集差
+  258 倍），平均场处理的陷阱对的 MA 因子不满足平均场自身的细致平衡（零偏压下有 5.2×10⁻¹¹ W 的环流"热泵"）；
+  两者让致密空位层上的功率与温度列失真，对电流的影响在 5% 以内。诊断脚本里把平均场陷阱对的事件能量差换成两端
+  平均场能级之差，零偏压环流降到 R8 伪电流的量级（代码未改）。前驱俘获通道、内层求解器的修法、KMC 条件通量
+  估计量的虚拟跃迁速率、限流值取值列为待定。涉及 T13/T14 与 T1/T2/T4（经 R2/R4），R1–R8 的公式无改动。
+
 - **TDDB Phase 3：等温瞬态驱动**（新增 `tddb.py`：`run_tddb`、`TDDBResult`、`IncrementalCoupling`、
   `generation_cells` / `generation_rates` / `admissible_cells`、`fit_power_law` / `fit_transient`、
   `write_tddb_csv`；`electrostatics.PoissonSolver.field_readout_sources`（增量耦合的伴随源）；
