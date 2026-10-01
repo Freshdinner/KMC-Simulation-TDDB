@@ -7,6 +7,10 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **ZrO₂ 热导率 k_TH 改为 2 W/(m·K)**（ADR-040，替换 ADR-035 第 4 条中的 1 W/(m·K)；`examples/zro2_tddb.yaml`、
+  `test_config_io.py` 的断言、`PROJECT_CONTEXT_TDDB.md` §1 与参数表、README 配置段）。用户定。温升 ∝ 1/k_TH，同一功率下减半；
+  Phase 4 参考工况下热反馈本就可以忽略，结论不变。`pytest tests/ -v`：294 passed。
+
 - **TDDB 前驱从近旁已占据的陷阱俘获电子**（ADR-039，按 (a) 关闭 ADR-037 待定第 1 条；`rates/generation.py` 新增
   `trap_precursor_capture_rate`（式 T4/T5 的陷阱项，p·R7）与 `CaptureTraps`，`single_electron_capture_rate` 加可选参数
   `traps`；`tddb.generation_rates` 传入近旁陷阱的位置、平均场能级与占据，新增 `_trap_capture_cutoff`；

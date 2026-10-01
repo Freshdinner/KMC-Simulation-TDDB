@@ -114,8 +114,8 @@ tddb:
   percolation_distance_nm: 0.9
   # 限流值：电流密度达到它即停，是击穿的第二停止条件（ADR-036）
   compliance_current_density_A_cm2: 1.0e4
-  # k_TH：ZrO₂ 热导率（式 T14，非晶/ALD 薄膜量级，ADR-035）。删掉这一项即等温运行
-  thermal_conductivity_W_mK: 1.0
+  # k_TH：ZrO₂ 热导率（式 T14，ADR-040）。删掉这一项即等温运行
+  thermal_conductivity_W_mK: 2.0
   # 未击穿时按生成空位数或应力时间上限停止（机时上限）
   max_generated_vacancies: 3000
   stop_time_s: 1.0e4

@@ -382,7 +382,7 @@ def test_tddb_example_matches_leakage_reference_preset():
     只把侧向尺寸改成 20×20 nm 小盒子；横向网格按团簇库仑能收敛取 hx = hy = 0.25 nm、hz 不变
     （ADR-032）；前驱的 E_t1 与 O 空位预设相同（ADR-028）；E_rel1 与材料的 huang_rhys 各自取值
     （ADR-030）；生成单元在 z 方向与泊松网格同步长（ADR-033）；E_A = 0.95 eV、p₀ = 1 eÅ、
-    N_T = 3×10¹⁸ cm⁻³、k_TH = 1 W/(m·K)（ADR-035），d_c = 0.9 nm（ADR-036）。"""
+    N_T = 3×10¹⁸ cm⁻³（ADR-035），k_TH = 2 W/(m·K)（ADR-040），d_c = 0.9 nm（ADR-036）。"""
     root = pathlib.Path(__file__).resolve().parents[1]
     tddb = load_config(str(root / "examples" / "zro2_tddb.yaml"))
     ref = load_config(str(root / "examples" / "single_run.yaml"))
@@ -414,7 +414,7 @@ def test_tddb_example_matches_leakage_reference_preset():
     assert tddb.tddb.dipole_moment == pytest.approx(1.0 * constants.elementary_charge * 1e-10)
     assert tddb.tddb.precursor_concentration == pytest.approx(tddb.defects.concentration)
     assert tddb.tddb.precursor_concentration == pytest.approx(3.0e18 * constants.centi ** -3)
-    assert tddb.tddb.thermal_conductivity == pytest.approx(1.0)
+    assert tddb.tddb.thermal_conductivity == pytest.approx(2.0)
     assert tddb.tddb.percolation_distance == pytest.approx(0.9e-9)
     assert tddb.tddb.compliance_current_density > 0.0
     hz = tddb.device.Lz / grid.nz

@@ -526,7 +526,7 @@ tddb:
   generation_grid: {nx: 16, ny: 16, nz: 70}  # 生成单元数，铺满 z ∈ [standoff, Lz−standoff]（正整数）
   percolation_distance_nm: 0.9           # d_c：渗流击穿判据的连边截断（必须为正）
   compliance_current_density_A_cm2: 1.0e4  # 限流值：电流密度达到它即停，击穿的第二停止条件（必须为正）
-  thermal_conductivity_W_mK: 1.0         # k_TH：热导率（式 T14，必须为正）；省略即等温
+  thermal_conductivity_W_mK: 2.0         # k_TH：热导率（式 T14，必须为正）；省略即等温
   max_generated_vacancies: 3000          # 未击穿时生成空位数达到此值即停（机时上限）
   stop_time_s: 1.0e4                     # 应力时间上限 [s]
 ```
@@ -538,7 +538,7 @@ E_t1 取与 O 空位预设相同的值。E_rel1 是第一次电子俘获导致 O
 多声子线型的参数——与电子输运用的材料 `huang_rhys_S` 无关，现在暂取 1.0 eV（ADR-030）。p₀ = 1 eÅ 与
 E_A = 0.95 eV 成套选：3 V / 8 nm 下场加速项 p₀·(2+κ)/3·E 压低 0.5 eV，有效势垒 0.45 eV，有效势垒对电压的
 斜率 0.167 eV/V（25 °C 下 P_bb 每伏约 2.8 个数量级），5.7 V 降到 0。N_T 取与初始缺陷相同的 3×10¹⁸ cm⁻³，
-只改变时间标尺。k_TH 取非晶 / ALD 薄膜量级的 1 W/(m·K)，d_c 取 §6.3 给的 0.6–0.9 nm 的上端（ADR-035）。
+只改变时间标尺。k_TH 取 2 W/(m·K)（ADR-040），d_c 取 §6.3 给的 0.6–0.9 nm 的上端（ADR-035）。
 生成率场加速项里的相对介电常数 k 直接取材料的 `kappa`，前驱的 ℏω₀ 取材料的 `phonon_energy_eV`，都不另设
 配置项。
 
