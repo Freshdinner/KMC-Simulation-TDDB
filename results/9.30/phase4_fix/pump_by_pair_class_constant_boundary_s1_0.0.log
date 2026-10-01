@@ -1,0 +1,5 @@
+U=0.0 isolated-isolated  pairs=  9363  sum|net|=4.2606e+03 /s  sum gross=3.1467e+08 /s
+U=0.0 cluster-isolated   pairs= 19374  sum|net|=6.4316e+07 /s  sum gross=5.6432e+09 /s
+U=0.0 cluster-cluster    pairs=  9746  sum|net|=7.0364e+06 /s  sum gross=2.0496e+08 /s
+U=0.0 cluster MF: P_diel=-3.8010e-12 W  J=1.587302e-06 A/cm2
+U=0.0 per-trap MF: P_diel=-4.4564e-18 W  sum=3.1652e-20 W  U*I_trap=0.0000e+00 W  J=9.508724e-07 A/cm2 conv=True it=38

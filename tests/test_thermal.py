@@ -2,9 +2,9 @@
 
 - 热流（T14）：均匀功率 + 两端恒温下 T 剖面与解析抛物线一致；零功率退回环境温度；
 - 功率（T13）按 CIC 分到网格，积分等于各缺陷放热之和；
-- 放热记账（T13）的能量守恒：介质 + 两侧电极的放热 = U·I_陷阱。孤立陷阱（逐陷阱平均场）与
-  整个体系就是一个强耦合簇（主方程精确稳态）两种情形严格成立；强耦合簇与簇外陷阱之间的
-  跃迁只近似守恒；
+- 放热记账（T13）的能量守恒：介质 + 两侧电极的放热 = U·I_陷阱。孤立陷阱（逐陷阱平均场）、
+  整个体系就是一个强耦合簇（主方程精确稳态）、强耦合簇与簇外陷阱混合、强耦合分量被切开
+  四种情形都严格成立（ADR-038）；
 - 零偏压热平衡下没有净放热（细致平衡），只剩 R8 无反向通道的极小项；
 - 输运温度是缺陷处温度按放热加权的平均，没有放热时就是环境温度。
 """
@@ -88,17 +88,33 @@ def test_heat_release_conserves_energy(build):
     assert total == pytest.approx(sim.sim.voltage * _trap_current(result), rel=1e-8)
 
 
-def test_heat_release_with_clusters_and_environment_nearly_conserves_energy():
-    """强耦合簇与簇外陷阱混合的稀疏体系：簇与簇外之间的跃迁由簇一侧按组态记账，与簇外陷阱在平均场
-    里看到的通量不完全相同，只近似守恒（三陷阱体系、17 个簇的 3×10¹⁹ cm⁻³ 体系实测 ≤ 2e-9）。强耦合
-    分量被切开的致密空位层上内层解不守恒电流，这条不成立（ADR-037）。"""
-    device = make_device(defects=make_defect_config(concentration_cm3=3.0e19))
-    for sim in (_three_trap_sim(), KMCSimulation(make_config(voltage=3.0, seed=1, device=device))):
-        assert len(sim.cluster_members) > 0
-        result = solve_mean_field(sim)
-        heat = heat_release(sim, result.occupancy)
-        total = heat.dielectric + heat.cathode + heat.anode
-        assert total == pytest.approx(sim.sim.voltage * _trap_current(result), rel=1e-6)
+@pytest.mark.parametrize(
+    "build",
+    [
+        _three_trap_sim,  # 一个簇 + 一个簇外陷阱
+        lambda: KMCSimulation(  # 3×10¹⁹ cm⁻³：17 个簇，没有被切开的分量
+            make_config(voltage=3.0, seed=1, device=make_device(defects=make_defect_config(concentration_cm3=3.0e19)))
+        ),
+        lambda: KMCSimulation(  # 1×10²⁰ cm⁻³、10×10 nm：60 个陷阱的强耦合分量被切开，有簇–簇边界
+            make_config(
+                voltage=3.0,
+                seed=1,
+                device=make_device(Lx=10e-9, Ly=10e-9, defects=make_defect_config(concentration_cm3=1.0e20)),
+            )
+        ),
+    ],
+    ids=["cluster+free", "17-clusters", "split-component"],
+)
+def test_heat_release_with_clusters_and_environment_conserves_energy(build):
+    """强耦合簇与簇外陷阱混合、强耦合分量被切开时，能量守恒同样严格成立（ADR-038）：每条陷阱间跃迁的
+    速率只算一次、两端共用，放热按两端各自分布下的能级记账，不动点处每个陷阱粒子数守恒。原来簇一侧
+    按组态、簇外一侧按平均占据各算一遍边界通量，Phase 4 终态上放热总和是 U·I 的 3–14 倍（ADR-037）。"""
+    sim = build()
+    assert len(sim.cluster_members) > 0
+    result = solve_mean_field(sim)
+    heat = heat_release(sim, result.occupancy)
+    total = heat.dielectric + heat.cathode + heat.anode
+    assert total == pytest.approx(sim.sim.voltage * _trap_current(result), rel=1e-8)
 
 
 def test_no_net_phonon_heat_in_zero_bias_equilibrium():

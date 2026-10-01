@@ -16,18 +16,24 @@ TDDB 的编号，与 docs/rate_equations.md 的 R1–R8 不对应。
   （docs/rate_equations.md），它的能量放进阳极。
 - R7（陷阱间跃迁 a→b）：放出的能量平分给两端陷阱。
 
-孤立陷阱在平均场里的能量取平均场能级 E_i，跃迁放热 E_a − E_b；每个陷阱在不动点处粒子数
-平衡，这些能量项逐陷阱相消，陷阱与电极的放热之和严格等于 U·I_陷阱。强耦合簇（ADR-022）
-按簇内每个组态的能级和簇内主方程稳态分布精确记账，簇内跃迁放热取完整事件能量差
-−ΔH = E_a − E_b + U_ab（与 R7 的 MA 因子同一口径，ADR-021 F02）；簇内能量平衡由稳态分布
-保证。簇与簇外陷阱之间的跃迁由簇一侧记账，簇外一端的能量取平均场能级：簇一侧的通量是
-按组态算的，与簇外陷阱在平均场里看到的通量不完全相同，这部分放热只近似守恒。
+速率与内层簇级平均场走同一套（`mean_field.mean_field_rates`，ADR-038），一次 a→b 跃迁的放热
+是电子在 a 上的能级减去它落到 b 上的能级，每一端的能级取它在自身分布下的值：
+
+- 孤立陷阱取平均场能级 E_i；强耦合簇（ADR-022）的成员取簇内每个组态下的能级，按簇内主方程
+  稳态分布 π 求期望。簇的电极事件同样按组态记账。
+- 簇内跃迁：完整事件能量差 −ΔH = E_a − E_b + U_ab（与簇内 R7 的 MA 因子同一口径，ADR-021 F02）。
+- 簇–孤立跃迁：速率随簇的组态变，放热 E_j − e_i(s) 或 e_i(s) − E_j 按 π 与孤立一端的占据加权。
+- 两端都按平均场处理的对（孤立–孤立、簇–簇）：速率 k_ab 与组态无关，
+
+      放热 = k_ab·[(1 − p_b)·⟨n_a·E_a⟩ − p_a·⟨(1 − n_b)·E_b⟩]，
+
+  ⟨n·E⟩、⟨(1 − n)·E⟩ 对孤立陷阱是 p·E、(1 − p)·E，对簇成员按 π 对组态求；两个孤立陷阱之间
+  就是 k_ab·p_a·(1 − p_b)·(E_a − E_b)。
+
+每个陷阱（每个簇）收到与送出的能量按同一组通量、同一组能级记账，不动点处粒子数守恒，介质 +
+两侧电极的放热就严格等于 U·I_陷阱——强耦合分量被切开时也成立。
 
 R1 不经过缺陷，电子弹性穿过整个介质，能量全部放进电极，不产生介质内的功率。
-
-**功率的可信度取决于内层解**：这里的记账把内层稳态的事件通量原样换成能量流。致密空位层上强耦合
-分量被切开后，簇级平均场不动点不守恒电流；平均场处理的陷阱对的 MA 因子不满足平均场自身的细致
-平衡，会形成环流、把晶格的能量搬进电极。这两种情况下算出的介质功率失真（实测与验证见 ADR-037）。
 
 **热流（式 T14）**：介质内的功率按 CIC 分到泊松网格（`power_map`），稳态热方程
 k_TH·∇²T = −P、两电极恒温 T_amb（热沉）、xy 周期，直接调用 `PoissonSolver.solve`：它解
@@ -41,7 +47,6 @@ from dataclasses import dataclass
 import numpy as np
 from scipy import constants
 
-from .clusters import cluster_generator, stationary_distribution_gth
 from .electrostatics import PoissonSolver
 from .kmc import (
     _B_R2A,
@@ -55,6 +60,7 @@ from .kmc import (
     _B_R8,
     KMCSimulation,
 )
+from .mean_field import mean_field_rates
 
 
 @dataclass(frozen=True)
@@ -118,64 +124,53 @@ def heat_release(sim: KMCSimulation, occupancy: np.ndarray) -> HeatRelease:
     fermi = (sim._fermi_cathode, sim._fermi_anode)
     weights = sim._phonon_weights * sim._phonon_offsets  # L_p·p·ℏω
 
-    energy, field, barrier_c, barrier_a = sim._trap_state(p)
-    blocks = sim._electrode_blocks(energy, field, barrier_c, barrier_a)
-    phonon = sim._electrode_blocks(energy, field, barrier_c, barrier_a, weights=weights)
-    trap, cathode, anode = _electrode_event_heat(p, energy, ED, blocks, phonon, *fermi)
+    rates = mean_field_rates(sim, p, weights)
+    energy, cluster_of = rates.energy, rates.cluster_of
+    trap, cathode, anode = _electrode_event_heat(p, energy, ED, rates.blocks, rates.weighted, *fermi)
 
-    # 陷阱间跃迁：两端都不在簇里的对按平均场记账，其余由簇一侧记账
-    pairs = sim._pairs
-    in_cluster = np.zeros(n, dtype=bool)
-    for members in sim.cluster_members:
-        in_cluster[members] = True
+    # 各陷阱占据时与空时能级的期望 ⟨n·E⟩、⟨(1−n)·E⟩：孤立陷阱取平均场，簇成员下面按组态覆盖
+    occupied_energy = p * energy
+    empty_energy = (1.0 - p) * energy
     hop_heat = np.zeros(n)
-    mean_field_pair = ~in_cluster[pairs.a] & ~in_cluster[pairs.b]
-    a, b = pairs.a[mean_field_pair], pairs.b[mean_field_pair]
-    flow = sim._hop_rates(energy)[mean_field_pair] * p[a] * (1.0 - p[b])
-    released = flow * (energy[a] - energy[b])
-    hop_heat += 0.5 * (np.bincount(a, released, n) + np.bincount(b, released, n))
 
-    for table in sim._cluster_tables(p, weights):
+    def deposit(ends, amount):
+        for end in ends:
+            hop_heat[:] += 0.5 * np.bincount(end, amount, n)
+
+    for table, pi in zip(rates.tables, rates.distributions):
         c = table.cluster
-        members, states = c.members, c.states
-        block, e, hop = table.block, table.energy, table.hop
-        capture = block[_B_R2A] + block[_B_R4A] + (block[_B_R2C] + block[_B_R4C] + table.hop_in)
-        escape = block[_B_R3A] + block[_B_R5A] + block[_B_R8] + (block[_B_R3C] + block[_B_R5C] + table.hop_out)
-        pi = stationary_distribution_gth(
-            cluster_generator(states, capture, escape, c.intra_a, c.intra_b, hop[:, c.intra_cols])
-        )
-        occupied = states.astype(float)
+        members, states, e, rate = c.members, c.states, table.energy, table.hop
         trap_s, cathode_s, anode_s = _electrode_event_heat(
-            occupied, e[:, members], ED[members], block, table.weighted, *fermi
+            states.astype(float), e[:, members], ED[members], table.block, table.weighted, *fermi
         )
         trap[members], cathode[members], anode[members] = pi @ trap_s, pi @ cathode_s, pi @ anode_s
 
         # 簇内跃迁：完整事件能量差 −ΔH = E_a − E_b + U_ab
         ga, gb = members[c.intra_a], members[c.intra_b]
         allowed = states[:, c.intra_a] & ~states[:, c.intra_b]
-        released = np.sum(
-            pi[:, None] * allowed * hop[:, c.intra_cols]
-            * (e[:, ga] - e[:, gb] + sim._hop_U_ab[c.pairs[c.intra_cols]]),
-            axis=0,
-        )
-        # 簇外 → 成员：簇外一端的能量取平均场能级
-        source, gm = c.in_source, members[c.in_member]
-        released_in = np.sum(
-            pi[:, None] * ~states[:, c.in_member] * p[source] * hop[:, c.in_cols]
-            * (energy[source] - e[:, gm]),
-            axis=0,
-        )
-        # 成员 → 簇外：目标在别的簇里时记在那个簇的"簇外 → 成员"里，这里跳过
-        own = ~in_cluster[c.out_target]
-        target, go = c.out_target[own], members[c.out_member[own]]
-        released_out = np.sum(
-            pi[:, None] * states[:, c.out_member[own]] * (1.0 - p[target]) * hop[:, c.out_cols[own]]
-            * (e[:, go] - energy[target]),
-            axis=0,
-        )
-        for ends, amount in (((ga, gb), released), ((source, gm), released_in), ((go, target), released_out)):
-            for end in ends:
-                hop_heat += 0.5 * np.bincount(end, amount, n)
+        deposit((ga, gb), pi @ (
+            allowed * rate[:, c.intra_cols] * (e[:, ga] - e[:, gb] + sim._hop_U_ab[c.pairs[c.intra_cols]])
+        ))
+        # 簇–孤立：速率按成员的组态能级，孤立一端取平均场能级
+        free = cluster_of[c.in_source] < 0
+        source, gm = c.in_source[free], members[c.in_member[free]]
+        deposit((source, gm), pi @ (
+            ~states[:, c.in_member[free]] * p[source] * rate[:, c.in_cols[free]] * (energy[source] - e[:, gm])
+        ))
+        free = cluster_of[c.out_target] < 0
+        target, go = c.out_target[free], members[c.out_member[free]]
+        deposit((go, target), pi @ (
+            states[:, c.out_member[free]] * (1.0 - p[target]) * rate[:, c.out_cols[free]] * (e[:, go] - energy[target])
+        ))
+        occupied_energy[members] = pi @ (states * e[:, members])
+        empty_energy[members] = pi @ (~states * e[:, members])
+
+    # 两端都按平均场处理的对（孤立–孤立、簇–簇）：常数速率，两端能量各取自身分布下的期望
+    a, b = sim._pairs.a, sim._pairs.b
+    shared = (cluster_of[a] < 0) == (cluster_of[b] < 0)
+    shared &= (cluster_of[a] < 0) | (cluster_of[a] != cluster_of[b])
+    a, b = a[shared], b[shared]
+    deposit((a, b), rates.hop[shared] * ((1.0 - p[b]) * occupied_energy[a] - p[a] * empty_energy[b]))
 
     return HeatRelease(
         defect=trap + hop_heat, cathode=float(cathode.sum()), anode=float(anode.sum())

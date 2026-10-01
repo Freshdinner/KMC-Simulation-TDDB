@@ -1,20 +1,37 @@
 """簇级平均场内层求解器：TDDB 外层每步"解输运到稳态"的默认路径。
 
-规格见 PROJECT_CONTEXT_TDDB.md §6.2、§6.9，决策记录见 ADR-031。
+规格见 PROJECT_CONTEXT_TDDB.md §6.2、§6.9，决策记录见 ADR-031、ADR-038。
 
 TDDB 外层每生成一个空位都要重求一次输运稳态，KMC 当主路径机时不可行（§6.2）。这里
 不做时间推进，直接求占据的不动点 p = F(p)：
 
-- F 就是 KMC 电流估计量在给定占据下的条件稳态占据。`KMCSimulation._rates(p)` 按占据 p
-  叠加静电环境、算全部速率；`_trap_flux` 给出每个陷阱的条件稳态占据 p̂ 与阳极净通量。
-  孤立陷阱走单陷阱公式（`_conditional_flux`），跃迁供给按邻居的分数占据加权，即平均场
-  Pauli 阻塞；强耦合簇（ADR-022）内部枚举 2^k 个组态、按各组态的真实电荷分布重算速率、
-  解簇内主方程稳态，簇外陷阱的分数占据作为环境。
+- F 是给定平均占据 p 下的条件稳态占据（`mean_field_flux`）。按 p 叠加静电环境得到各陷阱
+  的平均场能级 E_i(p) 与电极速率（`KMCSimulation._trap_state` / `_electrode_blocks`）。孤立
+  陷阱走单陷阱公式（`_conditional_flux`），跃迁供给按邻居的分数占据加权，即平均场 Pauli
+  阻塞；强耦合簇（ADR-022）内部枚举 2^k 个组态、按各组态的真实电荷分布重算速率
+  （`_cluster_tables`）、解簇内主方程稳态，簇外陷阱的分数占据作为环境。
 - 所以簇内的 Pauli / 库仑关联精确计入，簇与簇之间、孤立陷阱之间按平均电荷计，即
   "簇级平均场"。孤立陷阱是 k=1 的特例；整个体系就是一个簇时，不动点就是主方程精确
   稳态。
+- 陷阱间跃迁按两端归属分三类（ADR-038），每一条跃迁的速率只算一次，两端共用：
+  1. **簇内对**：按组态求值，事件能量差含 −U_ab（ADR-021 F02），与 KMC 相同。
+  2. **两端都按平均场处理的对**（孤立–孤立，以及分属两个簇的簇–簇对）：R7 用两端平均场
+     能级之差 ΔH = E_b(p) − E_a(p)（`mean_field_hop_rates`），不减 U_ab，速率与组态无关。
+     KMC 的 ΔH = E_b − U_ab − E_a 是"a 占据、b 空"这一具体组态下的事件能量差；按平均占据
+     求出的能级已经含对方的平均库仑贡献，再减 U_ab 会让正反两个方向都多减，平均场自身的
+     细致平衡被破坏，零偏压下也有环流（ADR-037）。用平均场能级之差时，零偏压的平均场
+     平衡 p_i = f(E_i(p)) 让每一对的正反向通量逐对相等。两侧通量都是 p_a·(1 − p_b)·k_ab。
+  3. **簇–孤立对**：簇成员一端取它在每个簇内组态 s 下的能级 e_i(s)，孤立一端取平均场
+     能级 E_j(p)，R7 的 ΔH 就是两者之差，速率随簇的组态变。簇的生成矩阵用这组按组态的
+     速率（乘 p_j 或 1 − p_j）；孤立陷阱一侧用同一组速率按簇内稳态分布 π 求平均
+     （`MeanFieldRates.hop_in/hop_out`）。两侧通量相同，所以电流连续；零偏压下孤立陷阱
+     p_j = f(E_j(p))，这条跃迁对簇来说就是费米能级处的库，簇内链在每个组态下都满足细致
+     平衡，没有环流。速率若取与组态无关的常数，就与簇内按组态求值的电极速率满足不了细致
+     平衡，零偏压下会经"电极 → 成员 → 边界"形成环流（ADR-038 的实测）。
+- 簇–簇对要精确就得按两个簇稳态分布的乘积平均，迭代状态要带上各簇的分布，这里不做；
+  它们按第 2 类处理，电流连续、能量守恒照样精确，零偏压下留一个小环流（ADR-038）。
 - 不动点处的阳极净通量就是电流，与 KMC 的条件通量估计量是同一个公式，只是占据组态
-  换成了平均占据。R1 与组态无关，照旧加在总电流上。
+  换成了平均占据、跃迁速率按上面三类取。R1 与组态无关，照旧加在总电流上。
 
 **迭代变量取 ln p，收敛判据是占据的相对残差** max|ln p̂ − ln p| ≤ `_TOL`。占据很小的
 陷阱可以经快跃迁供给邻居：p_a = 1e-10、跃迁 1e10 s⁻¹ 就是 1 s⁻¹ 的供给，与低场下的
@@ -29,13 +46,27 @@ ln 空间放不下），所以第一步直接取 p̂(p₀)，之后在 ln p 上�
 KMC 的快陷阱（ADR-023）只改变时间推进，平均场没有时间推进，不用它（§6.9 第 4 条）。
 """
 
-from dataclasses import dataclass
-from typing import Dict, List, Optional
+from dataclasses import dataclass, replace
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from scipy import constants
 
-from .kmc import KMCSimulation
+from .clusters import cluster_flux, cluster_generator, stationary_distribution_gth
+from .kmc import (
+    _B_R2A,
+    _B_R2C,
+    _B_R3A,
+    _B_R3C,
+    _B_R4A,
+    _B_R4C,
+    _B_R5A,
+    _B_R5C,
+    _B_R8,
+    KMCSimulation,
+    _ClusterTable,
+)
+from .rates import miller_abrahams_factor
 
 # 收敛判据：占据的相对残差 max|ln p̂ − ln p| ≤ _TOL
 _TOL = 1e-10
@@ -69,6 +100,154 @@ def _log_occupancy(p: np.ndarray) -> np.ndarray:
         return np.maximum(np.log(p), _LOG_FLOOR)
 
 
+def mean_field_hop_rates(sim: KMCSimulation, energy: np.ndarray) -> np.ndarray:
+    """两端都按平均场处理的陷阱对的跃迁速率（R7），近邻表上各有序对一个值，形状 (P,)。
+
+    R6 的几何因子乘 MA 因子，事件能量差取两端平均场能级之差 ΔH = E_b − E_a（`energy` 是
+    平均场能级 E_i(p)），不减 U_ab，理由见模块文档。簇内对与簇–孤立对不用这一项，它们
+    按簇内组态求值（`mean_field_rates`）。
+    """
+    pairs = sim._pairs
+    return sim._hop_geometric * miller_abrahams_factor(
+        energy[pairs.a], energy[pairs.b], sim.sim.temperature
+    )
+
+
+@dataclass(frozen=True)
+class MeanFieldRates:
+    """平均占据 p 下内层平均场的全部速率（ADR-038）。
+
+    不动点映射 F（`mean_field_flux`）与式 T13 的放热记账（`thermal.heat_release`）共用这一份，
+    两者的通量与能量出自同一组速率。
+    """
+
+    energy: np.ndarray  # (N,) 平均场能级 E_i(p)
+    blocks: np.ndarray  # (9, N) 电极速率块
+    weighted: Optional[np.ndarray]  # (9, N) 按替换的声子线型再算的电极速率块，未请求时为 None
+    hop: np.ndarray  # (P,) 两端按平均场处理时的跃迁速率（`mean_field_hop_rates`）
+    cluster_of: np.ndarray  # (N,) 所在强耦合簇的编号，孤立陷阱为 −1
+    # 各簇的组态表：簇内跃迁按组态（含 −U_ab），簇–孤立边界按成员的组态能级，簇–簇边界取 `hop`；
+    # hop_in / hop_out 是这组速率乘环境占据后的总和
+    tables: List[_ClusterTable]
+    distributions: List[np.ndarray]  # 各簇的簇内稳态分布 π，与 `tables` 一一对应
+    hop_in: np.ndarray  # (N,) 孤立陷阱的跃迁流入总速率（源是簇成员时按 π 求平均）
+    hop_out: np.ndarray  # (N,) 孤立陷阱的跃迁流出总速率（目标是簇成员时按 π 求平均）
+
+
+def _cluster_generator_rates(table: _ClusterTable) -> Tuple[np.ndarray, ...]:
+    """簇的生成矩阵所需的 (阳极俘获, 其余俘获, 阳极 TAT 逃逸, PF, 其余逃逸)，口径同 `_cluster_flux`。"""
+    block = table.block
+    return (
+        block[_B_R2A] + block[_B_R4A],
+        block[_B_R2C] + block[_B_R4C] + table.hop_in,
+        block[_B_R3A] + block[_B_R5A],
+        block[_B_R8],
+        block[_B_R3C] + block[_B_R5C] + table.hop_out,
+    )
+
+
+def mean_field_rates(
+    sim: KMCSimulation, occupancy: np.ndarray, weights: Optional[np.ndarray] = None
+) -> MeanFieldRates:
+    """平均占据 `occupancy` 下的全部速率、各簇的组态表与簇内稳态分布（三类跃迁见模块文档）。
+
+    `weights` 给出时另按它再算一遍电极速率块（`KMCSimulation._electrode_blocks` 的同名参数），
+    放进 `weighted` 与各簇表的 `weighted`，供放热记账用。
+    """
+    p = np.asarray(occupancy, dtype=float)
+    n = sim.n_defects
+    temperature = sim.sim.temperature
+    energy, field, barrier_c, barrier_a = sim._trap_state(p)
+    blocks = sim._electrode_blocks(energy, field, barrier_c, barrier_a)
+    weighted = None
+    if weights is not None:
+        weighted = sim._electrode_blocks(energy, field, barrier_c, barrier_a, weights=weights)
+    hop = mean_field_hop_rates(sim, energy)
+
+    cluster_of = np.full(n, -1)
+    for label, members in enumerate(sim.cluster_members):
+        cluster_of[members] = label
+    a, b = sim._pairs.a, sim._pairs.b
+    # 孤立陷阱与孤立陷阱之间：常数速率乘对方的平均占据；与簇成员之间的部分在下面按 π 补上
+    hop_in = np.bincount(b, hop * p[a] * (cluster_of[a] < 0), n)
+    hop_out = np.bincount(a, hop * (1.0 - p[b]) * (cluster_of[b] < 0), n)
+
+    tables, distributions = [], []
+    for table in sim._cluster_tables(p, weights):
+        c = table.cluster
+        members, states, e = c.members, c.states, table.energy
+        geometric = sim._hop_geometric[c.pairs]
+        rate = table.hop.copy()  # 簇内列沿用组态求值（含 −U_ab），边界列下面重写
+        source_free = cluster_of[c.in_source] < 0
+        target_free = cluster_of[c.out_target] < 0
+        cols = c.in_cols
+        rate[:, cols] = hop[c.pairs[cols]]
+        rate[:, cols[source_free]] = geometric[cols[source_free]] * miller_abrahams_factor(
+            energy[c.in_source[source_free]], e[:, members[c.in_member[source_free]]], temperature
+        )
+        cols = c.out_cols
+        rate[:, cols] = hop[c.pairs[cols]]
+        rate[:, cols[target_free]] = geometric[cols[target_free]] * miller_abrahams_factor(
+            e[:, members[c.out_member[target_free]]], energy[c.out_target[target_free]], temperature
+        )
+        n_states, k = states.shape
+        member_in = np.zeros((n_states, k))
+        member_out = np.zeros((n_states, k))
+        np.add.at(member_in.T, c.in_member, (p[c.in_source] * rate[:, c.in_cols]).T)
+        np.add.at(member_out.T, c.out_member, ((1.0 - p[c.out_target]) * rate[:, c.out_cols]).T)
+        table = replace(table, hop=rate, hop_in=member_in, hop_out=member_out)
+
+        capture_anode, capture_other, escape_anode, pf, escape_other = _cluster_generator_rates(table)
+        pi = stationary_distribution_gth(
+            cluster_generator(
+                states, capture_anode + capture_other, escape_anode + pf + escape_other,
+                c.intra_a, c.intra_b, rate[:, c.intra_cols],
+            )
+        )
+        # 孤立一侧：同一组按组态的速率按 π 求平均（跳往成员要成员空，成员跳出要成员占据）
+        occupied = states.astype(float)
+        cols = c.in_cols[source_free]
+        hop_out += np.bincount(
+            c.in_source[source_free], pi @ ((1.0 - occupied[:, c.in_member[source_free]]) * rate[:, cols]), n
+        )
+        cols = c.out_cols[target_free]
+        hop_in += np.bincount(
+            c.out_target[target_free], pi @ (occupied[:, c.out_member[target_free]] * rate[:, cols]), n
+        )
+        tables.append(table)
+        distributions.append(pi)
+
+    return MeanFieldRates(
+        energy=energy,
+        blocks=blocks,
+        weighted=weighted,
+        hop=hop,
+        cluster_of=cluster_of,
+        tables=tables,
+        distributions=distributions,
+        hop_in=hop_in,
+        hop_out=hop_out,
+    )
+
+
+def mean_field_flux(
+    sim: KMCSimulation, occupancy: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """平均占据 `occupancy` 下每个陷阱的阳极净通量 (TAT, PF) 与条件稳态占据 p̂（不动点映射 F）。
+
+    孤立陷阱走单陷阱公式，簇成员按簇内稳态分布给出（`clusters.cluster_flux`，与 KMC 估计量
+    同一个公式）。通量单位 1/s。
+    """
+    rates = mean_field_rates(sim, occupancy)
+    tat, pf, p_hat = sim._conditional_flux(rates.blocks, rates.hop_in, rates.hop_out)
+    for table, pi in zip(rates.tables, rates.distributions):
+        c = table.cluster
+        tat[c.members], pf[c.members], p_hat[c.members] = cluster_flux(
+            pi, c.states, *_cluster_generator_rates(table), c.intra_a, c.intra_b, table.hop[:, c.intra_cols]
+        )
+    return tat, pf, p_hat
+
+
 def solve_mean_field(
     sim: KMCSimulation, occupancy: Optional[np.ndarray] = None
 ) -> MeanFieldResult:
@@ -83,8 +262,7 @@ def solve_mean_field(
     x_history: List[np.ndarray] = []
     g_history: List[np.ndarray] = []
     for iterations in range(1, _MAX_ITER + 1):
-        blocks, hop = sim._rates(p)
-        tat, pf, p_hat = sim._trap_flux(p, blocks, hop)
+        tat, pf, p_hat = mean_field_flux(sim, p)
         x_hat = _log_occupancy(p_hat)
         if iterations == 1:
             # 初值可能含 0，第一步直接取 p̂(p₀)，Anderson 历史从下一步开始

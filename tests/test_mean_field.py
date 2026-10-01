@@ -1,28 +1,50 @@
-"""簇级平均场内层求解器（TDDB Phase 2，ADR-031，PROJECT_CONTEXT_TDDB.md §6.2、§6.9、§9）。
+"""簇级平均场内层求解器（TDDB Phase 2，ADR-031/038，PROJECT_CONTEXT_TDDB.md §6.2、§6.9、§9）。
 
 - 孤立的强耦合簇上等于主方程精确稳态（与 test_master_equation.py 同一体系，rtol 1e-10）；
 - 强耦合簇之外还有一个弱耦合陷阱（test_fast_traps.py 的三陷阱体系）：簇级平均场与精确稳态
   差 <1e-9，去掉分簇的逐陷阱平均场高 2.4%——那是簇内 Pauli/库仑关联被平均掉的结果；
-- 没有强耦合时就是逐陷阱平均场：电流逐位等于单陷阱条件通量在不动点处的值，不动点与独立
-  写的简单阻尼迭代一致；
+- 没有强耦合时就是逐陷阱平均场：陷阱间跃迁的 MA 因子取两端平均场能级之差，电流逐位等于
+  单陷阱条件通量在不动点处的值，不动点与独立写的简单阻尼迭代一致；
 - 收敛判据是占据的相对残差：占据只有 1e-10 量级、经快跃迁供给邻居的陷阱也要收敛到位；
 - 不动点与初值无关，从不动点热启动一次求值即收敛；未收敛时如实标出；
-- 按机制、按缺陷分解之和 = 总电流；无缺陷时只剩 R1。
+- 按机制、按缺陷分解之和 = 总电流；无缺陷时只剩 R1；
+- 电流连续（ADR-038）：强耦合分量被切开的致密体系上，阴极净注入 = 阳极净收集；
+- 零偏压平衡（ADR-038）：逐陷阱平均场里每一对陷阱的正反向通量相等（KMC 的 −U_ab 口径做不到）；
+  簇–孤立边界按簇内组态求速率，零偏压下没有净通量。
 """
 
 import numpy as np
 import pytest
 from scipy import constants
 
-from conftest import make_config, make_defect_config, make_device
+from conftest import M_E, make_config, make_defect_config, make_device, make_material
 from test_fast_traps import _three_trap_sim
 from test_master_equation import _two_trap_sim
 from kmc_leakage import mean_field
-from kmc_leakage.kmc import MECHANISMS, KMCSimulation
+from kmc_leakage.config import DeviceConfig, DielectricStack, ElectrodeMaterial
+from kmc_leakage.defects import DefectEnsemble
+from kmc_leakage.kmc import (
+    _B_R2A,
+    _B_R2C,
+    _B_R3A,
+    _B_R3C,
+    _B_R4A,
+    _B_R4C,
+    _B_R5A,
+    _B_R5C,
+    _B_R8,
+    _CLUSTER_MAX_SIZE,
+    MECHANISMS,
+    KMCSimulation,
+)
 from kmc_leakage.master_equation import stationary_distribution, steady_state_flux, transition_generator
-from kmc_leakage.mean_field import solve_mean_field
+from kmc_leakage.mean_field import mean_field_flux, mean_field_rates, solve_mean_field
+from kmc_leakage.rates import miller_abrahams_factor
+from kmc_leakage.tddb import _cluster_diagnostics
+from kmc_leakage.thermal import heat_release
 
 Q = constants.elementary_charge
+EV = constants.electron_volt
 
 
 def _trap_current(result):
@@ -36,10 +58,41 @@ def _exact(sim):
     return steady_state_flux(sim)["exact_current"], pi @ occs
 
 
+def _per_trap_flux(sim, p):
+    """逐陷阱平均场的 F(p)，按定义独立写：MA 因子取两端平均场能级之差 ΔH = E_b − E_a。"""
+    energy, field, barrier_c, barrier_a = sim._trap_state(p)
+    blocks = sim._electrode_blocks(energy, field, barrier_c, barrier_a)
+    pairs = sim._pairs
+    hop = sim._hop_geometric * miller_abrahams_factor(energy[pairs.a], energy[pairs.b], sim.sim.temperature)
+    return sim._conditional_flux(blocks, *sim._hop_sums(hop, p, 1.0 - p))
+
+
+def _electrode_net_flux(sim, p):
+    """各陷阱的 (阴极净注入, 阳极净收集) [1/s]：孤立陷阱按平均占据，簇成员按簇内稳态分布。"""
+    rates = mean_field_rates(sim, p)
+    b = rates.blocks
+    cathode = (1.0 - p) * (b[_B_R2C] + b[_B_R4C]) - p * (b[_B_R3C] + b[_B_R5C])
+    anode = p * (b[_B_R3A] + b[_B_R5A] + b[_B_R8]) - (1.0 - p) * (b[_B_R2A] + b[_B_R4A])
+    for table, pi in zip(rates.tables, rates.distributions):
+        members, n, block = table.cluster.members, table.cluster.states.astype(float), table.block
+        cathode[members] = pi @ ((1.0 - n) * (block[_B_R2C] + block[_B_R4C]) - n * (block[_B_R3C] + block[_B_R5C]))
+        anode[members] = pi @ (n * (block[_B_R3A] + block[_B_R5A] + block[_B_R8]) - (1.0 - n) * (block[_B_R2A] + block[_B_R4A]))
+    return cathode, anode
+
+
 @pytest.fixture(scope="module")
 def clustered():
     """20×20×8 nm、3×10¹⁹ cm⁻³（96 个陷阱，17 个强耦合簇）、3 V：有分数占据与多陷阱簇。"""
     device = make_device(defects=make_defect_config(concentration_cm3=3.0e19))
+    sim = KMCSimulation(make_config(voltage=3.0, seed=1, device=device))
+    return sim, solve_mean_field(sim)
+
+
+@pytest.fixture(scope="module")
+def split():
+    """10×10×8 nm、1×10²⁰ cm⁻³（80 个陷阱）、3 V：60 个陷阱的强耦合分量超过簇大小上限、被切开，
+    簇–簇与簇–孤立两类边界都有（Phase 4 致密空位层的小样）。"""
+    device = make_device(Lx=10e-9, Ly=10e-9, defects=make_defect_config(concentration_cm3=1.0e20))
     sim = KMCSimulation(make_config(voltage=3.0, seed=1, device=device))
     return sim, solve_mean_field(sim)
 
@@ -77,7 +130,8 @@ def test_cluster_keeps_correlations_that_per_trap_mean_field_drops():
 
 
 def test_without_coupled_clusters_it_is_the_per_trap_mean_field():
-    """没有强耦合簇时逐位退回逐陷阱平均场：电流就是单陷阱条件通量在不动点处的值。"""
+    """没有强耦合簇时逐位退回逐陷阱平均场：电流就是单陷阱条件通量在不动点处的值，陷阱间跃迁的
+    MA 因子取两端平均场能级之差（不是 KMC 事件用的 E_b − U_ab − E_a）。"""
     sim = KMCSimulation(make_config(voltage=2.0, seed=2))
     assert sim._clusters == []
     result = solve_mean_field(sim)
@@ -85,16 +139,16 @@ def test_without_coupled_clusters_it_is_the_per_trap_mean_field():
     p = result.occupancy
     assert np.any((p > 0.05) & (p < 0.95))  # 有分数占据，不是平凡的全空/全满
 
-    blocks, hop = sim._rates(p)
-    tat, pf, p_hat = sim._conditional_flux(blocks, *sim._hop_sums(hop, p, 1.0 - p))
+    tat, pf, p_hat = _per_trap_flux(sim, p)
     assert np.array_equal(result.by_defect, (tat + pf) * Q)
     assert np.all(np.abs(p_hat - p) <= 1e-9 * p)
+    energy = sim._trap_state(p)[0]
+    assert not np.array_equal(mean_field.mean_field_hop_rates(sim, energy), sim._hop_rates(energy))
 
     # 独立写的简单阻尼迭代收敛到同一个不动点
     damped = np.zeros(sim.n_defects)
     for _ in range(1000):
-        blocks, hop = sim._rates(damped)
-        target = sim._conditional_flux(blocks, *sim._hop_sums(hop, damped, 1.0 - damped))[2]
+        target = _per_trap_flux(sim, damped)[2]
         if np.all(np.abs(target - damped) <= 1e-13 * target):
             break
         damped = 0.5 * damped + 0.5 * target
@@ -140,8 +194,7 @@ def test_unconverged_result_is_flagged(clustered, monkeypatch):
     result = solve_mean_field(sim)
     assert result.iterations == 2
     assert not result.converged and result.residual > mean_field._TOL
-    blocks, hop = sim._rates(result.occupancy)
-    tat, pf, _ = sim._trap_flux(result.occupancy, blocks, hop)
+    tat, pf, _ = mean_field_flux(sim, result.occupancy)
     assert np.array_equal(result.by_defect, (tat + pf) * Q)
     assert result.current != reference.current
 
@@ -169,3 +222,94 @@ def test_empty_device_is_r1_only():
     assert result.by_defect.shape == (0,)
     assert result.by_mechanism["tat"] == 0.0 and result.by_mechanism["pf"] == 0.0
     assert result.current == pytest.approx(sum(sim._r1_current), rel=1e-15) and result.current > 0.0
+
+
+def test_current_is_continuous_across_split_components(split):
+    """强耦合分量超过簇大小上限被切开后，簇–簇、簇–孤立边界上的跃迁仍是两侧共用的同一组速率：
+    不动点处每个陷阱粒子数守恒，阴极净注入 = 阳极净收集 = I_陷阱/q（ADR-038）。
+
+    原来簇一侧按组态、簇外一侧按平均占据各算一遍边界通量，Phase 4 终态上两者差 258 倍（ADR-037）。
+    """
+    sim, result = split
+    assert result.converged
+    _, _, largest, n_split = _cluster_diagnostics(sim)
+    assert largest > _CLUSTER_MAX_SIZE and n_split >= 1
+    cluster_of = mean_field_rates(sim, result.occupancy).cluster_of
+    a, b = cluster_of[sim._pairs.a], cluster_of[sim._pairs.b]
+    assert np.any((a >= 0) & (b >= 0) & (a != b)) and np.any((a >= 0) != (b >= 0))
+
+    cathode, anode = _electrode_net_flux(sim, result.occupancy)
+    trap_current = result.by_mechanism["tat"] + result.by_mechanism["pf"]
+    assert anode.sum() * Q == pytest.approx(trap_current, rel=1e-12)
+    assert cathode.sum() == pytest.approx(anode.sum(), rel=1e-8)
+
+
+def test_per_trap_mean_field_has_no_circulation_at_zero_bias():
+    """零偏压、去掉分簇：MA 因子取两端平均场能级之差时，不动点就是平均场平衡 p_i = f(E_i(p))，每一对
+    陷阱的正反向通量逐对相等。同一组能级换成 KMC 事件的 ΔH = E_b − U_ab − E_a，正反两个方向都多减了
+    U_ab，同一占据下净通量是总通量的 19–33%（ADR-037）。
+
+    陷阱取深能级（E_D ≈ 1.75 eV）：R8 没有反向通道，浅能级陷阱零偏压下占据只有 1e-10、陷阱间通量与
+    R8 的伪电流同量级，会盖住这里要看的平衡。
+    """
+    sim = _cathode_cluster_with_free_neighbour(0.0)
+    sim._clusters = []
+    result = solve_mean_field(sim)
+    assert result.converged
+    p = result.occupancy
+    assert np.all((p > 0.3) & (p < 0.95))
+    energy = sim._trap_state(p)[0]
+    a, b = sim._pairs.a, sim._pairs.b
+    order = np.lexsort((b, a))
+    reverse = order[np.lexsort((a[order], b[order]))]  # 第 k 对的反向对在近邻表里的位置
+    assert np.array_equal(a[reverse], b) and np.array_equal(b[reverse], a)
+
+    def net_over_gross(hop):
+        forward = hop * p[a] * (1.0 - p[b])
+        backward = forward[reverse]
+        return np.abs(forward - backward) / (forward + backward)
+
+    assert np.max(net_over_gross(mean_field.mean_field_hop_rates(sim, energy))) < 1e-8
+    assert np.max(net_over_gross(sim._hop_rates(energy))) > 0.1
+
+
+def _cathode_cluster_with_free_neighbour(voltage):
+    """阴极侧两个强耦合陷阱 #0/#1（0.8 nm）成簇，#2 在 #0 旁 1.0 nm、按耦合阈值留在簇外，三者都是深能级
+    （E_D ≈ 1.75 eV，零偏压下占据 0.4–0.9），簇–孤立边界跃迁约 3e5 s⁻¹。"""
+    material = make_material()
+    stack = DielectricStack.single(material, thickness=8e-9)
+    electrode = ElectrodeMaterial("TiN", 4.6 * EV, M_E, 5.0 * EV)
+    device = DeviceConfig(20e-9, 20e-9, electrode, electrode, stack, barrier_height=1.74 * EV)
+    positions = np.array([[10e-9, 10e-9, 0.7e-9], [10.4e-9, 10e-9, 1.4e-9], [9.0e-9, 10e-9, 0.6e-9]])
+    defects = DefectEnsemble.uniform(positions, np.array([1.75, 1.72, 1.78]) * EV, material, band_reference=1.74 * EV)
+    return KMCSimulation(make_config(voltage=voltage, device=device), defects=defects)
+
+
+def test_cluster_to_free_trap_boundary_is_detailed_balanced_at_zero_bias():
+    """簇–孤立边界的速率按成员在每个簇内组态下的能级求、孤立陷阱一侧按 π 平均（ADR-038）：零偏压下这条
+    边界对簇就是费米能级处的库，簇内链逐组态满足细致平衡，边界没有净通量、介质不放热。
+
+    速率若取与组态无关的平均场常数，同一体系上边界净通量是总通量的 1%、介质吸热 1.5e-16 W（"电极 →
+    成员 → 边界"环流）。测试把缺陷电荷对横向平均剖面的贡献置零：引擎的电极→陷阱势垒取横向平均剖面，
+    里面含成员自身的电荷，同一成员的俘获（空、带 +e）与逃逸（占据、中性）走的势垒略有不同，在簇内链里
+    留下 1e-3 量级的非平衡——这是引擎原有的口径（KMC 也是），与边界跃迁无关，这里把它单独拿掉。
+    """
+    sim = _cathode_cluster_with_free_neighbour(0.0)
+    sim.coupling.phi_bar[:] = 0.0
+    assert sim.cluster_members[0].tolist() == [0, 1] and len(sim.cluster_members) == 1
+    result = solve_mean_field(sim)
+    assert result.converged
+    p = result.occupancy
+    assert np.all((p > 0.3) & (p < 0.95))
+
+    rates = mean_field_rates(sim, p)
+    table, pi = rates.tables[0], rates.distributions[0]
+    c = table.cluster
+    n = c.states.astype(float)
+    into = pi @ ((1.0 - n[:, c.in_member]) * p[c.in_source] * table.hop[:, c.in_cols])
+    out = pi @ (n[:, c.out_member] * (1.0 - p[c.out_target]) * table.hop[:, c.out_cols])
+    assert into.max() > 1e5
+    np.testing.assert_allclose(into, out, rtol=1e-9)
+
+    # 介质放热的量级标尺：边界总通量 × 0.01 eV（常数速率时实测 1.5e-16 W，约为这个标尺的 0.35 倍）
+    assert abs(heat_release(sim, p).dielectric) < 1e-9 * into.sum() * 0.01 * EV

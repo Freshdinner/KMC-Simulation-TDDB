@@ -171,7 +171,28 @@ def cluster_steady_state(
     escape = escape_anode + pf + escape_other
     Q = cluster_generator(states, capture, escape, intra_a, intra_b, intra_rate)
     pi = stationary_distribution_gth(Q)
+    return cluster_flux(
+        pi, states, capture_anode, capture_other, escape_anode, pf, escape_other, intra_a, intra_b, intra_rate
+    )
 
+
+def cluster_flux(
+    pi: np.ndarray,
+    states: np.ndarray,
+    capture_anode: np.ndarray,
+    capture_other: np.ndarray,
+    escape_anode: np.ndarray,
+    pf: np.ndarray,
+    escape_other: np.ndarray,
+    intra_a: np.ndarray,
+    intra_b: np.ndarray,
+    intra_rate: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """簇内稳态分布 `pi` 下各成员的阳极净通量 (TAT, PF) 与占据期望（`cluster_steady_state` 的后半段）。
+
+    参数口径同 `cluster_steady_state`；`pi` 是同一组速率的生成矩阵的稳态分布。调用方已经
+    求出 π、还要拿它做别的记账时（TDDB 平均场内层求解器）直接用这一步。
+    """
     occupied = pi[:, None] * states
     empty = pi[:, None] * ~states
     pf_flux = (occupied * pf).sum(axis=0)

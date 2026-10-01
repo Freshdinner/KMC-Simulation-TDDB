@@ -7,6 +7,32 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **TDDB 内层平均场的热力学自洽**（ADR-038，关闭 ADR-037 待定第 2 条；`mean_field.py` 新增 `mean_field_rates`、
+  `MeanFieldRates`、`mean_field_hop_rates`、`mean_field_flux`，`solve_mean_field` 改用它们；`thermal.heat_release`
+  改走同一组速率；`clusters.py` 把 `cluster_steady_state` 的后半段拆成 `cluster_flux`（结果逐位不变）；`kmc.py` 不改；
+  `tests/test_mean_field.py` 改写 2 项、新增 3 项，`test_thermal.py` 的混合体系能量守恒改为三种体系按 1e-8 断言；
+  ADR-031、ADR-036 标注 superseded；同步 README、`PROJECT_CONTEXT_TDDB.md` §1、§6.2、§9）。
+
+  **为什么**：Phase 4 的致密空位层上，平均场处理的陷阱对沿用 KMC 的 ΔH = E_b − U_ab − E_a，正反两个方向都多减了
+  U_ab，零偏压下也有环流；强耦合分量被切开后，边界跃迁在簇一侧按组态、簇外一侧按平均占据各算一遍，不动点不守恒
+  电流（seed 1 终态阴极净注入 −1.5×10⁹ s⁻¹、阳极净收集 5.8×10⁶ s⁻¹，放热总和是 U·I 的 13.8 倍）。
+
+  **做法**：陷阱间跃迁按两端归属分三类，每条只算一次、两端共用。簇内对与 KMC 同口径；两端都按平均场处理的对
+  （孤立–孤立、簇–簇）的 MA 因子取两端平均场能级之差，速率与组态无关；簇–孤立对的成员一端取簇内组态能级、孤立
+  一端取平均场能级，簇的生成矩阵用这组按组态的速率，孤立陷阱用同一组速率按簇内稳态分布求平均。先按用户给的示例
+  把簇–孤立边界也取成常数速率，电流连续与能量守恒恢复了，但零偏压环流只降到 −3.8×10⁻¹² W（seed 1，九成来自
+  簇–孤立边界）：与组态无关的边界速率和簇内按组态求值的电极速率满足不了细致平衡。簇–簇对要精确得按两簇分布的
+  乘积平均，用户定为不做。放热按两端各自分布下的能级记账。
+
+  **验证**：漏电流侧 KMC 与扫描逐位不变（`git archive HEAD` 前后同一脚本，五个单点 KMC + iv_sweep 21 点，131 个数组
+  逐位相同）。Phase 4 终态（seed 1–4，410 个缺陷）：3 V 下阴极净注入 = 阳极净收集（4–5 位有效数字），放热总和 / U·I
+  = 1.0000；介质放热 / U·I 从 −32 … −3.6 变为 −0.26 … −0.015；零偏压介质放热从 −2.4×10⁻¹¹ … −1.7×10⁻¹² W 降到
+  −1.7×10⁻¹³ … +2.3×10⁻¹⁵ W（≤ 1.8% 的 3 V 电功率，剩下的来自簇–簇边界）；电流变化 ≤ 0.1%（seed 3 为 −2.5%）。
+  ADR-031 的对拍在同一批实现上重做（HEAD 代码先逐位复现 CSV 里的 208 个旧平均场值）：新平均场相对旧值 N=10 ≤ 9×10⁻⁷、
+  N=96 ≤ 0.10%，与 KMC 的系综均值之比到 4 位不变。另记录一项引擎原有口径（未改）：电极→陷阱势垒含陷阱自身电荷，
+  簇内俘获与逃逸走的势垒略有不同，零偏压下簇内留 1e-3 量级的非平衡。脚本与数据在 `results/9.30/phase4_fix/`。
+  `pytest tests/ -v`：291 passed。
+
 - **TDDB Phase 4：热反馈、渗流击穿判据与限流**（新增 `thermal.py`：`heat_release`、`HeatRelease`、`power_map`、
   `solve_temperature`、`transport_temperature`；`tddb.py` 新增 `percolation_clusters`，`run_tddb` 接入热反馈、
   渗流判据与限流，`TDDBResult` 新增功率 / 三种温度 / 渗流与致密团簇大小 / `breakdown_time` / `dense_cluster_time`，
