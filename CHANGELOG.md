@@ -7,6 +7,19 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **TDDB Phase 4 重新验收**（ADR-041；新增 `results/9.30/phase4_rerun/`：逐步日志、seed 2 的 CSV / npz、汇总图
+  `p4fix_summary.png` 与汇总脚本 `analyze_rerun.py`；ADR-037 加后续状态；同步 README、`PROJECT_CONTEXT_TDDB.md` §1、§10）。
+
+  **做法**：ADR-038–040 之后按 `drive_phase4.py` 重跑 `zro2_tddb.yaml` seed 1–4（k_TH = 2 W/(m·K)、限流调高到 1e8 A/cm²、上限 1000 个
+  空位）。8 个进程并发（开 / 关热反馈）在 170–233 个空位时被低内存回收停掉；改为只跑开热反馈的 4 条后，seed 2 跑满 1000 个
+  空位（墙钟 12.4 h），seed 1、3、4 在 861、973、937 个空位时再次被回收停掉、只留日志。
+
+  **结果**：三条物理验收仍不满足。生成贴着阴极：1000 个空位的团簇最高点只在 z = 2.35 nm（另三条 2.09–2.27 nm），离阳极触发线
+  7.1 nm 还差约 5 nm；I-t 是"台阶 → 陡升 → 铺满后缓慢上升"（seed 2 双对数拟合 n = 2.44、R² 0.83），电流最高 114 A/cm²；
+  升温 ≤ 4×10⁻⁴ K，开 / 关热反馈的前 171–206 步逐步相同。内层功率可信了：介质放热是电功率的 −1% ～ −17%（ADR-037 那组在致密层上
+  是 −10 ～ −200 倍），平均场每步都收敛。待定：生成怎样到达膜中部、致密层上生成率对网格不收敛、是否补跑 seed 1、3、4。
+  代码未改，`pytest tests/ -v`：294 passed（提交 40c9f43 的结果）。
+
 - **ZrO₂ 热导率 k_TH 改为 2 W/(m·K)**（ADR-040，替换 ADR-035 第 4 条中的 1 W/(m·K)；`examples/zro2_tddb.yaml`、
   `test_config_io.py` 的断言、`PROJECT_CONTEXT_TDDB.md` §1 与参数表、README 配置段）。用户定。温升 ∝ 1/k_TH，同一功率下减半；
   Phase 4 参考工况下热反馈本就可以忽略，结论不变。`pytest tests/ -v`：294 passed。
