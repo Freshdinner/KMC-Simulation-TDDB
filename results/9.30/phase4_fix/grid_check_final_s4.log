@@ -1,0 +1,2 @@
+seed=4 final N=410 grid 16x16x70: sum_G=1.0272e+03 /s (electrode only 1.0183e+03) trap_share=0.0086 G(z>2nm)/sum=9.3239e-05 G(z>4nm)/sum=2.6436e-10 z_median=0.65 nm (electrode only 0.65) wall=4.0s
+seed=4 final N=410 grid 32x32x70: sum_G=1.5051e+08 /s (electrode only 1.5038e+08) trap_share=0.0009 G(z>2nm)/sum=5.3126e-10 G(z>4nm)/sum=1.4914e-15 z_median=0.55 nm (electrode only 0.55) wall=12.7s

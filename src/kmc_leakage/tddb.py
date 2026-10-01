@@ -17,9 +17,10 @@
    所以第 k 条记录的电流是在第 k−1 条记录的功率给出的温度下求的；温度随生成一步步爬升，
    这一步的滞后可以忽略。没有 k_TH 时温度固定为环境值（Phase 3 的等温口径）。
 3. **生成率表**（§6.1 模型 C）：各缺陷净电荷 q·(Z − p) 与外加偏压一起解一次泊松方程，在每个
-   生成单元中心对一个虚拟前驱求单步俘获速率 R_1e（式 T4，两侧电极 R2 + R4，与引擎处理真实
-   陷阱同一口径）与断键概率 P_bb（式 T2），单元生成率 G_cell = N_T·V_cell·R_1e·P_bb（式 T1）。
-   单元中心离已有缺陷不到 min_separation 的单元放不下新空位，生成率记 0。
+   生成单元中心对一个虚拟前驱求单步俘获速率 R_1e（式 T4：两侧电极 R2 + R4，加近旁已占据陷阱
+   经陷阱间通道 p·R7 送来的电子，与引擎处理真实陷阱同一口径，ADR-039）与断键概率 P_bb（式 T2），
+   单元生成率 G_cell = N_T·V_cell·R_1e·P_bb（式 T1）。单元中心离已有缺陷不到 min_separation 的单元
+   放不下新空位，生成率记 0。
 4. **击穿判据**（§6.3）：间距 < d_c 的缺陷连边，某个连通分量同时触到两个电极（离电极界面
    < d_c）即击穿，这一刻就是 t_BD；电流密度达到限流值是第二停止条件。论文的"25 个空位、
    间距 ≤ 6 Å"团簇只作标志记录，不作判据。
@@ -59,7 +60,9 @@ from .defects import (
     _global_standoff,
     append_defects,
     generate_defects,
+    hop_cutoff_radius,
     layer_bulk_defects,
+    localization_radius,
     minimum_image_delta,
     neighbor_pairs,
 )
@@ -75,7 +78,7 @@ from .kmc import (
     _interface_step_nodes,
 )
 from .mean_field import solve_mean_field
-from .rates import CaptureElectrode, bond_break_generation_rate, single_electron_capture_rate
+from .rates import CaptureElectrode, CaptureTraps, bond_break_generation_rate, single_electron_capture_rate
 from .thermal import heat_release, power_map, solve_temperature, transport_temperature
 
 # 前驱俘获 R4 的声子项数：E_rel1 = 1.0 eV（E_rel1/ℏω₀ = 25）时 80 项最大相对误差 1e-4、
@@ -235,6 +238,22 @@ def admissible_cells(cells: GenerationCells, positions: np.ndarray, device: Devi
     return distance >= standoff
 
 
+def _trap_capture_cutoff(
+    defects: DefectEnsemble, precursor_r_D: float, n_precursors: int, temperature: float
+) -> float:
+    """陷阱→前驱俘获对的截断半径，判据沿用近邻表（`kmc.KMCSimulation._hop_cutoff_radius`，ADR-013/F05）。
+
+    几何因子 exp[−r·(1/r_D,陷阱 + 1/r_D,前驱)] ≤ exp(−2·α_min·r)，α_min 取缺陷与前驱里最慢的衰减
+    1/max(r_D)（TDDB 只做单层，α = 1/r_D）。要求整张生成率表上被丢弃的速率上界
+    N_陷阱·N_前驱·ν_max·exp(−2·α_min·r_cut) 小于机制表最小速率（零场 R8 里最小的那个）。
+    """
+    alpha_min = 1.0 / max(float(defects.r_D.max()), float(precursor_r_D))
+    kT = constants.Boltzmann * temperature
+    r8_min = float(np.min(defects.attempt_frequency * np.exp(-defects.ED / kT)))
+    nu_max = float(np.max(defects.attempt_frequency))
+    return hop_cutoff_radius(alpha_min, r8_min / (len(defects) * n_precursors * nu_max))
+
+
 def generation_rates(
     inner: KMCSimulation,
     occupancy: np.ndarray,
@@ -250,11 +269,14 @@ def generation_rates(
 
     - 前驱处导带底 E_C = B − e·φ 定能级 E = E_C − E_t1，局域场大小进 R4 的 c_MP 与 P_bb；
     - 电极→单元的 WKB 路径沿 z 直线，势垒取横向平均剖面的导带底；
-    - R_1e = Σ_两侧电极 (R2 + R4)（式 T4，`single_electron_capture_rate`，R4 取
-      `_PRECURSOR_N_PHONON` 个声子项）；P_bb 的场加速项 p₀·(2+k)/3·E 里 k 取静态 κ（式 T2）。
+    - R_1e = Σ_两侧电极 (R2 + R4) + Σ_近旁陷阱 p·R7（式 T4/T5，`single_electron_capture_rate`，
+      R4 取 `_PRECURSOR_N_PHONON` 个声子项）。陷阱项把引擎的陷阱间通道的目标换成前驱：源陷阱的
+      能级与占据取内层平均场（`KMCSimulation._trap_state`），MA 因子的能量差取两端平均场能级之差
+      （ADR-038/039），列出截断半径（`_trap_capture_cutoff`）内的 (陷阱, 前驱) 对；
+    - P_bb 的场加速项 p₀·(2+k)/3·E 里 k 取静态 κ（式 T2）。
 
     `temperature` 是各单元中心的局域温度（长度 = 单元数，热反馈时取温度场的值，§6.6），
-    R_1e 的声子线型与电极费米分布、P_bb 都按它求值；缺省用内层的工作点温度。
+    R_1e 的声子线型、电极费米分布、陷阱项的 MA 因子与 P_bb 都按它求值；缺省用内层的工作点温度。
 
     单元中心落在已有缺陷 min_separation 之内的单元记 0（`admissible_cells`）：那里放不下新空位，
     而带电缺陷近旁的库仑场经 (2+κ)/3 放大后会把 P_bb 压到饱和，把这个速率算给整个单元会让
@@ -301,6 +323,18 @@ def generation_rates(
             )
         )
 
+    # 近旁陷阱（初始缺陷与生成的空位）：平均场能级与占据，截断半径按近邻表的判据
+    p = np.asarray(occupancy, dtype=float)
+    n_defects = len(defects)
+    if n_defects:
+        trap_energy = inner._trap_state(p)[0]
+        r_cut = _trap_capture_cutoff(
+            defects,
+            localization_radius(tddb.precursor_ionization_energy, material.m_di),
+            live.size,
+            inner.sim.temperature,
+        )
+
     capture = np.empty(live.size)
     for start in range(0, live.size, _CELL_CHUNK):
         rows = slice(start, start + _CELL_CHUNK)
@@ -309,6 +343,21 @@ def generation_rates(
             side._replace(path=side.path[layer], barrier=side.barrier[layer], m_di_path=side.m_di_path[layer])
             for side in by_layer
         ]
+        traps = None
+        if n_defects:
+            delta = minimum_image_delta(
+                centers[rows][:, None, :] - defects.positions[None, :, :], device.Lx, device.Ly
+            )
+            distance = np.linalg.norm(delta, axis=-1)
+            cell, source = np.nonzero(distance < r_cut)
+            traps = CaptureTraps(
+                precursor=cell,
+                distance=distance[cell, source],
+                energy=trap_energy[source],
+                r_D=defects.r_D[source],
+                occupancy=p[source],
+                attempt_frequency=defects.attempt_frequency[source],
+            )
         capture[rows] = single_electron_capture_rate(
             conduction[rows],
             field[rows],
@@ -320,6 +369,7 @@ def generation_rates(
             material.m_di,
             temperature[rows] if local else temperature,
             _PRECURSOR_N_PHONON,
+            traps,
         )
     per_precursor = bond_break_generation_rate(
         capture, tddb.activation_energy, tddb.dipole_moment, material.kappa, field, temperature

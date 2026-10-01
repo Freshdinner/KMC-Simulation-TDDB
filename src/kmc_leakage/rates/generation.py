@@ -9,11 +9,15 @@ docs/rate_equations.md 的 R1–R8 不对应::
 
 - R_1e 是前驱位点俘获一个电子的速率，与项目的 R2（电极→陷阱弹性俘获）是两个量，
   代码里叫 `single_electron_capture_rate`。
-- 1/τ_c,12（T5–T11）复用输运引擎的 R2 + R4，对两侧电极求和，与 kmc.py 处理真实
-  陷阱的口径逐项一致。前驱用自己的参数：E_t1 决定能级、局域化半径与 R2 前置因子，
-  E_rel1/ℏω₀ 作为多声子线型 L(m)（T10）的参数。E_rel1 是第一次电子俘获导致 O-Zr-O
-  键断裂、O 空位形成的弛豫能，只在这里进入计算，与输运引擎用的材料 Huang-Rhys 因子
-  S 无关（ADR-030）。
+- 1/τ_c,12（T5–T11）对全部电子来源求和。式 T5 的 N_{j−1}、f_{j−1} 写的是"电极/陷阱处"：
+  - **电极**：复用输运引擎的 R2 + R4，对两侧电极求和，与 kmc.py 处理真实陷阱的口径
+    逐项一致。前驱用自己的参数：E_t1 决定能级、局域化半径与 R2 前置因子，E_rel1/ℏω₀
+    作为多声子线型 L(m)（T10）的参数。E_rel1 是第一次电子俘获导致 O-Zr-O 键断裂、O 空位
+    形成的弛豫能，只在这里进入计算，与输运引擎用的材料 Huang-Rhys 因子 S 无关（ADR-030）。
+  - **近旁已占据的陷阱**（初始缺陷与生成的空位，同一物种）：复用引擎的陷阱间通道，R6 的
+    几何因子 × R7 的 MA 能量因子，按源陷阱的占据 p 加权（`trap_precursor_capture_rate`，
+    ADR-039）。前驱的局域化半径由 E_t1 算，能量差取前驱与源陷阱的平均场能级之差，与内层
+    平均场处理陷阱对的口径相同（ADR-038）。
 - G 里的 k 是相对介电常数，取介质的静态 κ（Lorentz 局域场修正，与镜像力无关），
   ε_opt 不进这里。p₀ 是前驱有效偶极矩（T3：p₀ = ½·n·Valence·e·d），配置直接给均值。
 - G 的俘获速率作为参数传入：后期换成双电子俘获 R_2e（T4′）时只改调用方。
@@ -21,7 +25,7 @@ docs/rate_equations.md 的 R1–R8 不对应::
 全部量为 SI 单位。
 """
 
-from typing import NamedTuple, Sequence, Union
+from typing import NamedTuple, Optional, Sequence, Union
 
 import numpy as np
 from scipy import constants
@@ -30,6 +34,7 @@ from ..bands import fermi_dirac, free_electron_dos
 from ..defects import localization_radius
 from .elastic_capture import r2_elastic_capture
 from .multiphonon import multiphonon_coupling, phonon_transition_probability, r4_multiphonon_capture
+from .trap_hopping import r7_inelastic_hop
 from .wkb import wkb_transmission
 
 
@@ -49,6 +54,46 @@ class CaptureElectrode(NamedTuple):
     mass: float  # 电极侧电子质量 [kg]
 
 
+class CaptureTraps(NamedTuple):
+    """近旁陷阱到前驱的俘获来源（R_1e 的陷阱项用），按 (源陷阱, 前驱) 对逐对列出。"""
+
+    precursor: np.ndarray  # (K,) 前驱编号，即 `conduction_band` 的下标
+    distance: np.ndarray  # (K,) 源陷阱到前驱的距离 [m]
+    energy: np.ndarray  # (K,) 源陷阱上电子的能级（平均场）[J]
+    r_D: np.ndarray  # (K,) 源陷阱的局域化半径 [m]
+    occupancy: np.ndarray  # (K,) 源陷阱的平均场占据 p
+    attempt_frequency: np.ndarray  # (K,) 源陷阱的尝试频率 ν0 [1/s]
+
+
+def trap_precursor_capture_rate(
+    attempt_frequency: np.ndarray,
+    distance: np.ndarray,
+    trap_r_D: np.ndarray,
+    precursor_r_D: float,
+    trap_energy: np.ndarray,
+    precursor_energy: np.ndarray,
+    trap_occupancy: np.ndarray,
+    temperature: Union[float, np.ndarray],
+) -> np.ndarray:
+    """前驱从一个近旁陷阱俘获电子的速率 [1/s]：式 T4/T5 的陷阱项，p·R7(陷阱 → 前驱)。
+
+    就是引擎的陷阱间通道（docs/rate_equations.md 的 R6/R7）把目标换成前驱：
+    p·ν0·exp[−r·(1/r_D,陷阱 + 1/r_D,前驱)]·Θ，Θ = exp[−(E_前驱 − E_陷阱)/k_BT]（上坡）或 1。
+    p 是源陷阱的平均场占据（式 T5 里 f_{j−1}），能量差取两端平均场能级之差，与内层平均场
+    处理陷阱对的口径相同（ADR-038）；前驱是空的虚拟位点，r_D,前驱 由 E_t1 算。名字避开项目的
+    R2（电极→陷阱弹性俘获），见 PROJECT_CONTEXT_TDDB.md §2 第 1 条。
+    """
+    return np.asarray(trap_occupancy, dtype=float) * r7_inelastic_hop(
+        np.asarray(attempt_frequency, dtype=float),
+        distance,
+        trap_r_D,
+        precursor_r_D,
+        trap_energy,
+        precursor_energy,
+        temperature,
+    )
+
+
 def single_electron_capture_rate(
     conduction_band: np.ndarray,
     field: np.ndarray,
@@ -60,10 +105,13 @@ def single_electron_capture_rate(
     m_di: float,
     temperature: Union[float, np.ndarray],
     n_phonon: int,
+    traps: Optional[CaptureTraps] = None,
 ) -> np.ndarray:
     """R_1e：前驱单步俘获一个电子的速率 1/τ_c,12 [1/s]（式 T4，T5–T11）。
 
-    R_1e = Σ_电极 [R2 + R4]：弹性俘获 R2 与多声子俘获 R4，两侧电极都计入。
+    R_1e = Σ_电极 [R2 + R4] + Σ_陷阱 p·R7：两侧电极的弹性俘获 R2 与多声子俘获 R4，加上
+    `traps` 列出的近旁陷阱经陷阱间通道送来的电子（`trap_precursor_capture_rate`）。不给
+    `traps` 时只有电极项。
 
     `conduction_band` 是前驱处的导带底 E_C = B − e·φ，前驱能级 E = E_C − E_t1；
     `field` 是前驱处局域电场大小，进 R4 的 c_MP。`ionization_energy` = E_t1（能级
@@ -72,7 +120,7 @@ def single_electron_capture_rate(
     p = 0..n_phonon−1 求和，n_phonon 要覆盖前驱的多声子线型：E_rel1/ℏω₀ ≈ 1 时引擎的
     12 项已收敛，E_rel1 = 1.0 eV（E_rel1/ℏω₀ = 25）时要约 100 项（ADR-030）。
     `temperature` 可以是标量，也可以是与 `conduction_band` 等长的逐前驱温度（Phase 4 按
-    单元局域温度求值，§6.6），声子线型与电极费米分布都取这个温度。
+    单元局域温度求值，§6.6），声子线型、电极费米分布与陷阱项的 MA 因子都取这个温度。
     """
     energy = np.asarray(conduction_band, dtype=float) - ionization_energy
     temperature = np.asarray(temperature, dtype=float)
@@ -84,9 +132,8 @@ def single_electron_capture_rate(
         phonon_index, lineshape_parameter, phonon_energy, column
     )
     energies_p = energy[:, None] + phonon_index * phonon_energy
-    coupling = multiphonon_coupling(
-        localization_radius(ionization_energy, m_di), field, band_gap, m_di
-    )
+    precursor_r_D = localization_radius(ionization_energy, m_di)
+    coupling = multiphonon_coupling(precursor_r_D, field, band_gap, m_di)
 
     rate = np.zeros(energy.shape)
     for side in electrodes:
@@ -101,6 +148,20 @@ def single_electron_capture_rate(
         occupancy_p = fermi_dirac(energies_p, side.fermi_level, column)
         dos_p = free_electron_dos(energies_p - side.band_bottom, side.mass)
         rate = rate + r4_multiphonon_capture(coupling, dos_p, occupancy_p, transmission_p, weights)
+    if traps is not None:
+        index = traps.precursor
+        pair_temperature = temperature if temperature.ndim == 0 else temperature[index]
+        from_traps = trap_precursor_capture_rate(
+            traps.attempt_frequency,
+            traps.distance,
+            traps.r_D,
+            precursor_r_D,
+            traps.energy,
+            energy[index],
+            traps.occupancy,
+            pair_temperature,
+        )
+        rate = rate + np.bincount(index, from_traps, energy.size)
     return rate
 
 

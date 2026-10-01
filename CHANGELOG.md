@@ -7,6 +7,31 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **TDDB 前驱从近旁已占据的陷阱俘获电子**（ADR-039，按 (a) 关闭 ADR-037 待定第 1 条；`rates/generation.py` 新增
+  `trap_precursor_capture_rate`（式 T4/T5 的陷阱项，p·R7）与 `CaptureTraps`，`single_electron_capture_rate` 加可选参数
+  `traps`；`tddb.generation_rates` 传入近旁陷阱的位置、平均场能级与占据，新增 `_trap_capture_cutoff`；
+  `test_generation.py` 新增 2 项，`test_tddb.py` 改写模型 C 对拍、新增 1 项；ADR-027 标注 superseded；同步 README、
+  `PROJECT_CONTEXT_TDDB.md` §1、§3、§4、§6.1、§7-1、§9）。
+
+  **为什么**：R_1e 只算两侧电极时，生成被限制在离阴极约 1.7 nm 内（ADR-037）。式 T5 的 N_{j−1}、f_{j−1} 写的是
+  "电极/陷阱处"，电子来源还应包括近旁已占据的陷阱。
+
+  **做法**：R_1e = Σ_两侧电极 (R2 + R4) + Σ_近旁陷阱 p·R7(陷阱 → 前驱)，G = R_1e·P_bb 的结构不变。陷阱项沿用引擎的陷阱间
+  通道（用户在 MA 与多声子两种形式里选了 MA）：R6 的几何因子 × MA 能量因子，按源陷阱的平均场占据加权；前驱的 r_D
+  由 E_t1 算，能量差取两端平均场能级之差（与 ADR-038 同口径），温度取单元局域温度。截断半径沿用近邻表的判据：
+  整张生成率表上被丢弃的速率上界小于零场 R8 的最小值（参考工况下 5.7–8.3 nm）。按模型 C 在单元中心求值（用户定），
+  测了网格敏感度。
+
+  **验证**：陷阱项 = p·R7（上下坡、p = 0 三种情形，rtol 1e-12）；加陷阱来源不改变电极项（逐位）；来源全空或一条都没有时
+  R_1e 逐位等于电极项；生成率表与"单元中心放前驱参数探针陷阱时，引擎的两侧 R2 + R4 + 近旁陷阱的平均场 R7 按占据加权"
+  一致（rtol 1e-9，实测 ≤ 2×10⁻¹³，含陷阱项压过电极项与上坡被压低两种单元）；陷阱全空、或离源陷阱超过截断半径的单元
+  逐位等于只有电极项的表。
+
+  **实测**：参考工况下陷阱项很小。t = 0 只占 ΣG 的 0.5–13%，Phase 4 终态（410 个缺陷）只占 0.04–1.3%；生成仍贴着阴极
+  （按 G 加权的 z 中位数不变，终态 z > 2 nm 的生成占 ≤ 2.4×10⁻⁴）。原因是阴极侧空位层的前沿多半空着，按占据加权后
+  送不出多少电子。终态 ΣG 在横向 16 格与 32 格之间差 270 – 8×10⁵ 倍，只有电极项的表也一样，来自 ADR-033/034 记录过的
+  P_bb 局域场近场问题，与陷阱项无关。每步耗时不变。`pytest tests/ -v`：294 passed。
+
 - **TDDB 内层平均场的热力学自洽**（ADR-038，关闭 ADR-037 待定第 2 条；`mean_field.py` 新增 `mean_field_rates`、
   `MeanFieldRates`、`mean_field_hop_rates`、`mean_field_flux`，`solve_mean_field` 改用它们；`thermal.heat_release`
   改走同一组速率；`clusters.py` 把 `cluster_steady_state` 的后半段拆成 `cluster_flux`（结果逐位不变）；`kmc.py` 不改；

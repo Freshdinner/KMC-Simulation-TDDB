@@ -22,10 +22,12 @@ from .electrode_tunneling import (
 )
 from .generation import (
     CaptureElectrode,
+    CaptureTraps,
     bond_break_generation_rate,
     bond_break_probability,
     effective_activation_energy,
     single_electron_capture_rate,
+    trap_precursor_capture_rate,
 )
 from .multiphonon import (
     multiphonon_coupling,
@@ -44,6 +46,7 @@ from .wkb import barrier_maximum, wkb_transmission
 
 __all__ = [
     "CaptureElectrode",
+    "CaptureTraps",
     "barrier_maximum",
     "bond_break_generation_rate",
     "bond_break_probability",
@@ -66,5 +69,6 @@ __all__ = [
     "segmented_overlap_factor",
     "single_electron_capture_rate",
     "supply_function",
+    "trap_precursor_capture_rate",
     "wkb_transmission",
 ]

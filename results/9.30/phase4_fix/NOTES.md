@@ -9,3 +9,5 @@
   那一版代码没有提交。
 - `mf_vs_kmc_redo.py` → `redo_{head,new}_*.csv`，`redo_summary.py`：ADR-031 对拍在新平均场下重做（KMC 值取
   `../../9.29/tddb_phase2_mf_vs_kmc.csv`）。
+- `generation_grid_check.py` → `grid_check_{t0,final}_s*.log`：ADR-039 的陷阱→前驱俘获通道在 t = 0 与 Phase 4 终态上
+  占 ΣG 的比例、生成的 z 分布与横向 16 / 32 格的网格敏感度。

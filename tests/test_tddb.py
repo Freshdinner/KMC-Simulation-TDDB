@@ -36,7 +36,7 @@ from kmc_leakage.defects import (
 )
 from kmc_leakage.electrostatics import PoissonSolver
 from kmc_leakage.kmc import _B_R2A, _B_R2C, _B_R4A, _B_R4C, _N_PHONON, MECHANISMS, ElectrostaticCoupling, KMCSimulation
-from kmc_leakage.mean_field import solve_mean_field
+from kmc_leakage.mean_field import mean_field_hop_rates, solve_mean_field
 from kmc_leakage.rates import bond_break_probability
 from kmc_leakage.tddb import (
     GenerationCells,
@@ -237,43 +237,106 @@ def test_trajectory_bookkeeping(trajectory):
 
 
 def test_generation_rate_is_model_c_with_engine_capture_rates(monkeypatch):
-    """G_cell = N_T·V_cell·R_1e·P_bb：R_1e 与引擎在单元中心放一个前驱参数陷阱时的两侧 R2 + R4 之和
-    一致，局域场与电势都含当前占据下的空间电荷（§6.1）。
+    """G_cell = N_T·V_cell·R_1e·P_bb：R_1e 与引擎在单元中心放一个前驱参数陷阱时一致——两侧 R2 + R4 之和，
+    加上近旁陷阱跳向探针的 R7 按源陷阱占据加权之和（R7 取内层平均场的口径，ADR-038/039）；局域场、
+    电势与能级都含当前占据下的空间电荷（§6.1）。
 
     引擎的 R4 用 12 个声子项，这里把前驱的声子项数也设成 12 再逐项对拍。探针陷阱 Z = 0、
-    占据 0，不带电，不改变别的缺陷感受到的静电环境。
+    占据 0，不带电，不改变别的缺陷感受到的静电环境。另在一个单元中心阴极一侧 0.6 nm 处放一个
+    深能级（1.5 eV、几乎全占）的缺陷：它在那个单元上是上坡跃迁、被 MA 因子压低，同时把均匀取的
+    探针里的一个变成陷阱项压过电极项的单元。
     """
     monkeypatch.setattr(tddb_module, "_PRECURSOR_N_PHONON", _N_PHONON)
     config = _config()
     tddb = config.tddb
-    inner = KMCSimulation(config)
-    occupancy = solve_mean_field(inner).occupancy
+    material = config.device.stack.single_material
+    band_reference = float(config.device.layer_band_references()[0])
     cells = generation_cells(config.device, tddb.generation_grid)
+    base = KMCSimulation(config)
+    admissible = np.flatnonzero(admissible_cells(cells, base.defects.positions, config.device))
+    target = admissible[cells.layer[admissible] == 0][1]  # 最靠阴极的一层：1.5 eV 的能级在阴极费米能级以下
+    deep = DefectEnsemble.uniform(
+        cells.centers[target] + np.array([0.0, 0.0, 0.6e-9]), np.array([1.5 * EV]), material, band_reference
+    )
+    inner = KMCSimulation(config, defects=append_defects(base.defects, deep))
+    occupancy = solve_mean_field(inner).occupancy
+    assert occupancy[-1] > 0.99
     rates = generation_rates(inner, occupancy, tddb, cells)
 
-    material = config.device.stack.single_material
     probe_material = replace(material, huang_rhys=tddb.precursor_relaxation_energy / material.phonon_energy)
     live = np.flatnonzero(admissible_cells(cells, inner.defects.positions, config.device))
-    chosen = live[[0, live.size // 3, 2 * live.size // 3, -1]]
+    chosen = np.append(live[[0, live.size // 3, 2 * live.size // 3, -1]], target)
     probes = DefectEnsemble.uniform(
         cells.centers[chosen],
         np.full(chosen.size, tddb.precursor_ionization_energy),
         probe_material,
-        band_reference=float(config.device.layer_band_references()[0]),
+        band_reference=band_reference,
         charge_state=0.0,
     )
     extended = KMCSimulation(config, defects=append_defects(inner.defects, probes))
     occ = np.concatenate([occupancy, np.zeros(chosen.size)])
-    blocks, _ = extended._rates(occ)
-    probe = np.arange(inner.n_defects, extended.n_defects)
-    capture = (blocks[_B_R2C] + blocks[_B_R2A] + blocks[_B_R4C] + blocks[_B_R4A])[probe]
-    field = extended._electrostatics(occ)[1][probe]
+    energy, field, barrier_c, barrier_a = extended._trap_state(occ)
+    blocks = extended._electrode_blocks(energy, field, barrier_c, barrier_a)
+    n = inner.n_defects
+    probe = np.arange(n, extended.n_defects)
+    electrode = (blocks[_B_R2C] + blocks[_B_R2A] + blocks[_B_R4C] + blocks[_B_R4A])[probe]
+    hop = mean_field_hop_rates(extended, energy)
+    a, b = extended._pairs.a, extended._pairs.b
+    into = (a < n) & (b >= n)
+    from_traps = np.bincount(b[into] - n, hop[into] * occ[a[into]], chosen.size)
+    assert np.any(from_traps > 1e3 * electrode)  # 陷阱项压过电极项的单元
+    assert 0.0 < from_traps[-1] < 1e-3 * electrode[-1]  # 上坡：被 MA 因子压低
     p_bb = bond_break_probability(
-        tddb.activation_energy, tddb.dipole_moment, material.kappa, field, config.simulation.temperature
+        tddb.activation_energy, tddb.dipole_moment, material.kappa, field[probe], config.simulation.temperature
     )
-    expected = tddb.precursor_concentration * cells.volume * capture * p_bb
+    expected = tddb.precursor_concentration * cells.volume * (electrode + from_traps) * p_bb
     assert np.all(expected > 0.0)
     np.testing.assert_allclose(rates[chosen], expected, rtol=1e-9)
+
+
+def test_trap_channel_vanishes_for_empty_or_distant_traps(monkeypatch):
+    """R_1e 的陷阱项按源陷阱占据加权、只列截断半径内的 (陷阱, 前驱) 对（判据同近邻表，ADR-039）。
+
+    两个深能级陷阱（1.6 eV，阴极侧，几乎全占）放在一列生成单元的中心线上（单元横向 10 nm，中心在
+    x, y = 5 nm）。对照取"一条陷阱来源都不列"的生成率表（截断半径置零，R_1e 只剩电极项）：陷阱全空时
+    两者逐位相同；陷阱占据时，离两个陷阱都超过截断半径的单元逐位相同，截断半径内的单元变大，紧挨着
+    陷阱的单元以陷阱项为主。
+    """
+    config = _config()
+    material = config.device.stack.single_material
+    defects = DefectEnsemble.uniform(
+        np.array([[5.0e-9, 5.0e-9, 1.5e-9], [5.6e-9, 5.0e-9, 1.8e-9]]),
+        np.array([1.6, 1.6]) * EV,
+        material,
+        band_reference=float(config.device.layer_band_references()[0]),
+    )
+    inner = KMCSimulation(config, defects=defects)
+    occupancy = solve_mean_field(inner).occupancy
+    assert np.all(occupancy > 0.9)
+    cells = generation_cells(config.device, config.tddb.generation_grid)
+    live = np.flatnonzero(admissible_cells(cells, defects.positions, config.device))
+    r_cut = tddb_module._trap_capture_cutoff(
+        defects,
+        localization_radius(config.tddb.precursor_ionization_energy, material.m_di),
+        live.size,
+        config.simulation.temperature,
+    )
+    rates = generation_rates(inner, occupancy, config.tddb, cells)
+    rates_empty = generation_rates(inner, np.zeros(2), config.tddb, cells)
+    monkeypatch.setattr(tddb_module, "_trap_capture_cutoff", lambda *args: 0.0)
+    electrode_only = generation_rates(inner, occupancy, config.tddb, cells)
+    assert np.array_equal(rates_empty, generation_rates(inner, np.zeros(2), config.tddb, cells))
+
+    distance = np.min(
+        [np.linalg.norm(minimum_image_delta(cells.centers[live] - point, config.device.Lx, config.device.Ly), axis=1)
+         for point in defects.positions],
+        axis=0,
+    )
+    far = distance >= r_cut
+    assert far.any() and (~far).any()
+    assert np.array_equal(rates[live[far]], electrode_only[live[far]])
+    assert np.all(rates[live[~far]] >= electrode_only[live[~far]])
+    assert np.any(rates[live[~far]] > 2.0 * electrode_only[live[~far]])
 
 
 def test_cells_within_min_separation_of_a_defect_have_zero_rate():
