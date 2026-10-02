@@ -1,0 +1,23 @@
+rerun_s2: N=1010 defects, empty (p<0.5) 498, mean-field 56.1s
+  macro field z=0.6 nm: |E|/E_applied=1.767, P_bb=7.586e-02
+  macro field z=1.0 nm: |E|/E_applied=1.014, P_bb=3.224e-08
+  macro field z=1.5 nm: |E|/E_applied=0.883, P_bb=2.555e-09
+  macro field z=2.0 nm: |E|/E_applied=0.871, P_bb=2.011e-09
+  macro field z=3.0 nm: |E|/E_applied=0.871, P_bb=1.998e-09
+  macro field z=4.0 nm: |E|/E_applied=0.865, P_bb=1.776e-09
+rerun_s2 trap term local: sum_G=2.5955e+06 /s  wall=28.5s
+rerun_s2 trap term macro: sum_G=8.1698e+05 /s  wall=29.3s
+rerun_s2 grid  16x 16x 70 local | sum_G cells=3.1038e+00 traps=2.5955e+06 total=2.5955e+06 | cells: z<1 0.000 1-2 1.000 >2 1.14e-06 median 1.073 nm | births z median=0.62 q90=0.72 z>2nm=0.0000 | live 0.868 sat 0.00e+00 wall=5s
+rerun_s2 grid  16x 16x 70 macro | sum_G cells=5.9441e+00 traps=8.1698e+05 total=8.1699e+05 | cells: z<1 0.000 1-2 1.000 >2 4.35e-07 median 1.072 nm | births z median=0.55 q90=0.59 z>2nm=0.0000 | live 0.868 sat 0.00e+00 wall=5s
+rerun_s2 grid  32x 32x 70 local | sum_G cells=2.7190e+09 traps=2.5955e+06 total=2.7216e+09 | cells: z<1 1.000 1-2 0.000 >2 1.33e-15 median 0.531 nm | births z median=0.58 q90=0.69 z>2nm=0.0000 | live 0.888 sat 1.35e-03 wall=20s
+rerun_s2 grid  32x 32x 70 macro | sum_G cells=2.2234e+09 traps=8.1698e+05 total=2.2242e+09 | cells: z<1 1.000 1-2 0.000 >2 1.16e-15 median 0.597 nm | births z median=0.55 q90=0.59 z>2nm=0.0000 | live 0.888 sat 1.35e-03 wall=20s
+rerun_s2 grid  48x 48x 70 local | sum_G cells=2.7463e+09 traps=2.5955e+06 total=2.7489e+09 | cells: z<1 1.000 1-2 0.000 >2 1.31e-15 median 0.541 nm | births z median=0.58 q90=0.67 z>2nm=0.0000 | live 0.886 sat 1.40e-03 wall=44s
+rerun_s2 grid  48x 48x 70 macro | sum_G cells=2.2118e+09 traps=8.1698e+05 total=2.2126e+09 | cells: z<1 1.000 1-2 0.000 >2 1.16e-15 median 0.582 nm | births z median=0.55 q90=0.59 z>2nm=0.0000 | live 0.886 sat 1.40e-03 wall=44s
+rerun_s2 grid  64x 64x 70 local | sum_G cells=2.9588e+09 traps=2.5955e+06 total=2.9614e+09 | cells: z<1 1.000 1-2 0.000 >2 1.22e-15 median 0.574 nm | births z median=0.57 q90=0.68 z>2nm=0.0000 | live 0.887 sat 1.41e-03 wall=81s
+rerun_s2 grid  64x 64x 70 macro | sum_G cells=2.3640e+09 traps=8.1698e+05 total=2.3648e+09 | cells: z<1 1.000 1-2 0.000 >2 1.09e-15 median 0.575 nm | births z median=0.55 q90=0.59 z>2nm=0.0000 | live 0.887 sat 1.41e-03 wall=81s
+rerun_s2 grid  96x 96x 70 local | sum_G cells=2.6155e+09 traps=2.5955e+06 total=2.6181e+09 | cells: z<1 1.000 1-2 0.000 >2 1.38e-15 median 0.588 nm | births z median=0.57 q90=0.68 z>2nm=0.0000 | live 0.887 sat 1.34e-03 wall=177s
+rerun_s2 grid  96x 96x 70 macro | sum_G cells=2.2461e+09 traps=8.1698e+05 total=2.2469e+09 | cells: z<1 1.000 1-2 0.000 >2 1.15e-15 median 0.534 nm | births z median=0.55 q90=0.59 z>2nm=0.0000 | live 0.887 sat 1.34e-03 wall=177s
+rerun_s2 grid 128x128x 70 local | sum_G cells=2.7025e+09 traps=2.5955e+06 total=2.7051e+09 | cells: z<1 1.000 1-2 0.000 >2 1.34e-15 median 0.569 nm | births z median=0.57 q90=0.68 z>2nm=0.0000 | live 0.886 sat 1.34e-03 wall=321s
+rerun_s2 grid 128x128x 70 macro | sum_G cells=2.2785e+09 traps=8.1698e+05 total=2.2793e+09 | cells: z<1 1.000 1-2 0.000 >2 1.13e-15 median 0.504 nm | births z median=0.55 q90=0.59 z>2nm=0.0000 | live 0.886 sat 1.34e-03 wall=321s
+rerun_s2 grid 128x128x140 local | sum_G cells=2.6910e+09 traps=2.5955e+06 total=2.6936e+09 | cells: z<1 1.000 1-2 0.000 >2 1.44e-15 median 0.580 nm | births z median=0.58 q90=0.67 z>2nm=0.0000 | live 0.887 sat 1.42e-03 wall=619s
+rerun_s2 grid 128x128x140 macro | sum_G cells=1.9349e+09 traps=8.1698e+05 total=1.9357e+09 | cells: z<1 1.000 1-2 0.000 >2 1.43e-15 median 0.552 nm | births z median=0.55 q90=0.59 z>2nm=0.0000 | live 0.887 sat 1.42e-03 wall=619s
