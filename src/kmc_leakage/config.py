@@ -416,6 +416,9 @@ class TDDBConfig:
     # 线型（E_rel1/ℏω₀ 作为式 T10 的参数），与输运用的材料 Huang-Rhys 因子 huang_rhys 无关（ADR-030）
     precursor_relaxation_energy: float
     dipole_moment: float  # p₀：前驱有效偶极矩均值 [C·m]（式 T2/T3）
+    # P_bb 用的宏观场：泊松解的场在标准差为此值的 Gaussian 窗口上取空间平均 [m]（式 T2，ADR-043）。
+    # Lorentz 局域场因子 (2+k)/3 针对宏观场，窗口取 Lorentz 球的尺度；0 = 直接用泊松网格上的局域场
+    field_averaging_width: float
     # --- 瞬态驱动（Phase 3，ADR-033）---
     # N_T：前驱位点浓度 [1/m^3]，体积生成率 N_T·R_1e·P_bb 的前置因子（§6.1 模型 C）。0 = 关掉生成
     precursor_concentration: float

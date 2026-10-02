@@ -2,7 +2,7 @@
 
 import numpy as np
 import pytest
-from scipy import constants
+from scipy import constants, special
 
 from kmc_leakage.config import (
     DeviceConfig,
@@ -171,3 +171,39 @@ def test_grid_refinement_reduces_discretization_error():
         z, Lz = solver.z, solver.device.Lz
         analytic = -1.0e6 / (2.0 * KAPPA * constants.epsilon_0) * z * (Lz - z) + z / Lz
         assert np.allclose(solver.lateral_average(phi), analytic, rtol=1e-10, atol=1e-12)
+
+
+def test_gaussian_average_is_the_field_of_a_gaussian_charge_cloud():
+    """P_bb 的宏观场（ADR-043）：`gaussian_average` 宽度 0 原样返回、均匀场保持不变；一个点电荷的场经
+    σ = 0.5 nm 平均后就是 Gaussian 电荷云的场 q/(4πε0κr²)·[erf(x/√2) − √(2/π)·x·e^{−x²/2}]（x = r/σ），
+    而且与泊松网格无关：0.5 nm 处横向 0.25 nm 与 0.125 nm 网格的局域场差约 0.2 个库仑场，平均场差 ≤ 0.03 个。"""
+    sigma = 0.5e-9
+    device = _device(Lx=20e-9, Ly=20e-9, Lz=8e-9)
+    solver = PoissonSolver(device, GridConfig(16, 16, 20))
+    uniform = np.stack(solver.electric_field(solver.solve(np.zeros(solver.grid.shape), 3.0)), axis=-1)
+    assert np.array_equal(solver.gaussian_average(uniform, 0.0), uniform)
+    np.testing.assert_allclose(solver.gaussian_average(uniform, sigma), uniform, rtol=1e-12, atol=1e-6)
+
+    def coulomb(r):
+        return Q / (4.0 * np.pi * constants.epsilon_0 * KAPPA * r ** 2)
+
+    def cloud(r):
+        x = r / sigma
+        return coulomb(r) * (special.erf(x / np.sqrt(2.0)) - np.sqrt(2.0 / np.pi) * x * np.exp(-0.5 * x * x))
+
+    directions = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, -1.0], [0.6, 0.0, 0.8]])
+    local, averaged = {}, {}
+    for n in (80, 160):
+        solver = PoissonSolver(device, GridConfig(n, n, n))
+        source = np.array([10e-9 + 0.3 * solver.hx, 10e-9 + 0.6 * solver.hy, 4e-9 + 0.4 * solver.hz])
+        field = np.stack(solver.electric_field(solver.solve(solver.deposit(source, Q), 0.0)), axis=-1)
+        mean = solver.gaussian_average(field, sigma)
+        for r in (0.5e-9, 1.0e-9):
+            points = source + r * directions
+            local[n, r] = np.linalg.norm(solver.interpolate(field, points), axis=-1)
+            averaged[n, r] = np.linalg.norm(solver.interpolate(mean, points), axis=-1)
+    for r in (0.5e-9, 1.0e-9):
+        np.testing.assert_allclose(averaged[160, r], cloud(r), rtol=0.05)
+    near = 0.5e-9
+    assert np.max(np.abs(averaged[80, near] - averaged[160, near])) <= 0.03 * coulomb(near)
+    assert np.max(np.abs(local[80, near] - local[160, near])) >= 0.2 * coulomb(near)

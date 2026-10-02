@@ -101,6 +101,9 @@ tddb:
   # 暂取 1.0 eV（ADR-030）
   precursor_relaxation_energy_eV: 1.0
   dipole_moment_eA: 1.0   # p₀：前驱有效偶极矩均值 [e·Å]（式 T2/T3，ADR-035）
+  # P_bb 用宏观场：泊松解的场在 Gaussian 窗口（标准差 σ，半高全宽 2.355σ ≈ 1.2 nm，约两个 ZrO₂ 晶格常数）
+  # 上取空间平均，去掉带电空位亚纳米近旁的点电荷场，保留空位层与团簇尖端的 ≳1 nm 场结构（ADR-043）。0 = 局域场
+  field_averaging_width_nm: 0.5
   # N_T：前驱位点浓度，体积生成率 N_T·R_1e·P_bb 的前置因子（6.1 模型 C）。与初始缺陷浓度相同
   # （ADR-035）；只改变时间标尺，不改变 I-t 的形状
   precursor_concentration_cm3: 3.0e18

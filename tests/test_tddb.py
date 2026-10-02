@@ -67,6 +67,7 @@ def _tddb(**overrides) -> TDDBConfig:
         precursor_ionization_energy=1.15 * EV,
         precursor_relaxation_energy=1.0 * EV,
         dipole_moment=7.1 * E_ANGSTROM,
+        field_averaging_width=0.5e-9,
         precursor_concentration=4.0e19 * PER_CM3,
         generation_grid=(2, 2, 14),
         max_generated_vacancies=4,
@@ -238,15 +239,17 @@ def test_trajectory_bookkeeping(trajectory):
     assert np.all(result.dense_cluster_size <= result.percolation_size)
 
 
-def test_generation_rate_is_model_c_with_engine_capture_rates(monkeypatch):
+@pytest.mark.parametrize("width", [0.0, 0.5e-9])
+def test_generation_rate_is_model_c_with_engine_capture_rates(monkeypatch, width):
     """G_cell = N_T·V_cell·R_1e,电极·P_bb：R_1e,电极 与引擎在单元中心放一个前驱参数陷阱时的两侧 R2 + R4 之和
-    一致；局域场、电势与能级都含当前占据下的空间电荷（§6.1）。陷阱项不进单元（ADR-042）。
+    一致；局域场、电势与能级都含当前占据下的空间电荷（§6.1）。陷阱项不进单元（ADR-042）。P_bb 取泊松解的场在
+    Gaussian 窗口上的平均（ADR-043）；窗口宽度 0 时就是引擎在探针处读到的局域场。
 
     引擎的 R4 用 12 个声子项，这里把前驱的声子项数也设成 12 再逐项对拍。探针陷阱 Z = 0、
     占据 0，不带电，不改变别的缺陷感受到的静电环境。
     """
     monkeypatch.setattr(tddb_module, "_PRECURSOR_N_PHONON", _N_PHONON)
-    config = _config()
+    config = _config(field_averaging_width=width)
     tddb = config.tddb
     material = config.device.stack.single_material
     band_reference = float(config.device.layer_band_references()[0])
@@ -271,8 +274,19 @@ def test_generation_rate_is_model_c_with_engine_capture_rates(monkeypatch):
     blocks = extended._electrode_blocks(energy, field, barrier_c, barrier_a)
     probe = np.arange(inner.n_defects, extended.n_defects)
     electrode = (blocks[_B_R2C] + blocks[_B_R2A] + blocks[_B_R4C] + blocks[_B_R4A])[probe]
+    bond_field = field[probe]
+    if width > 0.0:
+        solver = inner.solver
+        charge = Q * (inner.defects.charge_state - occupancy)
+        phi = solver.solve(
+            solver.deposit(inner.defects.positions, charge),
+            tddb_module.top_boundary_potential(config.device, config.simulation.voltage),
+        )
+        mean = solver.gaussian_average(np.stack(solver.electric_field(phi), axis=-1), width)
+        bond_field = np.linalg.norm(solver.interpolate(mean, cells.centers[chosen]), axis=-1)
+        assert not np.array_equal(bond_field, field[probe])
     p_bb = bond_break_probability(
-        tddb.activation_energy, tddb.dipole_moment, material.kappa, field[probe], config.simulation.temperature
+        tddb.activation_energy, tddb.dipole_moment, material.kappa, bond_field, config.simulation.temperature
     )
     expected = tddb.precursor_concentration * cells.volume * electrode * p_bb
     assert np.all(expected > 0.0)
@@ -704,7 +718,7 @@ def test_cli_tddb_writes_csv_and_figure(tmp_path, capsys):
         "simulation": {"voltage_V": 3.0, "temperature_C": 25.0, "seed": 3, "grid": {"nx": 8, "ny": 8, "nz": 16}},
         "tddb": {
             "activation_energy_eV": 4.0, "precursor_ionization_energy_eV": 1.15,
-            "precursor_relaxation_energy_eV": 1.0, "dipole_moment_eA": 7.1,
+            "precursor_relaxation_energy_eV": 1.0, "dipole_moment_eA": 7.1, "field_averaging_width_nm": 0.5,
             "precursor_concentration_cm3": 4.0e19, "generation_grid": {"nx": 2, "ny": 2, "nz": 14},
             "max_generated_vacancies": 2, "stop_time_s": 1.0e4,
             "percolation_distance_nm": 0.9, "compliance_current_density_A_cm2": 1.0e4,

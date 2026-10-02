@@ -102,7 +102,8 @@ def test_fast_trap_rate_is_optional_and_positive():
 
 def test_tddb_section_is_optional_and_converted():
     """tddb 段缺省为 None（纯漏电流仿真）；三个能量从 eV 换算成 J、必须为正，p₀ 从 e·Å
-    换算成 C·m、必须 ≥ 0，N_T 从 cm⁻³ 换算成 m⁻³、必须 ≥ 0，生成网格与空位数上限是正整数，
+    换算成 C·m、必须 ≥ 0，P_bb 宏观场的平均窗口从 nm 换算成 m、必须 ≥ 0（ADR-043），
+    N_T 从 cm⁻³ 换算成 m⁻³、必须 ≥ 0，生成网格与空位数上限是正整数，
     应力时间上限必须为正，d_c 从 nm 换算成 m、限流值从 A/cm² 换算成 A/m²，都必须为正，以上各项
     都必须给出；k_TH 可省略（等温），给出时必须为正（ADR-024/028/033/036）。"""
     raw = _base_dict()
@@ -112,6 +113,7 @@ def test_tddb_section_is_optional_and_converted():
         "precursor_ionization_energy_eV": 1.15,
         "precursor_relaxation_energy_eV": 0.04,
         "dipole_moment_eA": 7.1,
+        "field_averaging_width_nm": 0.5,
         "precursor_concentration_cm3": 4.0e19,
         "generation_grid": {"nx": 16, "ny": 12, "nz": 70},
         "max_generated_vacancies": 300,
@@ -125,6 +127,7 @@ def test_tddb_section_is_optional_and_converted():
     assert tddb.precursor_ionization_energy == pytest.approx(1.15 * EV)
     assert tddb.precursor_relaxation_energy == pytest.approx(0.04 * EV)
     assert tddb.dipole_moment == pytest.approx(7.1 * constants.elementary_charge * 1e-10)
+    assert tddb.field_averaging_width == pytest.approx(0.5e-9)
     assert tddb.precursor_concentration == pytest.approx(4.0e25)
     assert tddb.generation_grid == (16, 12, 70)
     assert tddb.max_generated_vacancies == 300
@@ -144,10 +147,13 @@ def test_tddb_section_is_optional_and_converted():
             config_from_dict(raw)
     raw["tddb"] = dict(section, dipole_moment_eA=0.0)
     assert config_from_dict(raw).tddb.dipole_moment == 0.0  # p₀ = 0：关掉场加速
+    raw["tddb"] = dict(section, field_averaging_width_nm=0.0)
+    assert config_from_dict(raw).tddb.field_averaging_width == 0.0  # 0：P_bb 用局域场
     raw["tddb"] = dict(section, precursor_concentration_cm3=0.0)
     assert config_from_dict(raw).tddb.precursor_concentration == 0.0  # N_T = 0：关掉生成
     for key, bad in (
         ("dipole_moment_eA", -1.0),
+        ("field_averaging_width_nm", -0.1),
         ("precursor_concentration_cm3", -1.0),
         ("max_generated_vacancies", 0),
         ("max_generated_vacancies", 2.5),
@@ -412,6 +418,7 @@ def test_tddb_example_matches_leakage_reference_preset():
     assert tddb.tddb.precursor_ionization_energy == pytest.approx(tddb.defects.level.ED)
     assert tddb.tddb.precursor_relaxation_energy == pytest.approx(1.0 * EV)
     assert tddb.tddb.dipole_moment == pytest.approx(1.0 * constants.elementary_charge * 1e-10)
+    assert tddb.tddb.field_averaging_width == pytest.approx(0.5e-9)  # ADR-043
     assert tddb.tddb.precursor_concentration == pytest.approx(tddb.defects.concentration)
     assert tddb.tddb.precursor_concentration == pytest.approx(3.0e18 * constants.centi ** -3)
     assert tddb.tddb.thermal_conductivity == pytest.approx(2.0)

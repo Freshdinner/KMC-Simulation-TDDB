@@ -298,7 +298,8 @@ def _positive_int(value: Any, where: str) -> int:
 def _tddb(raw: Optional[Dict[str, Any]]) -> Optional[TDDBConfig]:
     """TDDB 缺陷生成参数（ADR-024/028/033/036）；整段省略返回 None，即纯漏电流仿真。
 
-    三个能量（E_A、E_t1、E_rel1）必须为正；p₀ 必须 ≥ 0，取 0 即关掉场加速；N_T 必须 ≥ 0，
+    三个能量（E_A、E_t1、E_rel1）必须为正；p₀ 必须 ≥ 0，取 0 即关掉场加速；P_bb 宏观场的平均
+    窗口宽度必须 ≥ 0，取 0 即用局域场（ADR-043）；N_T 必须 ≥ 0，
     取 0 即关掉生成（G = 0）。生成网格三个方向的单元数、空位数上限都是正整数，应力时间
     上限、渗流截断 d_c、限流值必须为正。热导率 k_TH 可省略（等温），给出时必须为正。
     """
@@ -317,6 +318,9 @@ def _tddb(raw: Optional[Dict[str, Any]]) -> Optional[TDDBConfig]:
     dipole = float(_require(raw, "dipole_moment_eA", "tddb"))
     if not dipole >= 0.0:
         raise ValueError("tddb.dipole_moment_eA 必须 ≥ 0（单位 e·Å），收到 {!r}".format(dipole))
+    averaging = float(_require(raw, "field_averaging_width_nm", "tddb"))
+    if not averaging >= 0.0:
+        raise ValueError("tddb.field_averaging_width_nm 必须 ≥ 0（单位 nm），收到 {!r}".format(averaging))
     concentration = float(_require(raw, "precursor_concentration_cm3", "tddb"))
     if not concentration >= 0.0:
         raise ValueError(
@@ -331,6 +335,7 @@ def _tddb(raw: Optional[Dict[str, Any]]) -> Optional[TDDBConfig]:
         precursor_ionization_energy=energy("precursor_ionization_energy_eV"),
         precursor_relaxation_energy=energy("precursor_relaxation_energy_eV"),
         dipole_moment=dipole * E_ANGSTROM,
+        field_averaging_width=averaging * NM,
         precursor_concentration=concentration * PER_CM3,
         generation_grid=tuple(
             _positive_int(_require(grid, axis, "tddb.generation_grid"), "tddb.generation_grid." + axis)

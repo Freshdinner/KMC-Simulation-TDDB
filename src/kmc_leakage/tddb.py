@@ -345,8 +345,9 @@ class TrapCaptureGeneration:
         R7(i → x) = ν_i·exp[−|x − x_i|·(1/r_D,i + 1/r_D,前驱)]·Θ(E_前驱(x) − E_i),
 
     就是 ADR-039 的单元中心求和 Σ_单元 N_T·V_cell·P_bb·Σ_i p_i·R7 在单元无限细时的极限，被积函数逐点
-    的取法不变：前驱能级 E_前驱(x) = B − e·φ(x) − E_t1 与局域场 |E(x)| 取当前占据下含空间电荷的局域值，
-    E_i 取源陷阱的平均场能级（ADR-038），温度取 x 处的局域温度（§6.6），P_bb 的 k 取静态 κ（式 T2）。
+    的取法与单元事件相同：前驱能级 E_前驱(x) = B − e·φ(x) − E_t1 取当前占据下含空间电荷的局域值，P_bb
+    取宏观场 `bond_field`（泊松解的场在 Gaussian 窗口上的平均，ADR-043），E_i 取源陷阱的平均场能级
+    （ADR-038），温度取 x 处的局域温度（§6.6），P_bb 的 k 取静态 κ（式 T2）。
     A 是可放置区域：z ∈ [standoff, Lz − standoff]，且离全部已有缺陷 ≥ min_separation（xy 最小镜像）。
 
     积分在以源陷阱为中心的球坐标 (r, u = cosθ, φ) 上做，r 从 min_separation 起每 `_TRAP_RADIAL_STEP`
@@ -366,15 +367,17 @@ class TrapCaptureGeneration:
         occupancy: np.ndarray,
         tddb: TDDBConfig,
         phi: np.ndarray,
+        bond_field: np.ndarray,
         temperature_field: Optional[np.ndarray],
     ) -> None:
         device, solver, defects = inner.device, inner.solver, inner.defects
         material = device.stack.single_material
         self._device = device
         self._solver = solver
-        # 被积函数要读的网格量叠成一个多通道数组，每个节点一次插值读回：φ、E 的三个分量、（热反馈时）温度
-        self._grid = np.stack(
-            (phi,) + solver.electric_field(phi) + (() if temperature_field is None else (temperature_field,)),
+        # 被积函数要读的网格量叠成一个多通道数组，每个节点一次插值读回：φ、P_bb 宏观场的三个分量、
+        # （热反馈时）温度
+        self._grid = np.concatenate(
+            (phi[..., None], bond_field) + (() if temperature_field is None else (temperature_field[..., None],)),
             axis=-1,
         )
         self._temperature = inner.sim.temperature  # 没有温度场时的工作点温度
@@ -543,7 +546,7 @@ class TrapCaptureGeneration:
     def _integrand(
         self, source: np.ndarray, points: np.ndarray, distance: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """(r²·R7(i → x)·P_bb(x), h, g)：前驱能级、局域场与温度都取 x 处的局域值（取法同单元中心的
+        """(r²·R7(i → x)·P_bb(x), h, g)：前驱能级、P_bb 的宏观场与温度都取 x 处的值（取法同单元中心的
         电极项）。h = (E_前驱(x) − E_i)/k_BT，R7 里的 MA 因子是 exp(−max(0, h))；g = (E_A − p₀·(2+k)/3·E)/k_BT，
         P_bb = exp(−max(0, g))。"""
         tddb = self._tddb
@@ -649,12 +652,14 @@ def generation_rates(
 
     - **单元事件** G_cell = N_T·V_cell·R_1e,电极·P_bb，在单元中心对一个虚拟前驱求值，取法同
       `kmc.KMCSimulation._rates` 处理真实陷阱：前驱处导带底 E_C = B − e·φ 定能级 E = E_C − E_t1，
-      局域场大小进 R4 的 c_MP 与 P_bb；电极→单元的 WKB 路径沿 z 直线，势垒取横向平均剖面的导带底；
+      局域场大小进 R4 的 c_MP；电极→单元的 WKB 路径沿 z 直线，势垒取横向平均剖面的导带底；
       R_1e,电极 = Σ_两侧电极 (R2 + R4)（式 T4，`single_electron_capture_rate`，R4 取
       `_PRECURSOR_N_PHONON` 个声子项）；P_bb 的场加速项 p₀·(2+k)/3·E 里 k 取静态 κ（式 T2）。
-      单元中心落在已有缺陷 min_separation 之内的单元记 0（`admissible_cells`）：那里放不下新空位，
-      而带电缺陷近旁的库仑场经 (2+κ)/3 放大后会把 P_bb 压到饱和，把这个速率算给整个单元会让
-      ΣG 随生成网格加密发散（ADR-033）。
+      单元中心落在已有缺陷 min_separation 之内的单元记 0（`admissible_cells`）：那里放不下新空位。
+    - **P_bb 的场是宏观场**（ADR-043）：泊松解的场在标准差 `tddb.field_averaging_width` 的 Gaussian 窗口上
+      取空间平均（`PoissonSolver.gaussian_average`）。Lorentz 关系 (2+k)/3 针对在 Lorentz 球上近似均匀的宏观场；
+      带电缺陷亚纳米近旁的点电荷场不满足这个前提，经 (2+κ)/3 放大后让 P_bb 在 0.1–0.2 nm 尺度上饱和，生成率随
+      生成网格与泊松网格都不收敛。平均窗口保留 ≳1 nm 尺度的场结构（空位层的集体场、团簇尖端的聚焦场）。
     - **源陷阱事件**：近旁已占据陷阱经陷阱间通道 p·R7 送给前驱的电子（式 T5 的陷阱来源，ADR-039），
       逐个源陷阱在它周围的可放置区域上积分（`TrapCaptureGeneration`），与生成网格无关。
 
@@ -668,7 +673,8 @@ def generation_rates(
     q = constants.elementary_charge
     rho = solver.deposit(defects.positions, q * (defects.charge_state - occupancy))
     phi = solver.solve(rho, top_boundary_potential(device, voltage))
-    traps = TrapCaptureGeneration(inner, occupancy, tddb, phi, temperature_field)
+    bond_field = solver.gaussian_average(np.stack(solver.electric_field(phi), axis=-1), tddb.field_averaging_width)
+    traps = TrapCaptureGeneration(inner, occupancy, tddb, phi, bond_field, temperature_field)
 
     rates = np.zeros(len(cells))
     live = np.flatnonzero(admissible_cells(cells, defects.positions, device))
@@ -725,7 +731,12 @@ def generation_rates(
             _PRECURSOR_N_PHONON,
         )
     per_precursor = bond_break_generation_rate(
-        capture, tddb.activation_energy, tddb.dipole_moment, material.kappa, field, temperature
+        capture,
+        tddb.activation_energy,
+        tddb.dipole_moment,
+        material.kappa,
+        np.linalg.norm(solver.interpolate(bond_field, centers), axis=-1),
+        temperature,
     )
     rates[live] = tddb.precursor_concentration * cells.volume * per_precursor
     return GenerationTable(rates, traps)

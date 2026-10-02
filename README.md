@@ -513,7 +513,7 @@ t=0 的初始缺陷按这份缺陷段生成，应力生成的 O 空位也用它�
 | `ensemble.count` | 30 | 小盒子单个实现的散布大得多（σ(log₁₀J) ≈ 0.9–1.4），M=30 的精度与默认盒子 M=5 相当（ADR-026） |
 
 顶层 `tddb` 段放 TDDB 缺陷生成、热反馈与击穿判据参数，由 `io.py` 读成 `Config.tddb`（SI 单位），
-整段省略即纯漏电流仿真（`Config.tddb = None`）。字段在用到它的阶段逐个加入，现在有十一个，除 k_TH
+整段省略即纯漏电流仿真（`Config.tddb = None`）。字段在用到它的阶段逐个加入，现在有十二个，除 k_TH
 外都必须给出：
 
 ```yaml
@@ -522,6 +522,7 @@ tddb:
   precursor_ionization_energy_eV: 1.15   # E_t1：前驱能级相对局部导带底的深度（必须为正）
   precursor_relaxation_energy_eV: 1.0    # E_rel1：第一次电子俘获导致键断裂、O 空位形成的弛豫能（必须为正）
   dipole_moment_eA: 1.0                  # p₀：前驱有效偶极矩均值 [e·Å]（必须 ≥ 0，取 0 即关掉场加速）
+  field_averaging_width_nm: 0.5          # P_bb 宏观场的 Gaussian 平均窗口 σ（必须 ≥ 0，取 0 即局域场，ADR-043）
   precursor_concentration_cm3: 3.0e18    # N_T：前驱浓度，体积生成率的前置因子（必须 ≥ 0，取 0 即关掉生成）
   generation_grid: {nx: 16, ny: 16, nz: 70}  # 生成单元数，铺满 z ∈ [standoff, Lz−standoff]（正整数）
   percolation_distance_nm: 0.9           # d_c：渗流击穿判据的连边截断（必须为正）
@@ -550,7 +551,8 @@ E_A = 0.95 eV 成套选：3 V / 8 nm 下场加速项 p₀·(2+κ)/3·E 压低 0.
 `trap_precursor_capture_rate` 给陷阱项，是引擎的陷阱间通道把目标换成前驱、按源陷阱占据加权。陷阱项沿距离每
 0.083 nm 衰减 e 倍，`tddb.py` 不把它放在生成单元上，而是每个源陷阱一条事件、在它周围的可放置区域上积分
 （`TrapCaptureGeneration`，ADR-042），与生成网格无关；
-`bond_break_probability` 给断键概率 P_bb（有效势垒 ≤ 0 时饱和为 1）；
+`bond_break_probability` 给断键概率 P_bb（有效势垒 ≤ 0 时饱和为 1）。P_bb 里的场是宏观场：泊松解的场在 σ 的 Gaussian
+窗口上的平均（`PoissonSolver.gaussian_average`，ADR-043），Lorentz 因子 (2+k)/3 只对这种在约 1 nm 上近似均匀的场成立；
 `bond_break_generation_rate` 给单个前驱的生成速率 G = R_1e·P_bb，俘获速率作为参数传入。
 
 TDDB 外层每生成一个空位都要重求一次输运稳态，内层默认用**簇级平均场**求解器
@@ -778,11 +780,11 @@ pytest tests/ -v      # 268 个测试，约 110 s
 | `test_rates_limits.py` | R1–R8 的解析极限与物理约束：WKB 对矩形/三角势垒的解析解、R1 零偏压归零与玻尔兹曼极限、R2/R3 占据因子互补、**R4/R5 细致平衡**（R5/R4 = exp((E−E_F)/k_BT)，与 N_C、P、L_p 取值无关）、声子权重的低温泊松极限、R7 上下坡行为、**R8 的零场与高场两个极限** |
 | `test_generation.py` | TDDB 生成速率（式 T1–T4，ADR-027）：**G 的零场极限** = R_1e·exp(−E_A/k_BT)、**ln G 对场严格线性**（斜率 p₀·(2+κ)/(3k_BT)）、有效势垒 ≤ 0 时 P_bb 饱和为 1、场加速项用静态 κ（3 V/8 nm 下每 1 eÅ 压低 0.5 eV）、**R_1e 的电极项等于引擎里同一参数陷阱的两侧 R2 + R4 之和**（正反偏压各一次，rtol 1e-12）；**陷阱项 = p·R7**（下坡只剩几何因子、上坡乘 exp(−ΔE/k_BT)、源陷阱空着为 0，ADR-039） |
 | `test_richardson.py` | R1 热发射子部分 vs Richardson-Schottky 解析式的**独立检验**：单层里比值恒为 m_e/m_cb 且不随温度/偏压漂移，三个缺陷浓度下逐位相同（R1 按构造与缺陷无关）；另配一例用体内鼓包把势垒顶推离界面；**叠层里以 E_max（分段势垒顶，落在 Al₂O₃ 内）为参考的 R1 供给函数玻尔兹曼导出式对照**（ADR-012） |
-| `test_electrostatics.py` | 解代回离散泊松方程的残差、均匀电荷的解析抛物线、**线性叠加成立**、CIC 电荷守恒与插值精确性、**单点电荷入盒测试**（近场库仑标度 + 自作用势量级） |
+| `test_electrostatics.py` | 解代回离散泊松方程的残差、均匀电荷的解析抛物线、**线性叠加成立**、CIC 电荷守恒与插值精确性、**单点电荷入盒测试**（近场库仑标度 + 自作用势量级）、**Gaussian 窗口平均**（均匀场不变；点电荷平均后等于 Gaussian 电荷云的解析场、与泊松网格无关，ADR-043） |
 | `test_stack_physics.py` | **变 κ 泊松 + 分段能带 + 界面单侧场**（Phase 3）：无电荷解析分压、串联电容 C/A=ε0/S_κ、面电荷电位移跳变 = σ、变系数离散残差、界面对齐校验、同材料多层退回单层求解器、响应互易；E_C 真实台阶与显式 ΔE_C 覆盖、V_bi = (B_c+ΣΔE_C−B_a)/q；界面单侧场按 κ 比跳变、`field_vectors_at` 按 field_side 选侧、体缺陷回归锚点 |
 | `test_kmc_consistency.py` | **各分量之和 = 总电流**（机制分解、缺陷分解两条）、可复现性、三个估计量互相印证、零偏压电流可忽略、跃迁通道只走 R7、**近邻表在保留对上与稠密 (N,N) 矩阵逐位相同且截掉的总速率在双精度噪声以下**、**R1 两项等于理想梯形势垒上的公式值且与 seed / 事件数无关** |
 | `test_defects.py` | 缺陷数 = 浓度×体积、最小距离（含到界面）、r_D 公式、高斯能级统计、界面富集轮廓与解析积分对比、近邻表与"稠密矩阵+掩码"逐位一致（强制走多块路径）、截断半径命中给定容差 |
-| `test_config_io.py` | 单位换算逐项核对、两种有效质量保持独立、势垒显式优先于推算、内建电势、默认扫描范围、两个示例配置的缺陷段同构；**新 schema 结构校验**（材料引用存在、层厚为正、interfaces 数量 = 层数-1）与**旧键拒绝**（顶层 `dielectric` / `defects`、`device.Lz_nm` 各自报错提示新写法）；**`tddb` 段**可省略、E_A / E_t1 / E_rel1 / p₀ / N_T / 生成网格 / 空位数上限 / 应力时间上限 / d_c / 限流值 / k_TH（可省略即等温）的换算、取值检查与缺项报错，**`zro2_tddb.yaml` 与 `single_run.yaml` 的材料/缺陷/电极逐项相同**、横向网格 0.25 nm、生成单元 z 步长 = hz、前驱 E_t1 与 O 空位预设相同、E_rel1 单独取值、E_A = 0.95 eV / p₀ = 1 eÅ / N_T = 3×10¹⁸ cm⁻³ / k_TH = 1 W/(m·K) / d_c = 0.9 nm（ADR-024/028/030/032/033/035/036） |
+| `test_config_io.py` | 单位换算逐项核对、两种有效质量保持独立、势垒显式优先于推算、内建电势、默认扫描范围、两个示例配置的缺陷段同构；**新 schema 结构校验**（材料引用存在、层厚为正、interfaces 数量 = 层数-1）与**旧键拒绝**（顶层 `dielectric` / `defects`、`device.Lz_nm` 各自报错提示新写法）；**`tddb` 段**可省略、E_A / E_t1 / E_rel1 / p₀ / P_bb 平均窗口 σ / N_T / 生成网格 / 空位数上限 / 应力时间上限 / d_c / 限流值 / k_TH（可省略即等温）的换算、取值检查与缺项报错，**`zro2_tddb.yaml` 与 `single_run.yaml` 的材料/缺陷/电极逐项相同**、横向网格 0.25 nm、生成单元 z 步长 = hz、前驱 E_t1 与 O 空位预设相同、E_rel1 单独取值、E_A = 0.95 eV / p₀ = 1 eÅ / N_T = 3×10¹⁸ cm⁻³ / k_TH = 1 W/(m·K) / d_c = 0.9 nm（ADR-024/028/030/032/033/035/036） |
 | `test_stack_schema.py` | `DielectricStack` 统一查询接口（`Lz` 求和、`single_material` / `bulk_defects` 在多材料/多层时抛错）、**单元素 layers 退化用例**（YAML 解析与直接构造的单层叠层逐位相同：确定性量 rtol ≤ 1e-12、同种子轨迹 rtol ≤ 1e-9）、ZAZ 三层 schema 完整解析、**ZAZ 端到端跑通并给出机制分解**（Phase 4 打通，各分量之和 = 总电流、按缺陷分解 + R1 = 总电流） |
 | `test_stack_rates.py` | **分段 WKB + 按材料取速率参数 + 分段 G_ab + 截断重推**（Phase 4）：WKB 逐段 m_di、界面双值台阶不插斜坡、R1 势垒顶落在 Al₂O₃、分段 G_ab 同质退回闭式且跨层用 Al₂O₃ 低质量（路径传播质量，F08）、ZAZ 里 R7 正反细致平衡（F02 事件能量差不变）、截断半径按最慢材料推（ADR-013/F05）、R8 逐缺陷取 ε_opt/ν、**三层同材料 + ΔE_C=0 的速率表（rtol ≤ 1e-12）与轨迹（rtol ≤ 1e-9）退回单层**（ADR-018） |
 | `test_pf_collection.py` | **F03 PF 收集概率**（Phase 5）：带偏压 Al₂O₃ 势垒（矩形/梯形/三角）的 WKB 与解析闭式一致、0≤P_A≤1 且随偏压单调、阻挡层检测、**位置感知**（阴极侧穿层 P_A<1、阳极侧立即收集 P_A=1，界面缺陷按宿主侧判定）、反偏收集电极翻转、R8_eff=P_A·R8 折进事件表、单层 P_A≡1 逐位退回 |

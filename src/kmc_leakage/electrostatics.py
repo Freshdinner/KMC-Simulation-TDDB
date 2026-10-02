@@ -274,3 +274,24 @@ class PoissonSolver:
     def lateral_average(field: np.ndarray) -> np.ndarray:
         """对 xy 求平均，得到沿 z 的一维剖面。"""
         return np.asarray(field).mean(axis=(0, 1))
+
+    def gaussian_average(self, values: np.ndarray, width: float) -> np.ndarray:
+        """网格量在标准差为 `width` [m] 的 Gaussian 窗口上的空间平均。
+
+        xy 周期：在 FFT 里乘窗口的傅里叶变换 exp(−width²·k²/2)。z 只在介质 [0, Lz] 的节点上加权
+        （节点取梯形权重），权重逐点归一化：窗口伸进电极的部分不计，均匀量保持不变。`values` 的
+        前三维是网格节点，之后可以带通道维；`width` = 0 原样返回。
+        """
+        values = np.asarray(values, dtype=float)
+        if width == 0.0:
+            return values
+        kx = 2.0 * np.pi * np.fft.fftfreq(self.nx, d=self.hx)
+        ky = 2.0 * np.pi * np.fft.rfftfreq(self.ny, d=self.hy)
+        window = np.exp(-0.5 * width ** 2 * (kx[:, None] ** 2 + ky[None, :] ** 2))
+        window = window.reshape(window.shape + (1,) * (values.ndim - 2))
+        lateral = np.fft.irfft2(np.fft.rfft2(values, axes=(0, 1)) * window, s=(self.nx, self.ny), axes=(0, 1))
+        trapezoid = np.ones(self.nz + 1)
+        trapezoid[[0, -1]] = 0.5
+        kernel = np.exp(-0.5 * ((self.z[:, None] - self.z[None, :]) / width) ** 2) * trapezoid[None, :]
+        kernel /= kernel.sum(axis=1, keepdims=True)
+        return np.moveaxis(np.tensordot(kernel, lateral, axes=(1, 2)), 0, 2)

@@ -9,6 +9,15 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。实测数据与方案对�
 
 #### TDDB 阶段
 
+- **P_bb 改用 Gaussian 窗口平均的宏观场**（ADR-043，ADR-034 待定第 1 条由此定下；`PoissonSolver.gaussian_average`，
+  `tddb.field_averaging_width_nm` = 0.5 nm，`TrapCaptureGeneration` 新增 `bond_field`；验收脚本与日志在 `results/10.02/adr043/`）。
+  **为什么**：Lorentz 关系 (2+k)/3 只对约 1 nm 尺度上近似均匀的宏观场成立，带电空位 0.5 nm 处的点电荷场不满足；局域场经
+  (2+κ)/3 放大后让 P_bb 在 0.1–0.2 nm 上剧烈变化，生成率对生成网格与泊松网格都不收敛。σ 平均保留团簇尖端的 ≳1 nm 结构，
+  这是不取整盒横向平均的原因。
+  **验证**：平均场等于 Gaussian 电荷云的解析场、与泊松网格无关（新测试）；单元事件对引擎探针对拍按 σ = 0 与 0.5 nm 各一次。
+  **实测**：t = 0 时 16 / 32 / 48 格之间 ΣG ≤ 1.3%、泊松网格加密 ≤ 0.2%，满足验收；致密状态仍不满足（16 格崩掉、32–128 格
+  差 ±7–40%），属于单元中心规则，下一步做 (b)。致密层上 ΣG 对 σ 很敏感（约 10 倍 / 0.2 nm）。生成仍贴阴极。302 passed。
+
 - **R_1e 的陷阱项改为逐源陷阱积分，与生成网格无关**（ADR-042，ADR-039 第 4、5 条 superseded；`tddb.TrapCaptureGeneration`、
   `GenerationTable`，`generation_rates` 的温度参数改为温度场；删去 `single_electron_capture_rate` 的 `traps` 参数、
   `CaptureTraps` 与 `_trap_capture_cutoff`；`PoissonSolver.interpolate` 支持通道维，标量场逐位不变；验证脚本与日志在

@@ -1,0 +1,14 @@
+t0_s4: N=10 defects, empty (p<0.5) 10, mean-field 0.0s, sigma=0.50 nm
+t0_s4 gen 16x16x70                 sigma=0.50 | cells=7.1714e-01 traps=2.2723e-02 total=7.3987e-01 | cell share z<1 0.419 1-2 0.581 >2 6.63e-05 | births z median=1.080 q90=1.476 z>2nm=0.0010 | wall=5s
+t0_s4 gen 32x32x70                 sigma=0.50 | cells=7.0882e-01 traps=2.2723e-02 total=7.3155e-01 | cell share z<1 0.405 1-2 0.595 >2 6.70e-05 | births z median=1.113 q90=1.498 z>2nm=0.0008 | wall=13s
+t0_s4 gen 48x48x70                 sigma=0.50 | cells=7.0855e-01 traps=2.2723e-02 total=7.3127e-01 | cell share z<1 0.406 1-2 0.594 >2 6.70e-05 | births z median=1.105 q90=1.492 z>2nm=0.0005 | wall=29s
+t0_s4 gen 64x64x70                 sigma=0.50 | cells=7.0939e-01 traps=2.2723e-02 total=7.3212e-01 | cell share z<1 0.406 1-2 0.594 >2 6.70e-05 | births z median=1.107 q90=1.487 z>2nm=0.0003 | wall=48s
+t0_s4 gen 96x96x70                 sigma=0.50 | cells=7.0960e-01 traps=2.2723e-02 total=7.3233e-01 | cell share z<1 0.406 1-2 0.594 >2 6.69e-05 | births z median=1.119 q90=1.498 z>2nm=0.0003 | wall=104s
+t0_s4 gen 128x128x70               sigma=0.50 | cells=7.0981e-01 traps=2.2723e-02 total=7.3253e-01 | cell share z<1 0.406 1-2 0.594 >2 6.69e-05 | births z median=1.096 q90=1.483 z>2nm=0.0005 | wall=187s
+t0_s4 gen 128x128x140              sigma=0.50 | cells=7.0970e-01 traps=2.2723e-02 total=7.3242e-01 | cell share z<1 0.406 1-2 0.594 >2 7.22e-05 | births z median=1.096 q90=1.477 z>2nm=0.0010 | wall=371s
+t0_s4 gen 32 poisson 80^3          sigma=0.50 | cells=7.0882e-01 traps=2.2723e-02 total=7.3155e-01 | cell share z<1 0.405 1-2 0.595 >2 6.70e-05 | births z median=1.113 q90=1.498 z>2nm=0.0008 | wall=12s
+t0_s4 gen 32 poisson 160^3         sigma=0.50 | cells=7.1004e-01 traps=2.2933e-02 total=7.3297e-01 | cell share z<1 0.406 1-2 0.594 >2 6.69e-05 | births z median=1.106 q90=1.494 z>2nm=0.0000 | wall=13s
+t0_s4 gen 32 poisson 80^3          sigma=0.00 | cells=1.0124e+00 traps=2.9504e-01 total=1.3074e+00 | cell share z<1 0.529 1-2 0.471 >2 5.38e-05 | births z median=1.074 q90=1.399 z>2nm=0.0000 | wall=12s
+t0_s4 gen 32 poisson 160^3         sigma=0.00 | cells=1.1230e+00 traps=2.2610e-01 total=1.3491e+00 | cell share z<1 0.568 1-2 0.432 >2 5.25e-05 | births z median=0.997 q90=1.385 z>2nm=0.0000 | wall=12s
+t0_s4 gen 64x64x70                 sigma=0.35 | cells=7.5081e-01 traps=3.1831e-02 total=7.8264e-01 | cell share z<1 0.427 1-2 0.572 >2 6.43e-05 | births z median=1.092 q90=1.474 z>2nm=0.0005 | wall=45s
+t0_s4 gen 64x64x70                 sigma=0.70 | cells=6.9015e-01 traps=2.2340e-02 total=7.1249e-01 | cell share z<1 0.396 1-2 0.603 >2 6.85e-05 | births z median=1.102 q90=1.492 z>2nm=0.0015 | wall=45s
