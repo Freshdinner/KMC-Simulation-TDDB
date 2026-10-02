@@ -1,0 +1,10 @@
+t0_s2 | default                            sum_G_trap=1.100777e-01 /s  d(sum)=+0.00e+00  per-source: weighted median 0.00e+00, max 0.00e+00  wall=0.5s
+t0_s2 | dr x2 (0.08 nm)                    sum_G_trap=1.089339e-01 /s  d(sum)=-1.04e-02  per-source: weighted median 1.34e-02, max 6.50e-02  wall=0.3s
+t0_s2 | dr /2 (0.02 nm)                    sum_G_trap=1.103730e-01 /s  d(sum)=+2.68e-03  per-source: weighted median 3.60e-03, max 3.32e-02  wall=0.9s
+t0_s2 | polar 12                           sum_G_trap=1.097030e-01 /s  d(sum)=-3.40e-03  per-source: weighted median 4.08e-04, max 5.81e-02  wall=0.2s
+t0_s2 | polar 48                           sum_G_trap=1.101145e-01 /s  d(sum)=+3.34e-04  per-source: weighted median 8.77e-05, max 7.50e-03  wall=0.9s
+t0_s2 | azimuth 12                         sum_G_trap=1.105946e-01 /s  d(sum)=+4.70e-03  per-source: weighted median 2.46e-04, max 1.19e-01  wall=0.2s
+t0_s2 | azimuth 48                         sum_G_trap=1.099148e-01 /s  d(sum)=-1.48e-03  per-source: weighted median 7.70e-05, max 2.81e-02  wall=0.9s
+t0_s2 | tail 1e-2                          sum_G_trap=1.100777e-01 /s  d(sum)=-4.04e-11  per-source: weighted median 4.07e-11, max 7.50e-11  wall=0.4s
+t0_s2 | tail 1e-5                          sum_G_trap=1.100777e-01 /s  d(sum)=+9.59e-13  per-source: weighted median 9.62e-13, max 9.00e-12  wall=0.5s
+t0_s2 | all fine (0.02 nm, 48, 48, 1e-5)   sum_G_trap=1.102635e-01 /s  d(sum)=+1.69e-03  per-source: weighted median 3.86e-03, max 4.02e-02  wall=4.2s

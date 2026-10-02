@@ -1,0 +1,12 @@
+t0_s4: N=10 defects, mean-field 0.0s
+t0_s4 grid 16x16x70 | new: sum_G cells=1.5659e+00 traps=2.9504e-01 (trap share 0.1585, traps reference) wall=4.5s | old cell-center trap term=8.9386e-02 (3.030e-01 x new) wall=0.0s | births z median=0.96 q90=1.35 z>2nm=0.0000 (n=2000)
+t0_s4 grid 32x32x70 | new: sum_G cells=1.0124e+00 traps=2.9504e-01 (trap share 0.2257, traps bitwise same) wall=12.9s | old cell-center trap term=1.5653e-01 (5.305e-01 x new) wall=0.1s | births z median=1.08 q90=1.41 z>2nm=0.0000 (n=2000)
+t0_s4 grid 48x48x70 | new: sum_G cells=1.0571e+00 traps=2.9504e-01 (trap share 0.2182, traps bitwise same) wall=28.4s | old cell-center trap term=9.2508e-02 (3.135e-01 x new) wall=0.1s | births z median=1.07 q90=1.41 z>2nm=0.0005 (n=2000)
+t0_s4 source    0 z=7.43 nm p=0.000 G_i=1.084e-14 /s (3.67e-14 of sum) | Cartesian 0.05 nm -6.763e-03, 0.025 nm +8.525e-03
+t0_s4 source    1 z=2.61 nm p=0.000 G_i=6.738e-06 /s (2.28e-05 of sum) | Cartesian 0.05 nm -1.022e-01, 0.025 nm +2.539e-03
+t0_s4 source    3 z=3.72 nm p=0.000 G_i=3.969e-15 /s (1.35e-14 of sum) | Cartesian 0.05 nm -4.059e-02, 0.025 nm +3.765e-02
+t0_s4 source    4 z=7.45 nm p=0.000 G_i=3.855e-14 /s (1.31e-13 of sum) | Cartesian 0.05 nm -7.778e-02, 0.025 nm +3.895e-02
+t0_s4 source    5 z=7.27 nm p=0.000 G_i=6.804e-15 /s (2.31e-14 of sum) | Cartesian 0.05 nm -7.432e-02, 0.025 nm -1.358e-02
+t0_s4 source    6 z=6.10 nm p=0.000 G_i=1.230e-21 /s (4.17e-21 of sum) | Cartesian 0.05 nm -7.130e-02, 0.025 nm +2.556e-02
+t0_s4 source    7 z=0.98 nm p=0.000 G_i=4.214e-05 /s (1.43e-04 of sum) | Cartesian 0.05 nm +9.461e-02, 0.025 nm -8.032e-02
+t0_s4 source    9 z=1.43 nm p=0.039 G_i=2.950e-01 /s (1.00e+00 of sum) | Cartesian 0.05 nm -9.258e-02, 0.025 nm -5.066e-02

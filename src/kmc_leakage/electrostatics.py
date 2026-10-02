@@ -138,16 +138,22 @@ class PoissonSolver:
         return rho
 
     def interpolate(self, field: np.ndarray, positions: np.ndarray) -> np.ndarray:
-        """用与 deposit 同阶的三线性权重把网格量读回粒子位置。"""
+        """用与 deposit 同阶的三线性权重把网格量读回粒子位置。
+
+        `field` 的前三维是网格节点，之后可以带通道维（几个网格量叠在一起，一次读回）；返回
+        (粒子数,) + 通道维。每个通道的结果与单独读回逐位相同。
+        """
         positions = np.atleast_2d(np.asarray(positions, dtype=float))
+        channels = field.shape[3:]
         if positions.size == 0:
-            return np.zeros(0)
+            return np.zeros((0,) + channels)
         i0, i1, j0, j1, k0, k1, wx, wy, wz = self._cic_weights(positions)
-        out = np.zeros(positions.shape[0])
+        column = (-1,) + (1,) * len(channels)
+        out = np.zeros(positions.shape[:1] + channels)
         for ii, wi in ((i0, 1.0 - wx), (i1, wx)):
             for jj, wj in ((j0, 1.0 - wy), (j1, wy)):
                 for kk, wk in ((k0, 1.0 - wz), (k1, wz)):
-                    out += field[ii, jj, kk] * wi * wj * wk
+                    out += field[ii, jj, kk] * wi.reshape(column) * wj.reshape(column) * wk.reshape(column)
         return out
 
     # ------------------------------------------------------------------

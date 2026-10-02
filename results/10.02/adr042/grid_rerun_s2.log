@@ -1,0 +1,16 @@
+rerun_s2: N=1010 defects, mean-field 51.3s
+rerun_s2 grid 16x16x70 | new: sum_G cells=3.1038e+00 traps=2.5955e+06 (trap share 1.0000, traps reference) wall=29.3s | old cell-center trap term=1.0379e+01 (3.999e-06 x new) wall=1.2s | births z median=0.62 q90=0.72 z>2nm=0.0000 (n=2000)
+rerun_s2 grid 32x32x70 | new: sum_G cells=2.7190e+09 traps=2.5955e+06 (trap share 0.0010, traps bitwise same) wall=38.8s | old cell-center trap term=3.0130e+06 (1.161e+00 x new) wall=4.3s | births z median=0.58 q90=0.69 z>2nm=0.0000 (n=2000)
+rerun_s2 grid 48x48x70 | new: sum_G cells=2.7463e+09 traps=2.5955e+06 (trap share 0.0009, traps bitwise same) wall=47.6s | old cell-center trap term=2.5163e+06 (9.695e-01 x new) wall=9.0s | births z median=0.58 q90=0.68 z>2nm=0.0000 (n=2000)
+rerun_s2 source   13 z=1.26 nm p=0.059 G_i=9.880e+04 /s (3.81e-02 of sum) | Cartesian 0.05 nm -7.855e-02, 0.025 nm -5.384e-02
+rerun_s2 source   22 z=0.78 nm p=0.211 G_i=1.471e+05 /s (5.67e-02 of sum) | Cartesian 0.05 nm -8.374e-03, 0.025 nm +4.313e-03
+rerun_s2 source   32 z=0.82 nm p=0.163 G_i=5.134e+04 /s (1.98e-02 of sum) | Cartesian 0.05 nm -1.591e-01, 0.025 nm -1.391e-01
+rerun_s2 source   38 z=0.95 nm p=0.046 G_i=5.486e+04 /s (2.11e-02 of sum) | Cartesian 0.05 nm +2.018e-02, 0.025 nm +1.334e-02
+rerun_s2 source  309 z=1.05 nm p=0.098 G_i=5.514e+04 /s (2.12e-02 of sum) | Cartesian 0.05 nm -5.407e-02, 0.025 nm +5.011e-02
+rerun_s2 source  583 z=0.51 nm p=0.000 G_i=3.117e+01 /s (1.20e-05 of sum) | Cartesian 0.05 nm -4.620e-02, 0.025 nm -3.780e-02
+rerun_s2 source  628 z=1.09 nm p=1.000 G_i=4.395e-02 /s (1.69e-08 of sum) | Cartesian 0.05 nm +6.153e-02, 0.025 nm +9.493e-02
+rerun_s2 source  688 z=1.00 nm p=0.988 G_i=2.738e+00 /s (1.05e-06 of sum) | Cartesian 0.05 nm -2.451e-02, 0.025 nm -1.371e-02
+rerun_s2 source  748 z=1.14 nm p=0.073 G_i=6.028e+04 /s (2.32e-02 of sum) | Cartesian 0.05 nm +2.375e-02, 0.025 nm +3.842e-02
+rerun_s2 source  783 z=1.04 nm p=0.991 G_i=1.988e+02 /s (7.66e-05 of sum) | Cartesian 0.05 nm +3.994e-02, 0.025 nm +1.016e-01
+rerun_s2 source  904 z=1.08 nm p=1.000 G_i=1.230e+00 /s (4.74e-07 of sum) | Cartesian 0.05 nm -1.191e-02, 0.025 nm +8.102e-03
+rerun_s2 source  949 z=1.03 nm p=0.952 G_i=9.422e+01 /s (3.63e-05 of sum) | Cartesian 0.05 nm +2.130e-01, 0.025 nm +2.408e-01

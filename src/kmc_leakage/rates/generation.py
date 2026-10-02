@@ -17,7 +17,8 @@ docs/rate_equations.md 的 R1–R8 不对应::
   - **近旁已占据的陷阱**（初始缺陷与生成的空位，同一物种）：复用引擎的陷阱间通道，R6 的
     几何因子 × R7 的 MA 能量因子，按源陷阱的占据 p 加权（`trap_precursor_capture_rate`，
     ADR-039）。前驱的局域化半径由 E_t1 算，能量差取前驱与源陷阱的平均场能级之差，与内层
-    平均场处理陷阱对的口径相同（ADR-038）。
+    平均场处理陷阱对的口径相同（ADR-038）。这一项沿距离每 r_D/2 衰减 e 倍，调用方逐个源陷阱
+    对它做体积分（`tddb.TrapCaptureGeneration`，ADR-042），不与电极项在同一个点上相加。
 - G 里的 k 是相对介电常数，取介质的静态 κ（Lorentz 局域场修正，与镜像力无关），
   ε_opt 不进这里。p₀ 是前驱有效偶极矩（T3：p₀ = ½·n·Valence·e·d），配置直接给均值。
 - G 的俘获速率作为参数传入：后期换成双电子俘获 R_2e（T4′）时只改调用方。
@@ -25,7 +26,7 @@ docs/rate_equations.md 的 R1–R8 不对应::
 全部量为 SI 单位。
 """
 
-from typing import NamedTuple, Optional, Sequence, Union
+from typing import NamedTuple, Sequence, Union
 
 import numpy as np
 from scipy import constants
@@ -52,17 +53,6 @@ class CaptureElectrode(NamedTuple):
     fermi_level: float  # 电极费米能级 [J]（全局零点 = 阴极费米能级）
     band_bottom: float  # 电极导带底 [J]
     mass: float  # 电极侧电子质量 [kg]
-
-
-class CaptureTraps(NamedTuple):
-    """近旁陷阱到前驱的俘获来源（R_1e 的陷阱项用），按 (源陷阱, 前驱) 对逐对列出。"""
-
-    precursor: np.ndarray  # (K,) 前驱编号，即 `conduction_band` 的下标
-    distance: np.ndarray  # (K,) 源陷阱到前驱的距离 [m]
-    energy: np.ndarray  # (K,) 源陷阱上电子的能级（平均场）[J]
-    r_D: np.ndarray  # (K,) 源陷阱的局域化半径 [m]
-    occupancy: np.ndarray  # (K,) 源陷阱的平均场占据 p
-    attempt_frequency: np.ndarray  # (K,) 源陷阱的尝试频率 ν0 [1/s]
 
 
 def trap_precursor_capture_rate(
@@ -105,13 +95,11 @@ def single_electron_capture_rate(
     m_di: float,
     temperature: Union[float, np.ndarray],
     n_phonon: int,
-    traps: Optional[CaptureTraps] = None,
 ) -> np.ndarray:
-    """R_1e：前驱单步俘获一个电子的速率 1/τ_c,12 [1/s]（式 T4，T5–T11）。
+    """R_1e 的电极项：前驱从两侧电极单步俘获一个电子的速率 [1/s]（式 T4，T5–T11）。
 
-    R_1e = Σ_电极 [R2 + R4] + Σ_陷阱 p·R7：两侧电极的弹性俘获 R2 与多声子俘获 R4，加上
-    `traps` 列出的近旁陷阱经陷阱间通道送来的电子（`trap_precursor_capture_rate`）。不给
-    `traps` 时只有电极项。
+    R_1e = Σ_电极 [R2 + R4] + Σ_陷阱 p·R7，这里给前一项：两侧电极的弹性俘获 R2 与多声子俘获 R4。
+    陷阱项逐对由 `trap_precursor_capture_rate` 给出，调用方按源陷阱积分（ADR-042）。
 
     `conduction_band` 是前驱处的导带底 E_C = B − e·φ，前驱能级 E = E_C − E_t1；
     `field` 是前驱处局域电场大小，进 R4 的 c_MP。`ionization_energy` = E_t1（能级
@@ -120,7 +108,7 @@ def single_electron_capture_rate(
     p = 0..n_phonon−1 求和，n_phonon 要覆盖前驱的多声子线型：E_rel1/ℏω₀ ≈ 1 时引擎的
     12 项已收敛，E_rel1 = 1.0 eV（E_rel1/ℏω₀ = 25）时要约 100 项（ADR-030）。
     `temperature` 可以是标量，也可以是与 `conduction_band` 等长的逐前驱温度（Phase 4 按
-    单元局域温度求值，§6.6），声子线型、电极费米分布与陷阱项的 MA 因子都取这个温度。
+    单元局域温度求值，§6.6），声子线型与电极费米分布都取这个温度。
     """
     energy = np.asarray(conduction_band, dtype=float) - ionization_energy
     temperature = np.asarray(temperature, dtype=float)
@@ -148,20 +136,6 @@ def single_electron_capture_rate(
         occupancy_p = fermi_dirac(energies_p, side.fermi_level, column)
         dos_p = free_electron_dos(energies_p - side.band_bottom, side.mass)
         rate = rate + r4_multiphonon_capture(coupling, dos_p, occupancy_p, transmission_p, weights)
-    if traps is not None:
-        index = traps.precursor
-        pair_temperature = temperature if temperature.ndim == 0 else temperature[index]
-        from_traps = trap_precursor_capture_rate(
-            traps.attempt_frequency,
-            traps.distance,
-            traps.r_D,
-            precursor_r_D,
-            traps.energy,
-            energy[index],
-            traps.occupancy,
-            pair_temperature,
-        )
-        rate = rate + np.bincount(index, from_traps, energy.size)
     return rate
 
 

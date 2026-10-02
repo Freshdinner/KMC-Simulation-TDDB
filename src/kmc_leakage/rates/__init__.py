@@ -22,7 +22,6 @@ from .electrode_tunneling import (
 )
 from .generation import (
     CaptureElectrode,
-    CaptureTraps,
     bond_break_generation_rate,
     bond_break_probability,
     effective_activation_energy,
@@ -46,7 +45,6 @@ from .wkb import barrier_maximum, wkb_transmission
 
 __all__ = [
     "CaptureElectrode",
-    "CaptureTraps",
     "barrier_maximum",
     "bond_break_generation_rate",
     "bond_break_probability",

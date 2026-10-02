@@ -1,6 +1,6 @@
 """TDDB 瞬态驱动：准静态双层循环，含热反馈与击穿判据。
 
-规格见 PROJECT_CONTEXT_TDDB.md §5、§6，决策记录见 ADR-032–036。公式编号 T1–T14 是 TDDB 的
+规格见 PROJECT_CONTEXT_TDDB.md §5、§6，决策记录见 ADR-032–042。公式编号 T1–T14 是 TDDB 的
 编号（PROJECT_CONTEXT_TDDB.md 第 3 节），与 docs/rate_equations.md 的 R1–R8 不对应。
 
 电子输运事件的时间尺度（~10⁻¹³…10⁻⁶ s）比缺陷生成（秒以上）短十几个数量级，所以输运相对
@@ -12,20 +12,24 @@
    半径都随缺陷集合从头重算，与对同一缺陷集合新建的 `KMCSimulation` 逐项相同（ADR-033）。
 2. **功率与温度**（式 T13/T14，`thermal.py`）：在内层稳态上逐事件累加放热 ΔE·R，介质内的
    功率解稳态热方程得到温度场（两电极恒温 T_amb）。配置了 k_TH 才开热反馈：温度场在生成
-   单元中心的值进下一步的生成率，缺陷处按放热加权的平均温度作为下一步内层输运的全局标量
+   单元中心与陷阱项积分节点上的值进生成率，缺陷处按放热加权的平均温度作为下一步内层输运的全局标量
    温度 T(t)（§6.6）。输运与热不迭代自洽，每步只走一遍"输运 → 功率 → 温度"（§8.4），
    所以第 k 条记录的电流是在第 k−1 条记录的功率给出的温度下求的；温度随生成一步步爬升，
    这一步的滞后可以忽略。没有 k_TH 时温度固定为环境值（Phase 3 的等温口径）。
-3. **生成率表**（§6.1 模型 C）：各缺陷净电荷 q·(Z − p) 与外加偏压一起解一次泊松方程，在每个
-   生成单元中心对一个虚拟前驱求单步俘获速率 R_1e（式 T4：两侧电极 R2 + R4，加近旁已占据陷阱
-   经陷阱间通道 p·R7 送来的电子，与引擎处理真实陷阱同一口径，ADR-039）与断键概率 P_bb（式 T2），
-   单元生成率 G_cell = N_T·V_cell·R_1e·P_bb（式 T1）。单元中心离已有缺陷不到 min_separation 的单元
-   放不下新空位，生成率记 0。
+3. **生成率表**（§6.1 模型 C）：各缺陷净电荷 q·(Z − p) 与外加偏压一起解一次泊松方程。式 T4 的
+   R_1e 按电子来源分成两类事件（ADR-042）：
+   - **电极项**（两侧电极 R2 + R4）：在每个生成单元中心对一个虚拟前驱求值，乘断键概率 P_bb
+     （式 T2），单元生成率 G_cell = N_T·V_cell·R_1e,电极·P_bb（式 T1）。单元中心离已有缺陷不到
+     min_separation 的单元放不下新空位，生成率记 0；
+   - **陷阱项**（近旁已占据陷阱经陷阱间通道 p·R7 送来的电子，ADR-039）：几何因子沿距离每
+     r_D/2 ≈ 0.083 nm 衰减 e 倍，远小于生成单元，所以不放在单元上，而是逐个源陷阱在它周围的
+     可放置区域里对 N_T·p·R7·P_bb 做体积分（`TrapCaptureGeneration`），每个源陷阱一条事件。
 4. **击穿判据**（§6.3）：间距 < d_c 的缺陷连边，某个连通分量同时触到两个电极（离电极界面
    < d_c）即击穿，这一刻就是 t_BD；电流密度达到限流值是第二停止条件。论文的"25 个空位、
    间距 ≤ 6 Å"团簇只作标志记录，不作判据。
-5. **抽事件**：Δt = −ln(r)/ΣG，按 G_cell 选单元，在单元内连续随机落点，与已有缺陷的距离小于
-   min_separation 就在单元内重抽（§6.1、§6.8）。
+5. **抽事件**：Δt = −ln(r)/ΣG，在单元事件与源陷阱事件里按速率选一条。选中单元时在单元内连续
+   随机落点，选中源陷阱时按它周围的被积函数抽落点；与已有缺陷的距离小于 min_separation 就重抽
+   （§6.1、§6.8）。
 6. **出生**：新空位与初始缺陷同一物种（能级按缺陷预设的分布抽样，S、m_di 取预设），出生时
    被前驱俘获的那个电子占据，电荷态为 0（中性）；电子发射后空位才带 +1（施主约定，代码里
    `charge_state` = +1 是电子离开后的电荷，§6.7、ADR-035）。所以它出生这一刻不改变其余缺陷
@@ -39,7 +43,7 @@
 
 import csv
 from dataclasses import dataclass, replace
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, NamedTuple, Optional, Tuple
 
 import numpy as np
 from scipy import constants
@@ -60,7 +64,6 @@ from .defects import (
     _global_standoff,
     append_defects,
     generate_defects,
-    hop_cutoff_radius,
     layer_bulk_defects,
     localization_radius,
     minimum_image_delta,
@@ -78,7 +81,14 @@ from .kmc import (
     _interface_step_nodes,
 )
 from .mean_field import solve_mean_field
-from .rates import CaptureElectrode, CaptureTraps, bond_break_generation_rate, single_electron_capture_rate
+from .rates import (
+    CaptureElectrode,
+    bond_break_generation_rate,
+    bond_break_probability,
+    effective_activation_energy,
+    single_electron_capture_rate,
+    trap_precursor_capture_rate,
+)
 from .thermal import heat_release, power_map, solve_temperature, transport_temperature
 
 # 前驱俘获 R4 的声子项数：E_rel1 = 1.0 eV（E_rel1/ℏω₀ = 25）时 80 项最大相对误差 1e-4、
@@ -93,6 +103,17 @@ _DENSE_CLUSTER_SIZE = 25
 _CELL_CHUNK = 8
 # 选中单元里落点的尝试次数上限，全部离已有缺陷太近就把单元记为已满
 _MAX_PLACEMENT_ATTEMPTS = 1000
+# 陷阱项的源陷阱球坐标积分（`TrapCaptureGeneration`，ADR-042）。极角 u = cosθ 方向在 MA 因子与 P_bb
+# 饱和的折点、可放置区域边界处切开后按对数线性精确积分，径向与方位角 φ 在相邻节点之间按对数线性插值积分：
+# 几何因子 e^{−α·r} 与外场下 MA 因子的指数变化都没有离散误差，误差随三个步长二阶下降。取值由 ADR-042
+# 的收敛性测试定：孤立源陷阱对解析参考的误差 ≤ 5×10⁻³，致密空位层上逐项加密一倍 ΣG 变化 ≤ 2%。
+_TRAP_RADIAL_STEP = 0.04 * constants.nano
+_TRAP_POLAR_BINS = 24
+_TRAP_AZIMUTH_BINS = 24
+# 径向截断：截掉部分的上界（Θ、P_bb 都取 1）不超过已积出部分的这个比例
+_TRAP_TAIL_TOLERANCE = 1.0e-3
+_TRAP_RADIAL_CHUNK = 8  # 每轮向外推进的径向区间数，之后逐个源陷阱检查截断判据
+_TRAP_SOURCE_CHUNK = 32  # 每块源陷阱数：块内 (源, 极角, 方位角, 径向) 的节点约 1.7×10⁵ 个
 
 
 class IncrementalCoupling:
@@ -238,20 +259,379 @@ def admissible_cells(cells: GenerationCells, positions: np.ndarray, device: Devi
     return distance >= standoff
 
 
-def _trap_capture_cutoff(
-    defects: DefectEnsemble, precursor_r_D: float, n_precursors: int, temperature: float
-) -> float:
-    """陷阱→前驱俘获对的截断半径，判据沿用近邻表（`kmc.KMCSimulation._hop_cutoff_radius`，ADR-013/F05）。
+def _log_linear_integral(start: np.ndarray, end: np.ndarray, width: np.ndarray) -> np.ndarray:
+    """端点值为 `start`、`end`、宽度 `width` 的区间上，按对数线性插值（区间内取指数函数）的精确积分。
 
-    几何因子 exp[−r·(1/r_D,陷阱 + 1/r_D,前驱)] ≤ exp(−2·α_min·r)，α_min 取缺陷与前驱里最慢的衰减
-    1/max(r_D)（TDDB 只做单层，α = 1/r_D）。要求整张生成率表上被丢弃的速率上界
-    N_陷阱·N_前驱·ν_max·exp(−2·α_min·r_cut) 小于机制表最小速率（零场 R8 里最小的那个）。
+    被积函数本身是指数函数时没有离散误差。一端为 0（落在不可放置的区域里）时退回梯形。
     """
-    alpha_min = 1.0 / max(float(defects.r_D.max()), float(precursor_r_D))
-    kT = constants.Boltzmann * temperature
-    r8_min = float(np.min(defects.attempt_frequency * np.exp(-defects.ED / kT)))
-    nu_max = float(np.max(defects.attempt_frequency))
-    return hop_cutoff_radius(alpha_min, r8_min / (len(defects) * n_precursors * nu_max))
+    start, end, width = np.broadcast_arrays(
+        np.asarray(start, dtype=float), np.asarray(end, dtype=float), np.asarray(width, dtype=float)
+    )
+    result = 0.5 * (start + end) * width
+    positive = (start > 0.0) & (end > 0.0)
+    a, b, w = start[positive], end[positive], width[positive]
+    d = np.log(b) - np.log(a)
+    small = np.abs(d) < 1e-6
+    # (b − a)/d 就是 a·(e^d − 1)/d，写成差的形式不会在 e^d 上溢出
+    result[positive] = w * np.where(small, a * (1.0 + 0.5 * d), (b - a) / np.where(small, 1.0, d))
+    return result
+
+
+def _kinked_log_linear_integral(
+    log_a: np.ndarray,
+    log_b: np.ndarray,
+    kinks_a: Tuple[np.ndarray, ...],
+    kinks_b: Tuple[np.ndarray, ...],
+    start: np.ndarray,
+    stop: np.ndarray,
+    width: float,
+) -> np.ndarray:
+    """width·∫_start^stop exp(L(t)) dt，t ∈ [0, 1] 是区间内的分数位置，
+    L(t) = (1−t)·log_a + t·log_b − Σ_m max(0, (1−t)·h_m,a + t·h_m,b)：光滑部分的对数与每个折点指数 h_m
+    （MA 因子与 P_bb 的饱和）都线性插值。
+
+    每个 h_m 在 [start, stop] 内变号处切开，每段上 L 线性，按对数线性精确积分。没有折点落在区间内的
+    行不切，一段积完。
+    """
+    kinks = []
+    for h_a, h_b in zip(kinks_a, kinks_b):
+        crosses = (h_a > 0.0) != (h_b > 0.0)
+        kinks.append(np.where(crosses, h_a / np.where(crosses, h_a - h_b, 1.0), stop))
+    split = np.zeros(start.shape, dtype=bool)
+    for kink in kinks:
+        split |= (kink > start) & (kink < stop)
+
+    def value(t: np.ndarray, rows) -> np.ndarray:
+        log = log_a[rows] + t * (log_b[rows] - log_a[rows])
+        for h_a, h_b in zip(kinks_a, kinks_b):
+            log = log - np.maximum(0.0, h_a[rows] + t * (h_b[rows] - h_a[rows]))
+        return np.exp(log)
+
+    whole = ~split
+    result = np.zeros(start.shape)
+    result[whole] = _log_linear_integral(
+        value(start[whole], whole), value(stop[whole], whole), width * (stop[whole] - start[whole])
+    )
+    if split.any():
+        cuts = np.sort(np.stack([start[split], stop[split]] + [
+            np.clip(kink[split], start[split], stop[split]) for kink in kinks
+        ]), axis=0)
+        ends = [value(t, split) for t in cuts]
+        result[split] = sum(
+            _log_linear_integral(ends[m], ends[m + 1], width * (cuts[m + 1] - cuts[m]))
+            for m in range(len(cuts) - 1)
+        )
+    return result
+
+
+def _log_linear_fraction(start: float, end: float, uniform: float) -> float:
+    """[0, 1] 上按对数线性密度（两端值 `start`、`end`）抽样：均匀随机数 `uniform` 的逆变换。
+
+    与 `_log_linear_integral` 同一个插值模型；一端为 0 时退回均匀分布。
+    """
+    if start > 0.0 and end > 0.0:
+        slope = float(np.clip(np.log(end) - np.log(start), -700.0, 700.0))
+        if abs(slope) > 1e-9:
+            return float(np.log1p(uniform * np.expm1(slope)) / slope)
+    return uniform
+
+
+class TrapCaptureGeneration:
+    """R_1e 陷阱项的生成事件：逐个源陷阱对它周围的生成率做体积分（式 T1/T4/T5，ADR-039、ADR-042）。
+
+    源陷阱 i 的事件速率
+
+        G_i = N_T·p_i·∫_A R7(i → x)·P_bb(x) d³x,
+        R7(i → x) = ν_i·exp[−|x − x_i|·(1/r_D,i + 1/r_D,前驱)]·Θ(E_前驱(x) − E_i),
+
+    就是 ADR-039 的单元中心求和 Σ_单元 N_T·V_cell·P_bb·Σ_i p_i·R7 在单元无限细时的极限，被积函数逐点
+    的取法不变：前驱能级 E_前驱(x) = B − e·φ(x) − E_t1 与局域场 |E(x)| 取当前占据下含空间电荷的局域值，
+    E_i 取源陷阱的平均场能级（ADR-038），温度取 x 处的局域温度（§6.6），P_bb 的 k 取静态 κ（式 T2）。
+    A 是可放置区域：z ∈ [standoff, Lz − standoff]，且离全部已有缺陷 ≥ min_separation（xy 最小镜像）。
+
+    积分在以源陷阱为中心的球坐标 (r, u = cosθ, φ) 上做，r 从 min_separation 起每 `_TRAP_RADIAL_STEP`
+    取一个节点。几何因子的 e 折长度只有 r_D/2，外场下 MA 因子沿 r·u 同样按指数变化（参考工况每 nm 约
+    e^{14.6}，可以比几何衰减还快，深能级源陷阱的被积函数峰值因此落在下游、离开 min_separation），而
+    MA 因子与 P_bb 的饱和都是折点，峰值常落在折点上。所以先在每个径向节点的球面上沿极角积分
+    （`_shells`：折点与可放置区域的边界都按线性插值求交点切开，每段对数线性精确积分），再沿径向在
+    相邻节点之间按对数线性插值积分，方位角同样在相邻节点之间按对数线性插值（周期）。径向逐轮向外推进，截掉部分的上界
+    4π·ν_i·∫_r^∞ r'²·e^{−α_i·r'} dr'（Θ、P_bb 都取 1，α_i = 1/r_D,i + 1/r_D,前驱）不超过已积出部分的
+    `_TRAP_TAIL_TOLERANCE` 倍时停下；半径不超过横向盒长的一半，球不会与自己的周期镜像重叠。p_i 是整体
+    前置因子、不进积分，所以截断位置与 p_i、N_T 都无关。
+    """
+
+    def __init__(
+        self,
+        inner: KMCSimulation,
+        occupancy: np.ndarray,
+        tddb: TDDBConfig,
+        phi: np.ndarray,
+        temperature_field: Optional[np.ndarray],
+    ) -> None:
+        device, solver, defects = inner.device, inner.solver, inner.defects
+        material = device.stack.single_material
+        self._device = device
+        self._solver = solver
+        # 被积函数要读的网格量叠成一个多通道数组，每个节点一次插值读回：φ、E 的三个分量、（热反馈时）温度
+        self._grid = np.stack(
+            (phi,) + solver.electric_field(phi) + (() if temperature_field is None else (temperature_field,)),
+            axis=-1,
+        )
+        self._temperature = inner.sim.temperature  # 没有温度场时的工作点温度
+        self._tddb = tddb
+        self._kappa = material.kappa
+        self._precursor_r_D = localization_radius(tddb.precursor_ionization_energy, material.m_di)
+        self._positions = defects.positions
+        self._r_D = defects.r_D
+        self._attempt_frequency = defects.attempt_frequency
+        self._standoff = _global_standoff(device)
+        # xy 周期：坐标先折回 [0, L)；z 不周期：盒长取 4·Lz，可放置区域的点都在 [0, Lz] 内，不会回绕
+        self._box = np.array([device.Lx, device.Ly, 4.0 * device.Lz])
+        self._tree = cKDTree(np.mod(defects.positions, self._box), boxsize=self._box)
+
+        self._u_edges = np.linspace(-1.0, 1.0, _TRAP_POLAR_BINS + 1)
+        azimuth = np.arange(_TRAP_AZIMUTH_BINS) * (2.0 * np.pi / _TRAP_AZIMUTH_BINS)  # 方位角节点（周期）
+        sin_theta = np.sqrt(1.0 - self._u_edges ** 2)[:, None]
+        self._directions = np.stack(
+            np.broadcast_arrays(
+                sin_theta * np.cos(azimuth)[None, :], sin_theta * np.sin(azimuth)[None, :], self._u_edges[:, None]
+            ),
+            axis=-1,
+        )  # (极角棱, 方位角, 3)
+
+        p = np.asarray(occupancy, dtype=float)
+        n = len(defects)
+        self.n_intervals = np.zeros(n, dtype=int)  # 各源陷阱积到的径向区间数
+        self._sampling: Dict[int, Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = {}  # 抽样用的分格积分
+        integral = np.zeros(n)
+        sources = np.flatnonzero(p > 0.0) if tddb.precursor_concentration > 0.0 else np.zeros(0, dtype=int)
+        if sources.size:
+            self._trap_energy = inner._trap_state(p)[0]
+            integral[sources], self.n_intervals[sources] = self._integrate(sources)
+        self.rates = tddb.precursor_concentration * p * integral  # (N,) 各源陷阱的事件速率 G_i [1/s]
+
+    def _integrate(self, sources: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """各源陷阱的 ∫_A R7·P_bb d³x [m³/s]（不含 p_i）与积到的径向区间数，径向按截断判据逐轮推进。"""
+        alpha = 1.0 / self._r_D[sources] + 1.0 / self._precursor_r_D
+        nu = self._attempt_frequency[sources]
+        half_box = 0.5 * min(self._device.Lx, self._device.Ly)
+        integral = np.zeros(sources.size)
+        n_intervals = np.zeros(sources.size, dtype=int)
+        active = np.arange(sources.size)
+        start = 0
+        while active.size:
+            radii = self._standoff + _TRAP_RADIAL_STEP * np.arange(start, start + _TRAP_RADIAL_CHUNK + 1)
+            for block in np.array_split(active, int(np.ceil(active.size / _TRAP_SOURCE_CHUNK))):
+                shells, _ = self._shells(sources[block], radii)
+                integral[block] += self._bin_weights(shells).sum(axis=(1, 2, 3))
+            start += _TRAP_RADIAL_CHUNK
+            r, a = radii[-1], alpha[active]
+            tail = 4.0 * np.pi * nu[active] * np.exp(-a * r) * (r ** 2 / a + 2.0 * r / a ** 2 + 2.0 / a ** 3)
+            done = (tail <= _TRAP_TAIL_TOLERANCE * integral[active]) | (
+                r + _TRAP_RADIAL_CHUNK * _TRAP_RADIAL_STEP > half_box
+            )
+            n_intervals[active[done]] = start
+            active = active[~done]
+        return integral, n_intervals
+
+    def _shells(self, sources: np.ndarray, radii: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """每个径向节点上逐个极角区间的积分 J = ∫_A r²·R7·P_bb du（不含 p_i），形状 (源, 极角区间, 方位角,
+        径向节点)；以及节点上的被积函数值 (源, 极角棱, 方位角, 径向节点)。
+
+        被积函数 r²·R7·P_bb = exp[S − max(0, h) − max(0, g)] 有两个折点：MA 因子 Θ = exp(−max(0, h))，
+        h = ΔE/k_BT；P_bb = exp(−max(0, g))，g = (E_A − p₀·(2+k)/3·E)/k_BT（有效势垒降到 0 以下饱和）。
+        被积函数的峰值常常就落在折点上（深能级源陷阱的 Θ 刚到 1 处、带电缺陷近旁 P_bb 刚饱和处）。
+        极角区间内 S、h、g 都按两条棱射线上的节点值线性插值，h、g 变号处切开。区间一条棱可放置、一条不可放置时，按边界函数（到可采样窗口平面的
+        距离、到挡住那条棱的缺陷的距离减 min_separation）的线性插值求交点，只积可放置的一段。每一段上
+        ln 被积函数是线性的，按对数线性精确积分。这样 J 随 r 连续变化，径向再按对数线性插值积分。
+        """
+        points = (
+            self._positions[sources][:, None, None, None, :]
+            + radii[None, None, None, :, None] * self._directions[None, :, :, None, :]
+        )
+        shape = points.shape[:-1]
+        flat = points.reshape(-1, 3)
+        source = np.broadcast_to(sources[:, None, None, None], shape).ravel()
+        admissible, blocker = self._admissible(flat, source)
+        admissible, blocker = admissible.reshape(shape), blocker.reshape(shape)
+        # 被积函数在可放置节点与它们沿极角相邻的节点上求值（半可放置区间要用到两条棱的值）
+        need = admissible.copy()
+        need[:, 1:] |= admissible[:, :-1]
+        need[:, :-1] |= admissible[:, 1:]
+        rows = need.ravel()
+        distance = np.broadcast_to(radii, shape).ravel()
+        values, uphill, barrier = (np.zeros(flat.shape[0]) for _ in range(3))
+        values[rows], uphill[rows], barrier[rows] = self._integrand(source[rows], flat[rows], distance[rows])
+        values, uphill, barrier = values.reshape(shape), uphill.reshape(shape), barrier.reshape(shape)
+        # 光滑部分取对数：ln(r²·R7·P_bb) + max(0, h) + max(0, g)；下溢的值夹在最小正数上，exp 回去仍是 0
+        smooth = np.log(np.maximum(values, np.finfo(float).tiny)) + np.maximum(uphill, 0.0) + np.maximum(barrier, 0.0)
+
+        lower, upper = (slice(None), slice(None, -1)), (slice(None), slice(1, None))
+        ok_a, ok_b = admissible[lower], admissible[upper]
+        # 积分范围（区间内的分数位置）：两条棱都可放置时 [0, 1]，都不可放置时为空
+        start, stop = np.where(ok_a & ok_b, 0.0, 1.0), np.ones(ok_a.shape)
+        mixed = ok_a ^ ok_b
+        if mixed.any():
+            s, b, a, k = np.nonzero(mixed)
+            from_a = ok_a[mixed]  # True：可放置的是下棱 b
+            edge_ok = np.where(from_a, b, b + 1)
+            edge_out = np.where(from_a, b + 1, b)
+            fraction = self._crossing(
+                points[s, edge_ok, a, k], points[s, edge_out, a, k], blocker[s, edge_out, a, k]
+            )
+            start[mixed] = np.where(from_a, 0.0, 1.0 - fraction)
+            stop[mixed] = np.where(from_a, fraction, 1.0)
+        shells = np.zeros(start.shape)
+        open_ = stop > start
+        shells[open_] = _kinked_log_linear_integral(
+            smooth[lower][open_],
+            smooth[upper][open_],
+            (uphill[lower][open_], barrier[lower][open_]),
+            (uphill[upper][open_], barrier[upper][open_]),
+            start[open_],
+            stop[open_],
+            2.0 / _TRAP_POLAR_BINS,
+        )
+        return shells, values
+
+    def _crossing(self, inside: np.ndarray, outside: np.ndarray, blocker: np.ndarray) -> np.ndarray:
+        """从可放置的 `inside` 到不可放置的 `outside`，可放置区域边界所在的分数位置 ∈ [0, 1]。
+
+        边界函数 g（`outside` 在可采样窗口外时取到窗口平面的有向距离，落在缺陷 `blocker` 的
+        min_separation 球内时取到它的距离减 min_separation）在 `inside` 上 ≥ 0、`outside` 上 < 0，按两端
+        线性插值求零点；两种都有时取离 `inside` 近的那个。
+        """
+        device, standoff = self._device, self._standoff
+        fraction = np.ones(inside.shape[0])
+        for g_in, g_out in (
+            (inside[:, 2] - standoff, outside[:, 2] - standoff),
+            (device.Lz - standoff - inside[:, 2], device.Lz - standoff - outside[:, 2]),
+        ):
+            cut = g_out < 0.0
+            fraction[cut] = np.minimum(fraction[cut], g_in[cut] / (g_in[cut] - g_out[cut]))
+        hit = blocker >= 0
+        if hit.any():
+            center = self._positions[blocker[hit]]
+            g_in = np.linalg.norm(minimum_image_delta(inside[hit] - center, device.Lx, device.Ly), axis=-1) - standoff
+            g_out = np.linalg.norm(minimum_image_delta(outside[hit] - center, device.Lx, device.Ly), axis=-1) - standoff
+            fraction[hit] = np.minimum(fraction[hit], g_in / (g_in - g_out))
+        return np.clip(fraction, 0.0, 1.0)
+
+    def _admissible(self, points: np.ndarray, source: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """点是否在可放置区域 A 里，以及挡住它的缺陷编号（离它 < min_separation 的最近缺陷，没有为 −1）。
+
+        A：可采样窗口内，且离源陷阱以外的全部缺陷 ≥ min_separation。到源陷阱自己的距离就是节点
+        半径，按构造 ≥ min_separation，这里按编号排除，免得舍入误差把 r = min_separation 那一圈判成
+        太近。窗口外的点不查近邻，挡住它的是窗口平面。
+        """
+        z = points[:, 2]
+        keep = (z >= self._standoff) & (z <= self._device.Lz - self._standoff)
+        blocker = np.full(points.shape[0], -1)
+        candidates = np.flatnonzero(keep)
+        k = min(2, self._tree.n)
+        distance, index = self._tree.query(
+            np.mod(points[candidates], self._box), k=k, distance_upper_bound=self._standoff
+        )
+        index = index.reshape(candidates.size, k)
+        distance = np.where(index == source[candidates, None], np.inf, distance.reshape(candidates.size, k))
+        nearest = np.argmin(distance, axis=1)
+        blocked = distance[np.arange(candidates.size), nearest] < self._standoff
+        keep[candidates] = ~blocked
+        blocker[candidates[blocked]] = index[blocked, nearest[blocked]]
+        return keep, blocker
+
+    def _integrand(
+        self, source: np.ndarray, points: np.ndarray, distance: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """(r²·R7(i → x)·P_bb(x), h, g)：前驱能级、局域场与温度都取 x 处的局域值（取法同单元中心的
+        电极项）。h = (E_前驱(x) − E_i)/k_BT，R7 里的 MA 因子是 exp(−max(0, h))；g = (E_A − p₀·(2+k)/3·E)/k_BT，
+        P_bb = exp(−max(0, g))。"""
+        tddb = self._tddb
+        local = self._solver.interpolate(self._grid, points)
+        precursor_energy = (
+            self._device.band_reference_profile(points[:, 2])
+            - constants.elementary_charge * local[:, 0]
+            - tddb.precursor_ionization_energy
+        )
+        temperature = local[:, 4] if local.shape[1] > 4 else self._temperature
+        field = np.sqrt(local[:, 1] ** 2 + local[:, 2] ** 2 + local[:, 3] ** 2)
+        trap_energy = self._trap_energy[source]
+        hop = trap_precursor_capture_rate(
+            self._attempt_frequency[source],
+            distance,
+            self._r_D[source],
+            self._precursor_r_D,
+            trap_energy,
+            precursor_energy,
+            1.0,
+            temperature,
+        )
+        p_bb = bond_break_probability(tddb.activation_energy, tddb.dipole_moment, self._kappa, field, temperature)
+        kT = constants.Boltzmann * temperature
+        barrier = effective_activation_energy(tddb.activation_energy, tddb.dipole_moment, self._kappa, field) / kT
+        return distance ** 2 * hop * p_bb, (precursor_energy - trap_energy) / kT, barrier
+
+    @staticmethod
+    def _azimuth_integrals(shells: np.ndarray) -> np.ndarray:
+        """每个径向节点上逐个 (极角区间, 方位角区间) 的积分，形状同 `shells`：方位角区间 j 在节点 j 与
+        j+1（周期）的极角区间积分之间按对数线性插值。带电缺陷近旁 P_bb ≈ exp(p₀·(2+k)/3·|E|/k_BT) 把局域场
+        的小起伏放大成指数变化，对数线性插值对指数变化没有离散误差。"""
+        return _log_linear_integral(shells, np.roll(shells, -1, axis=-2), 2.0 * np.pi / _TRAP_AZIMUTH_BINS)
+
+    def _bin_weights(self, shells: np.ndarray) -> np.ndarray:
+        """每个 (极角区间, 方位角区间, 径向区间) 的积分，形状 (源, 极角区间, 方位角区间, 径向区间)：
+        方位角见 `_azimuth_integrals`，径向在相邻两个节点之间按对数线性插值。"""
+        sectors = self._azimuth_integrals(shells)
+        return _log_linear_integral(sectors[..., :-1], sectors[..., 1:], _TRAP_RADIAL_STEP)
+
+    def sample(self, source: int, rng: np.random.Generator) -> Optional[np.ndarray]:
+        """按源陷阱 `source` 周围的被积函数抽一个新空位坐标；`_MAX_PLACEMENT_ATTEMPTS` 次都放不下返回 None。
+
+        先按积分权重选 (极角区间, 方位角区间, 径向区间)，区间内 r、φ、u 依次按两端的积分或节点值做对数
+        线性密度抽样（r：方位角区间积分；φ：两个方位角节点上的极角区间积分；u：两条棱上的被积函数值），
+        与求积时的插值同一个模型；落点再按可采样窗口与 min_separation 严格检查，不满足就重抽。同一个
+        源陷阱的分格积分算一次、留着复用。
+        """
+        device = self._device
+        if source not in self._sampling:
+            radii = self._standoff + _TRAP_RADIAL_STEP * np.arange(self.n_intervals[source] + 1)
+            shells, values = self._shells(np.array([source]), radii)
+            sectors = self._azimuth_integrals(shells)[0]
+            cumulative = np.cumsum(_log_linear_integral(sectors[..., :-1], sectors[..., 1:], _TRAP_RADIAL_STEP).ravel())
+            self._sampling[source] = (radii, shells[0], sectors, values[0], cumulative)
+        radii, shells, sectors, values, cumulative = self._sampling[source]
+        shape = sectors.shape[:-1] + (sectors.shape[-1] - 1,)  # (极角区间, 方位角区间, 径向区间)
+        if not cumulative[-1] > 0.0:
+            return None
+        for _ in range(_MAX_PLACEMENT_ATTEMPTS):
+            flat = int(np.searchsorted(cumulative, rng.random() * cumulative[-1], side="right"))
+            b, j, k = np.unravel_index(min(flat, cumulative.size - 1), shape)
+            step = _log_linear_fraction(sectors[b, j, k], sectors[b, j, k + 1], rng.random())
+            r = radii[k] + _TRAP_RADIAL_STEP * step
+            node = k + int(round(step))
+            turn = _log_linear_fraction(shells[b, j, node], shells[b, (j + 1) % shape[1], node], rng.random())
+            azimuth = (j + turn) * (2.0 * np.pi / _TRAP_AZIMUTH_BINS)
+            edge = (j + int(round(turn))) % shape[1]
+            u = self._u_edges[b] + (2.0 / _TRAP_POLAR_BINS) * _log_linear_fraction(
+                values[b, edge, node], values[b + 1, edge, node], rng.random()
+            )
+            sin_theta = np.sqrt(max(0.0, 1.0 - u * u))
+            point = self._positions[source] + r * np.array(
+                [sin_theta * np.cos(azimuth), sin_theta * np.sin(azimuth), u]
+            )
+            point[:2] = np.mod(point[:2], [device.Lx, device.Ly])
+            if self._standoff <= point[2] <= device.Lz - self._standoff:
+                delta = minimum_image_delta(self._positions - point[None, :], device.Lx, device.Ly)
+                if np.min(np.linalg.norm(delta, axis=-1)) >= self._standoff:
+                    return point
+        return None
+
+
+class GenerationTable(NamedTuple):
+    """一个状态下的生成事件表（式 T1，§6.1 模型 C，ADR-042）：单元事件在前、源陷阱事件在后。"""
+
+    cells: np.ndarray  # (M,) 各生成单元的电极项事件速率 G_cell [1/s]
+    traps: TrapCaptureGeneration  # 各源陷阱的陷阱项事件，速率 `traps.rates` (N,) [1/s]
 
 
 def generation_rates(
@@ -259,43 +639,44 @@ def generation_rates(
     occupancy: np.ndarray,
     tddb: TDDBConfig,
     cells: GenerationCells,
-    temperature: Optional[np.ndarray] = None,
-) -> np.ndarray:
-    """各生成单元的 O 空位生成速率 G_cell = N_T·V_cell·R_1e·P_bb [1/s]（式 T1，§6.1 模型 C）。
+    temperature_field: Optional[np.ndarray] = None,
+) -> GenerationTable:
+    """O 空位生成事件表（式 T1，§6.1 模型 C）：R_1e 的电极项按生成单元、陷阱项按源陷阱（ADR-042）。
 
     `inner` 提供当前缺陷集合、工作点与泊松求解器，`occupancy` 是各缺陷的平均场占据 p。
     每个缺陷的净电荷 q·(Z − p) 与外加偏压一起解一次泊松方程（与引擎用耦合矩阵线性叠加的
-    结果相同），在单元中心对一个虚拟前驱求值，取法同 `kmc.KMCSimulation._rates` 处理真实陷阱：
+    结果相同），两类事件都在这份电势上求值：
 
-    - 前驱处导带底 E_C = B − e·φ 定能级 E = E_C − E_t1，局域场大小进 R4 的 c_MP 与 P_bb；
-    - 电极→单元的 WKB 路径沿 z 直线，势垒取横向平均剖面的导带底；
-    - R_1e = Σ_两侧电极 (R2 + R4) + Σ_近旁陷阱 p·R7（式 T4/T5，`single_electron_capture_rate`，
-      R4 取 `_PRECURSOR_N_PHONON` 个声子项）。陷阱项把引擎的陷阱间通道的目标换成前驱：源陷阱的
-      能级与占据取内层平均场（`KMCSimulation._trap_state`），MA 因子的能量差取两端平均场能级之差
-      （ADR-038/039），列出截断半径（`_trap_capture_cutoff`）内的 (陷阱, 前驱) 对；
-    - P_bb 的场加速项 p₀·(2+k)/3·E 里 k 取静态 κ（式 T2）。
+    - **单元事件** G_cell = N_T·V_cell·R_1e,电极·P_bb，在单元中心对一个虚拟前驱求值，取法同
+      `kmc.KMCSimulation._rates` 处理真实陷阱：前驱处导带底 E_C = B − e·φ 定能级 E = E_C − E_t1，
+      局域场大小进 R4 的 c_MP 与 P_bb；电极→单元的 WKB 路径沿 z 直线，势垒取横向平均剖面的导带底；
+      R_1e,电极 = Σ_两侧电极 (R2 + R4)（式 T4，`single_electron_capture_rate`，R4 取
+      `_PRECURSOR_N_PHONON` 个声子项）；P_bb 的场加速项 p₀·(2+k)/3·E 里 k 取静态 κ（式 T2）。
+      单元中心落在已有缺陷 min_separation 之内的单元记 0（`admissible_cells`）：那里放不下新空位，
+      而带电缺陷近旁的库仑场经 (2+κ)/3 放大后会把 P_bb 压到饱和，把这个速率算给整个单元会让
+      ΣG 随生成网格加密发散（ADR-033）。
+    - **源陷阱事件**：近旁已占据陷阱经陷阱间通道 p·R7 送给前驱的电子（式 T5 的陷阱来源，ADR-039），
+      逐个源陷阱在它周围的可放置区域上积分（`TrapCaptureGeneration`），与生成网格无关。
 
-    `temperature` 是各单元中心的局域温度（长度 = 单元数，热反馈时取温度场的值，§6.6），
-    R_1e 的声子线型、电极费米分布、陷阱项的 MA 因子与 P_bb 都按它求值；缺省用内层的工作点温度。
-
-    单元中心落在已有缺陷 min_separation 之内的单元记 0（`admissible_cells`）：那里放不下新空位，
-    而带电缺陷近旁的库仑场经 (2+κ)/3 放大后会把 P_bb 压到饱和，把这个速率算给整个单元会让
-    ΣG 随生成网格加密发散（ADR-033）。
+    `temperature_field` 是泊松网格上的温度场（热反馈时取 T14 的解，§6.6）：单元事件取它在单元中心
+    的值，源陷阱事件取它在每个积分节点上的值；R_1e 的声子线型、电极费米分布、陷阱项的 MA 因子与
+    P_bb 都按局域温度求值。缺省用内层的工作点温度。
     """
     device, solver, defects = inner.device, inner.solver, inner.defects
     voltage = inner.sim.voltage
     material = device.stack.single_material
     q = constants.elementary_charge
+    rho = solver.deposit(defects.positions, q * (defects.charge_state - occupancy))
+    phi = solver.solve(rho, top_boundary_potential(device, voltage))
+    traps = TrapCaptureGeneration(inner, occupancy, tddb, phi, temperature_field)
+
     rates = np.zeros(len(cells))
     live = np.flatnonzero(admissible_cells(cells, defects.positions, device))
     if live.size == 0 or tddb.precursor_concentration == 0.0:
-        return rates
-    local = temperature is not None
-    temperature = np.asarray(temperature, dtype=float)[live] if local else inner.sim.temperature
-
-    rho = solver.deposit(defects.positions, q * (defects.charge_state - occupancy))
-    phi = solver.solve(rho, top_boundary_potential(device, voltage))
+        return GenerationTable(rates, traps)
     centers = cells.centers[live]
+    local = temperature_field is not None
+    temperature = solver.interpolate(temperature_field, centers) if local else inner.sim.temperature
     field = np.linalg.norm(
         solver.field_vectors_at(phi, centers, np.zeros(live.size, dtype=int)), axis=0
     )
@@ -323,18 +704,6 @@ def generation_rates(
             )
         )
 
-    # 近旁陷阱（初始缺陷与生成的空位）：平均场能级与占据，截断半径按近邻表的判据
-    p = np.asarray(occupancy, dtype=float)
-    n_defects = len(defects)
-    if n_defects:
-        trap_energy = inner._trap_state(p)[0]
-        r_cut = _trap_capture_cutoff(
-            defects,
-            localization_radius(tddb.precursor_ionization_energy, material.m_di),
-            live.size,
-            inner.sim.temperature,
-        )
-
     capture = np.empty(live.size)
     for start in range(0, live.size, _CELL_CHUNK):
         rows = slice(start, start + _CELL_CHUNK)
@@ -343,21 +712,6 @@ def generation_rates(
             side._replace(path=side.path[layer], barrier=side.barrier[layer], m_di_path=side.m_di_path[layer])
             for side in by_layer
         ]
-        traps = None
-        if n_defects:
-            delta = minimum_image_delta(
-                centers[rows][:, None, :] - defects.positions[None, :, :], device.Lx, device.Ly
-            )
-            distance = np.linalg.norm(delta, axis=-1)
-            cell, source = np.nonzero(distance < r_cut)
-            traps = CaptureTraps(
-                precursor=cell,
-                distance=distance[cell, source],
-                energy=trap_energy[source],
-                r_D=defects.r_D[source],
-                occupancy=p[source],
-                attempt_frequency=defects.attempt_frequency[source],
-            )
         capture[rows] = single_electron_capture_rate(
             conduction[rows],
             field[rows],
@@ -369,13 +723,12 @@ def generation_rates(
             material.m_di,
             temperature[rows] if local else temperature,
             _PRECURSOR_N_PHONON,
-            traps,
         )
     per_precursor = bond_break_generation_rate(
         capture, tddb.activation_energy, tddb.dipole_moment, material.kappa, field, temperature
     )
     rates[live] = tddb.precursor_concentration * cells.volume * per_precursor
-    return rates
+    return GenerationTable(rates, traps)
 
 
 def _place_in_cell(
@@ -401,6 +754,7 @@ def _draw_generation(
     rates: np.ndarray,
     full: np.ndarray,
     cells: GenerationCells,
+    traps: Optional[TrapCaptureGeneration],
     positions: np.ndarray,
     standoff: float,
     device: DeviceConfig,
@@ -408,8 +762,10 @@ def _draw_generation(
 ) -> Optional[Tuple[float, np.ndarray]]:
     """抽下一次生成事件，返回 (Δt, 新空位坐标)；总生成率为 0 时返回 None。
 
-    选中的单元放不下新空位时把它记为已满（原地改 `full`），按剩下的单元重抽 Δt 与单元：
-    缺陷只增不减，满了的单元一直是满的。
+    `rates` 与 `full` 是单元事件在前、源陷阱事件（`traps`）在后的整张事件表；`traps` 为 None
+    时只有单元事件。选中单元时在单元内均匀落点，选中源陷阱时按它周围的被积函数落点。选中的事件
+    放不下新空位时把它记为已满（原地改 `full`），按剩下的事件重抽 Δt 与事件：缺陷只增不减，
+    可放置区域只缩不扩，满了的单元与源陷阱一直是满的。
     """
     while True:
         live = np.where(full, 0.0, rates)
@@ -418,12 +774,15 @@ def _draw_generation(
             return None
         dt = -np.log(rng.random()) / total
         cumulative = np.cumsum(live)
-        cell = int(np.searchsorted(cumulative, rng.random() * cumulative[-1], side="right"))
-        cell = min(cell, live.size - 1)
-        position = _place_in_cell(cells, cell, positions, standoff, device, rng)
+        event = int(np.searchsorted(cumulative, rng.random() * cumulative[-1], side="right"))
+        event = min(event, live.size - 1)
+        if event < len(cells):
+            position = _place_in_cell(cells, event, positions, standoff, device, rng)
+        else:
+            position = traps.sample(event - len(cells), rng)
         if position is not None:
             return dt, position
-        full[cell] = True
+        full[event] = True
 
 
 def _cluster_diagnostics(inner: KMCSimulation) -> Tuple[int, int, int, int]:
@@ -485,7 +844,7 @@ class TDDBResult:
     time: np.ndarray  # (K,) 各记录的时刻 [s]
     current: np.ndarray  # (K,) [A]
     by_mechanism: Dict[str, np.ndarray]  # 各机制 (K,) [A]，四项之和 = current
-    generation_rate: np.ndarray  # (K,) 这一状态下的总生成速率 ΣG [1/s]（已满单元不计）
+    generation_rate: np.ndarray  # (K,) 这一状态下的总生成速率 ΣG [1/s]：单元事件 + 源陷阱事件（已满的不计）
     n_defects: np.ndarray  # (K,) 缺陷总数（初始 + 生成）
     space_charge: np.ndarray  # (K,) 全部缺陷的净电荷 q·Σ(Z − p) [C]（§8.6）
     empty_generated: np.ndarray  # (K,) 生成的空位里处于空态的期望个数 Σ(1 − p)（§8.6）
@@ -571,7 +930,8 @@ def run_tddb(
     coupling = IncrementalCoupling.build(solver, defects.positions, defects.field_side)
     cells = generation_cells(device, tddb.generation_grid)
     standoff = _global_standoff(device)
-    full = np.zeros(len(cells), dtype=bool)
+    # 事件表 = 单元事件 + 每个缺陷一条源陷阱事件；放不下新空位的事件记为已满，缺陷只增不减，一直满着
+    full = np.zeros(len(cells) + n_initial, dtype=bool)
     birth_time = np.zeros(n_initial)
     occupancy: Optional[np.ndarray] = None
     thermal = tddb.thermal_conductivity is not None
@@ -586,15 +946,15 @@ def run_tddb(
         mf = solve_mean_field(inner, occupancy)
         occupancy = mf.occupancy
         heat = heat_release(inner, occupancy)
-        cell_temperature, effective, peak = None, ambient, ambient
+        temperature_field, effective, peak = None, ambient, ambient
         if thermal:
             temperature_field = solve_temperature(
                 solver, power_map(solver, defects.positions, heat.defect), tddb.thermal_conductivity, ambient
             )
-            cell_temperature = solver.interpolate(temperature_field, cells.centers)
             effective = transport_temperature(solver, temperature_field, defects.positions, heat.defect, ambient)
             peak = float(temperature_field.max())
-        rates = np.where(full, 0.0, generation_rates(inner, occupancy, tddb, cells, cell_temperature))
+        table = generation_rates(inner, occupancy, tddb, cells, temperature_field)
+        rates = np.where(full, 0.0, np.concatenate([table.cells, table.traps.rates]))
         n_clusters, max_cluster, largest, n_split = _cluster_diagnostics(inner)
         labels, spanning = percolation_clusters(defects.positions, device, tddb.percolation_distance)
         dense_labels, _ = percolation_clusters(defects.positions, device, _DENSE_CLUSTER_DISTANCE)
@@ -634,7 +994,7 @@ def run_tddb(
         if len(defects) - n_initial >= tddb.max_generated_vacancies:
             end_time, stop_reason = time, "max_generated"
             break
-        event = _draw_generation(rates, full, cells, defects.positions, standoff, device, rng)
+        event = _draw_generation(rates, full, cells, table.traps, defects.positions, standoff, device, rng)
         if event is None:
             end_time, stop_reason = tddb.stop_time, "no_generation"
             break
@@ -645,6 +1005,7 @@ def run_tddb(
         time += dt
         defects = append_defects(defects, layer_bulk_defects(device, 0, position, rng))
         coupling = coupling.extended(position)
+        full = np.append(full, False)
         occupancy = np.append(occupancy, 1.0)  # §6.7：出生即被一个电子占据，电荷态为 0
         birth_time = np.append(birth_time, time)
         transport = effective

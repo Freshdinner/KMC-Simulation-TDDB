@@ -4,7 +4,7 @@
 1. G 的零场极限退化为 R_1e·exp(−E_A/k_BT)；
 2. 场加速项线性压低势垒，log G 对 E 成线性（有效势垒降到 0 以下时 P_bb 饱和为 1）；
 3. R_1e 的电极项等于同一前驱参数下两侧电极的 R2 + R4 之和，与输运引擎口径一致；
-另加 R_1e 的陷阱项（ADR-039）：每个来源是 p·R7(陷阱 → 前驱)，源陷阱空着时为 0，加上陷阱来源不改变电极项。
+另加 R_1e 的陷阱项（ADR-039）：每个来源是 p·R7(陷阱 → 前驱)，源陷阱空着时为 0；按源陷阱的体积分见 test_tddb.py（ADR-042）。
 """
 
 import numpy as np
@@ -18,7 +18,6 @@ from kmc_leakage.defects import DefectEnsemble
 from kmc_leakage.kmc import _B_R2A, _B_R2C, _B_R4A, _B_R4C, _N_PHONON, KMCSimulation
 from kmc_leakage.rates import (
     CaptureElectrode,
-    CaptureTraps,
     bond_break_generation_rate,
     bond_break_probability,
     effective_activation_energy,
@@ -145,46 +144,3 @@ def test_trap_term_is_occupancy_weighted_miller_abrahams_hop():
     expected = p * geometric * np.array([1.0, uphill[1], 1.0, uphill[3]])
     assert rate == pytest.approx(expected, rel=1e-12)
     assert rate[3] == 0.0
-
-
-def test_trap_sources_add_to_unchanged_electrode_part():
-    """R_1e = 电极项 + Σ 陷阱项：给陷阱来源时电极项与不给时逐位相同，陷阱项按前驱编号累加；
-    来源全空（p = 0）或一条都没有时，R_1e 逐位等于只有电极项的值（ADR-039）。"""
-    ionization_energy, relaxation_energy = 1.15 * EV, 1.0 * EV
-    sim, material = _precursor_probe(ionization_energy, relaxation_energy, 3.0)
-    occ = np.zeros(len(sim.defects), dtype=bool)
-    phi_at, field_at, phi_bar = sim._electrostatics(occ)
-    barrier_c, barrier_a = sim._path_barriers(conduction_band_edge(sim.device, sim._z_nodes, phi_bar))
-    electrodes = (
-        CaptureElectrode(sim._path_cathode, barrier_c, sim._m_di_path_cathode,
-                         sim._fermi_cathode, sim._band_bottom[0], sim.device.cathode.effective_mass),
-        CaptureElectrode(sim._path_anode, barrier_a, sim._m_di_path_anode,
-                         sim._fermi_anode, sim._band_bottom[1], sim.device.anode.effective_mass),
-    )
-    conduction = sim.defects.band_reference - Q * phi_at
-    args = (conduction, field_at, electrodes, ionization_energy, relaxation_energy,
-            material.phonon_energy, material.band_gap, material.m_di, sim.sim.temperature, 40)
-    electrode_only = single_electron_capture_rate(*args)
-
-    sources = CaptureTraps(
-        precursor=np.array([0, 0, 2]),
-        distance=np.array([0.6e-9, 0.8e-9, 0.7e-9]),
-        energy=np.array([0.3, -0.1, -0.6]) * EV,
-        r_D=np.full(3, 0.166e-9),
-        occupancy=np.array([0.9, 0.4, 1.0]),
-        attempt_frequency=np.full(3, 1.0e13),
-    )
-    with_traps = single_electron_capture_rate(*args, sources)
-    precursor_r_D = constants.hbar / np.sqrt(2.0 * material.m_di * ionization_energy)
-    terms = trap_precursor_capture_rate(
-        sources.attempt_frequency, sources.distance, sources.r_D, precursor_r_D,
-        sources.energy, (conduction - ionization_energy)[sources.precursor], sources.occupancy, sim.sim.temperature,
-    )
-    assert np.all(terms > 0.0)
-    assert with_traps == pytest.approx(electrode_only + np.bincount(sources.precursor, terms, 3), rel=1e-12)
-    assert with_traps[1] == electrode_only[1]
-
-    empty = sources._replace(occupancy=np.zeros(3))
-    assert np.array_equal(single_electron_capture_rate(*args, empty), electrode_only)
-    none = CaptureTraps(*(np.zeros(0, dtype=int if name == "precursor" else float) for name in CaptureTraps._fields))
-    assert np.array_equal(single_electron_capture_rate(*args, none), electrode_only)
