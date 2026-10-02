@@ -7,6 +7,12 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。
 
 ### 变更
 
+- **`PROJECT_CONTEXT_TDDB.md` 按当前进展更新并精简**（721 → 414 行）。保留因果链、T1–T14 全部公式、模型 C、双层循环、
+  第 6 节各条设计决策的结论与第 9 节测试要求；实测数据、方案对比和实现细节压成结论并标 ADR 编号，细节以
+  `docs/adr/tddb-decisions.md` 为准。第 10 节改为阶段状态表，加上 Phase 4 现状（ADR-037/041：三条物理验收未通过、根因、
+  待用户决定的事项）；参数表合并同类行；§2 里过时的 `CLAUDE_TDDB.md` 改为本文件名。节号不变，代码 docstring 的
+  §引用仍然有效。只改了文档，没有跑 pytest。
+
 - **TDDB Phase 4 重新验收**（ADR-041；新增 `results/9.30/phase4_rerun/`：逐步日志、seed 2 的 CSV / npz、汇总图
   `p4fix_summary.png` 与汇总脚本 `analyze_rerun.py`；ADR-037 加后续状态；同步 README、`PROJECT_CONTEXT_TDDB.md` §1、§10）。
 
