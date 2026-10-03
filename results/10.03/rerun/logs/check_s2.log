@@ -1,0 +1,20 @@
+s2 n=0 N=10 T_transport=298.150000 K | ΣG rebuilt (masked) 8.204511711e-01 vs recorded 8.204511711e-01 (rel -3.6e-11); full events 0
+  gen 16x16x70 : cells 7.058482761e-01 traps 1.146028950e-01 total 8.204511711e-01 | cell share z<1 0.402813 1-2 0.597112 >2 7.473e-05 | wall 8.1s
+  gen 32x32x70 : cells 7.058482761e-01 traps 1.146028950e-01 total 8.204511711e-01 | cell share z<1 0.402813 1-2 0.597112 >2 7.473e-05 | wall 7.9s
+  16 vs 32     : cells rel +0.0e+00, traps rel +0.0e+00 (bitwise True), total rel +0.0e+00, max share diff 0.0e+00
+  poisson 160^3: cells 7.061021459e-01 (+0.04%) traps 1.143915710e-01 (-0.18%) total 8.204937169e-01 (+0.01%) | cell share z<1 0.402963 1-2 0.596962 >2 7.473e-05 | wall 10.0s
+s2 n=100 N=110 T_transport=298.150374 K | ΣG rebuilt (masked) 3.025135079e+02 vs recorded 3.025135079e+02 (rel +1.5e-10); full events 0
+  gen 16x16x70 : cells 2.907989853e+02 traps 1.171452264e+01 total 3.025135079e+02 | cell share z<1 0.976261 1-2 0.023739 >2 2.011e-07 | wall 12.5s
+  gen 32x32x70 : cells 2.907989853e+02 traps 1.171452264e+01 total 3.025135079e+02 | cell share z<1 0.976261 1-2 0.023739 >2 2.011e-07 | wall 12.2s
+  16 vs 32     : cells rel +2.2e-16, traps rel +0.0e+00 (bitwise True), total rel +2.2e-16, max share diff 0.0e+00
+  poisson 160^3: cells 2.721534306e+02 (-6.41%) traps 1.223576813e+01 (+4.45%) total 2.843891988e+02 (-5.99%) | cell share z<1 0.974651 1-2 0.025349 >2 2.153e-07 | wall 14.8s
+s2 n=200 N=210 T_transport=298.150350 K | ΣG rebuilt (masked) 1.681388743e+03 vs recorded 1.681388743e+03 (rel -1.7e-10); full events 0
+  gen 16x16x70 : cells 1.661076417e+03 traps 2.031232527e+01 total 1.681388743e+03 | cell share z<1 0.986618 1-2 0.013382 >2 4.247e-08 | wall 15.7s
+  gen 32x32x70 : cells 1.661076417e+03 traps 2.031232527e+01 total 1.681388743e+03 | cell share z<1 0.986618 1-2 0.013382 >2 4.247e-08 | wall 15.9s
+  16 vs 32     : cells rel +2.2e-16, traps rel +0.0e+00 (bitwise True), total rel +2.2e-16, max share diff 0.0e+00
+  poisson 160^3: cells 1.575411201e+03 (-5.16%) traps 1.959607868e+01 (-3.53%) total 1.595007280e+03 (-5.14%) | cell share z<1 0.985912 1-2 0.014088 >2 4.489e-08 | wall 18.6s
+s2 n=400 N=410 T_transport=298.150043 K | ΣG rebuilt (masked) 5.434956586e+03 vs recorded 5.434956586e+03 (rel -6.5e-11); full events 0
+  gen 16x16x70 : cells 5.328857213e+03 traps 1.060993728e+02 total 5.434956586e+03 | cell share z<1 0.984696 1-2 0.015304 >2 1.807e-08 | wall 22.2s
+  gen 32x32x70 : cells 5.328857213e+03 traps 1.060993728e+02 total 5.434956586e+03 | cell share z<1 0.984696 1-2 0.015304 >2 1.807e-08 | wall 22.2s
+  16 vs 32     : cells rel -3.3e-16, traps rel +0.0e+00 (bitwise True), total rel -3.3e-16, max share diff 0.0e+00
+  poisson 160^3: cells 4.815633932e+03 (-9.63%) traps 1.020646939e+02 (-3.80%) total 4.917698626e+03 (-9.52%) | cell share z<1 0.983099 1-2 0.016901 >2 2.007e-08 | wall 28.8s

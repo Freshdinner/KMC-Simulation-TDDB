@@ -1,0 +1,12 @@
+s4 n=100 N=110 | U*I_trap 3.5668e-12 W | cathode +0.0195 anode +1.0616 dielectric -0.0812 (of U*I) | balance -4.5e-08
+  defects at z in [0, 1) nm:   80 | net -0.0764 | releasing +0.0134 (11) | absorbing -0.0898 (69) (of U*I)
+  defects at z in [1, 2) nm:   19 | net -0.0054 | releasing +0.0125 (5) | absorbing -0.0180 (14) (of U*I)
+  defects at z in [2, 8) nm:   11 | net +0.0006 | releasing +0.0006 (6) | absorbing -0.0000 (5) (of U*I)
+s4 n=200 N=210 | U*I_trap 1.6633e-11 W | cathode +0.0059 anode +1.3191 dielectric -0.3250 (of U*I) | balance 4.3e-09
+  defects at z in [0, 1) nm:  180 | net -0.3238 | releasing +0.0017 (18) | absorbing -0.3255 (162) (of U*I)
+  defects at z in [1, 2) nm:   19 | net -0.0011 | releasing +0.0010 (6) | absorbing -0.0021 (13) (of U*I)
+  defects at z in [2, 8) nm:   11 | net +0.0000 | releasing +0.0001 (5) | absorbing -0.0001 (6) (of U*I)
+s4 n=400 N=410 | U*I_trap 5.2294e-11 W | cathode +0.0850 anode +1.3354 dielectric -0.4204 (of U*I) | balance 7.9e-08
+  defects at z in [0, 1) nm:  371 | net -0.4198 | releasing +0.0003 (24) | absorbing -0.4201 (347) (of U*I)
+  defects at z in [1, 2) nm:   28 | net -0.0006 | releasing +0.0004 (8) | absorbing -0.0010 (20) (of U*I)
+  defects at z in [2, 8) nm:   11 | net -0.0000 | releasing +0.0000 (5) | absorbing -0.0001 (6) (of U*I)
