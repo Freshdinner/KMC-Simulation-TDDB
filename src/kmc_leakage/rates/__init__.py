@@ -25,6 +25,7 @@ from .generation import (
     bond_break_generation_rate,
     bond_break_probability,
     effective_activation_energy,
+    single_electron_capture_parts,
     single_electron_capture_rate,
     trap_precursor_capture_rate,
 )
@@ -65,6 +66,7 @@ __all__ = [
     "r8_pf_emission",
     "richardson_schottky_current_density",
     "segmented_overlap_factor",
+    "single_electron_capture_parts",
     "single_electron_capture_rate",
     "supply_function",
     "trap_precursor_capture_rate",

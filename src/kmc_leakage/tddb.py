@@ -1,6 +1,6 @@
 """TDDB 瞬态驱动：准静态双层循环，含热反馈与击穿判据。
 
-规格见 PROJECT_CONTEXT_TDDB.md §5、§6，决策记录见 ADR-032–042。公式编号 T1–T14 是 TDDB 的
+规格见 PROJECT_CONTEXT_TDDB.md §5、§6，决策记录见 ADR-032–044。公式编号 T1–T14 是 TDDB 的
 编号（PROJECT_CONTEXT_TDDB.md 第 3 节），与 docs/rate_equations.md 的 R1–R8 不对应。
 
 电子输运事件的时间尺度（~10⁻¹³…10⁻⁶ s）比缺陷生成（秒以上）短十几个数量级，所以输运相对
@@ -11,24 +11,25 @@
    （`mean_field.solve_mean_field`），得到电流、分解与各缺陷占据 p。近邻表、强耦合簇与截断
    半径都随缺陷集合从头重算，与对同一缺陷集合新建的 `KMCSimulation` 逐项相同（ADR-033）。
 2. **功率与温度**（式 T13/T14，`thermal.py`）：在内层稳态上逐事件累加放热 ΔE·R，介质内的
-   功率解稳态热方程得到温度场（两电极恒温 T_amb）。配置了 k_TH 才开热反馈：温度场在生成
-   单元中心与陷阱项积分节点上的值进生成率，缺陷处按放热加权的平均温度作为下一步内层输运的全局标量
+   功率解稳态热方程得到温度场（两电极恒温 T_amb）。配置了 k_TH 才开热反馈：温度场在两类
+   生成事件的求积节点上的值进生成率，缺陷处按放热加权的平均温度作为下一步内层输运的全局标量
    温度 T(t)（§6.6）。输运与热不迭代自洽，每步只走一遍"输运 → 功率 → 温度"（§8.4），
    所以第 k 条记录的电流是在第 k−1 条记录的功率给出的温度下求的；温度随生成一步步爬升，
    这一步的滞后可以忽略。没有 k_TH 时温度固定为环境值（Phase 3 的等温口径）。
 3. **生成率表**（§6.1 模型 C）：各缺陷净电荷 q·(Z − p) 与外加偏压一起解一次泊松方程。式 T4 的
    R_1e 按电子来源分成两类事件（ADR-042）：
-   - **电极项**（两侧电极 R2 + R4）：在每个生成单元中心对一个虚拟前驱求值，乘断键概率 P_bb
-     （式 T2），单元生成率 G_cell = N_T·V_cell·R_1e,电极·P_bb（式 T1）。单元中心离已有缺陷不到
-     min_separation 的单元放不下新空位，生成率记 0；
+   - **电极项**（两侧电极 R2 + R4）：对虚拟前驱求值、乘断键概率 P_bb（式 T2），在单元内离已有缺陷
+     ≥ min_separation 的可放置区域上积分，G_cell = N_T·∫ R_1e,电极·P_bb d³x（式 T1，`ElectrodeCaptureGeneration`，
+     ADR-044）。求积在固定步长的竖直列上做、与生成网格无关，生成单元只用来给事件分组；
    - **陷阱项**（近旁已占据陷阱经陷阱间通道 p·R7 送来的电子，ADR-039）：几何因子沿距离每
      r_D/2 ≈ 0.083 nm 衰减 e 倍，远小于生成单元，所以不放在单元上，而是逐个源陷阱在它周围的
      可放置区域里对 N_T·p·R7·P_bb 做体积分（`TrapCaptureGeneration`），每个源陷阱一条事件。
+   两类事件里 P_bb 的场都是泊松解的场在 Gaussian 窗口上的平均（宏观场，ADR-043）。
 4. **击穿判据**（§6.3）：间距 < d_c 的缺陷连边，某个连通分量同时触到两个电极（离电极界面
    < d_c）即击穿，这一刻就是 t_BD；电流密度达到限流值是第二停止条件。论文的"25 个空位、
    间距 ≤ 6 Å"团簇只作标志记录，不作判据。
-5. **抽事件**：Δt = −ln(r)/ΣG，在单元事件与源陷阱事件里按速率选一条。选中单元时在单元内连续
-   随机落点，选中源陷阱时按它周围的被积函数抽落点；与已有缺陷的距离小于 min_separation 就重抽
+5. **抽事件**：Δt = −ln(r)/ΣG，在单元事件与源陷阱事件里按速率选一条。选中单元时按单元内的被积函数
+   落点，选中源陷阱时按它周围的被积函数落点，位置连续；与已有缺陷的距离小于 min_separation 就重抽
    （§6.1、§6.8）。
 6. **出生**：新空位与初始缺陷同一物种（能级按缺陷预设的分布抽样，S、m_di 取预设），出生时
    被前驱俘获的那个电子占据，电荷态为 0（中性）；电子发射后空位才带 +1（施主约定，代码里
@@ -83,10 +84,9 @@ from .kmc import (
 from .mean_field import solve_mean_field
 from .rates import (
     CaptureElectrode,
-    bond_break_generation_rate,
     bond_break_probability,
     effective_activation_energy,
-    single_electron_capture_rate,
+    single_electron_capture_parts,
     trap_precursor_capture_rate,
 )
 from .thermal import heat_release, power_map, solve_temperature, transport_temperature
@@ -98,11 +98,22 @@ _PRECURSOR_N_PHONON = 100
 # 不作击穿判据（那是针对 ~2.7 nm 膜定的）
 _DENSE_CLUSTER_DISTANCE = 0.6 * constants.nano
 _DENSE_CLUSTER_SIZE = 25
-# 生成单元分块求 R_1e：每块 (块长, 声子数, 路径点) 的数组约 0.4 MB，留在缓存里。16×16×70 单元上
-# 实测单进程 256 块 4.3 s、8 块 3.6 s；16 个进程并发时 256 块 36 s（内存带宽占满）、8 块 9–14 s
+# 分块求 R_1e 插值表：每块 (块长, 声子数, 路径点) 的数组约 0.4 MB，留在缓存里。实测单进程 256 块
+# 4.3 s、8 块 3.6 s；16 个进程并发时 256 块 36 s（内存带宽占满）、8 块 9–14 s
 _CELL_CHUNK = 8
-# 选中单元里落点的尝试次数上限，全部离已有缺陷太近就把单元记为已满
+# 选中事件里落点的尝试次数上限，全部离已有缺陷太近就把事件记为已满
 _MAX_PLACEMENT_ATTEMPTS = 1000
+# 电极项的可放置区域积分（`ElectrodeCaptureGeneration`，ADR-044）：横向在竖直列上取中点，列间距不超过
+# _COLUMN_STEP；沿 z 在间距不超过 _LEVEL_STEP 的节点之间按对数线性积分，P_bb 饱和的折点与禁区球的边界
+# 精确切开。R_1e,电极 在每个 z 节点上按前驱能级（与温度）建插值表，表的能级步长约 k_BT/5、温度步长 0.5 K。
+# 列间距 ≥ 0.1 nm 时列格点切禁区球（半径 0.5 nm）的方式随间距跳动，致密层上 ΣG 来回差 ±10%；≤ 0.1 nm 后稳定在
+# ±2% 内（ADR-044），取 0.08 nm
+_COLUMN_STEP = 0.08 * constants.nano
+_LEVEL_STEP = 0.1 * constants.nano
+_TABLE_ENERGY_STEP = 0.005 * constants.electron_volt
+_TABLE_TEMPERATURE_STEP = 0.5
+# 区间合并时给每列 z 坐标加的偏移 [m]，远大于膜厚，使不同列的区间排序后不会相连
+_COLUMN_KEY = 1.0e-6
 # 陷阱项的源陷阱球坐标积分（`TrapCaptureGeneration`，ADR-042）。极角 u = cosθ 方向在 MA 因子与 P_bb
 # 饱和的折点、可放置区域边界处切开后按对数线性精确积分，径向与方位角 φ 在相邻节点之间按对数线性插值积分：
 # 几何因子 e^{−α·r} 与外场下 MA 因子的指数变化都没有离散误差，误差随三个步长二阶下降。取值由 ADR-042
@@ -242,21 +253,6 @@ def generation_cells(device: DeviceConfig, grid: Tuple[int, int, int]) -> Genera
         layer=iz.ravel(),
         z_centers=standoff + (np.arange(gz) + 0.5) * size[2],
     )
-
-
-def admissible_cells(cells: GenerationCells, positions: np.ndarray, device: DeviceConfig) -> np.ndarray:
-    """单元中心离全部已有缺陷都不小于 min_separation 的单元（xy 取最小镜像）。
-
-    新空位不能落在已有缺陷的 min_separation 之内（§6.1），那里的生成速率就是 0。
-    """
-    standoff = _global_standoff(device)
-    if positions.shape[0] == 0 or standoff <= 0.0:
-        return np.ones(len(cells), dtype=bool)
-    # xy 周期：坐标先折回 [0, L)；z 不周期：盒长取 4·Lz，坐标都在 [0, Lz] 内，不会回绕
-    box = np.array([device.Lx, device.Ly, 4.0 * device.Lz])
-    tree = cKDTree(np.mod(positions, box), boxsize=box)
-    distance, _ = tree.query(np.mod(cells.centers, box))
-    return distance >= standoff
 
 
 def _log_linear_integral(start: np.ndarray, end: np.ndarray, width: np.ndarray) -> np.ndarray:
@@ -630,10 +626,352 @@ class TrapCaptureGeneration:
         return None
 
 
-class GenerationTable(NamedTuple):
-    """一个状态下的生成事件表（式 T1，§6.1 模型 C，ADR-042）：单元事件在前、源陷阱事件在后。"""
+def _capture_electrodes(
+    device: DeviceConfig, solver: PoissonSolver, phi: np.ndarray, voltage: float, z_values: np.ndarray
+) -> List[CaptureElectrode]:
+    """前驱位于各高度 `z_values` 时两侧电极到它的隧穿路径，取法同 kmc.py 对真实陷阱的处理：路径沿 z 直线，
+    势垒取横向平均剖面的导带底（含界面台阶）。每侧的数组形状 (len(z_values), _TRAP_PATH_POINTS)。"""
+    band = conduction_band_edge(device, solver.z, solver.lateral_average(phi))
+    iface_idx, delta_Ec = _interface_step_nodes(device, solver.z)
+    t = np.linspace(0.0, 1.0, _TRAP_PATH_POINTS)
+    z = np.asarray(z_values, dtype=float)[:, None]
+    sides = []
+    for path, electrode, fermi in (
+        (z * t[None, :], device.cathode, 0.0),
+        (z + (device.Lz - z) * t[None, :], device.anode, anode_fermi_level(voltage)),
+    ):
+        sides.append(
+            CaptureElectrode(
+                path=path,
+                barrier=_band_on_path_steps(path, solver.z, band, iface_idx, delta_Ec),
+                m_di_path=device.stack.m_di_at(path),
+                fermi_level=fermi,
+                band_bottom=electrode_band_bottom(fermi, electrode.fermi_energy),
+                mass=electrode.effective_mass,
+            )
+        )
+    return sides
 
-    cells: np.ndarray  # (M,) 各生成单元的电极项事件速率 G_cell [1/s]
+
+class ElectrodeCaptureGeneration:
+    """R_1e 电极项的生成事件：单元生成率是单元内可放置区域上的体积分（式 T1/T2/T4，§6.1，ADR-044）。
+
+        G_cell = N_T·∫_{cell ∩ A} R_1e,电极(x)·P_bb(x) d³x,
+
+    A 是 z ∈ [standoff, Lz − standoff] 且离全部已有缺陷 ≥ min_separation 的区域（xy 最小镜像），与
+    `TrapCaptureGeneration` 同一个定义。被积函数逐点的取法同引擎处理真实陷阱：前驱能级 E = B − e·φ(x) − E_t1
+    与 R4 的 c_MP 用局域电势与局域场，P_bb 用宏观场 `bond_field`（ADR-043），温度取 x 处的局域温度（§6.6）。
+
+    求积与生成网格无关：横向铺等距竖直列（间距 ≤ `_COLUMN_STEP`，取列中心为中点），每列沿 z 在等距节点
+    （间距 ≤ `_LEVEL_STEP`）之间按对数线性插值积分。R_1e,电极 沿 z 每 nm 约变 e¹⁷，对数线性对指数变化没有
+    离散误差；P_bb 的饱和折点按线性插值切开。禁区球与列相交成 z 区间 [z_d − h, z_d + h]，h = √(s² − ρ²)，
+    合并后按线性插值的分数位置精确扣掉。每段积分按所在位置归入生成单元，单元只是事件分组，ΣG 与它的空间
+    分布不随生成网格变。
+
+    R_1e,电极 = Σ R2 + F²·Σ R4/F²（`single_electron_capture_parts`）：每个 z 节点上按前驱能级（温度场不均匀时
+    再加温度）建插值表，求值点上按局域能级、温度插值、再按局域场组合，完整的 WKB 与声子求和只在表的节点上做。
+    """
+
+    def __init__(
+        self,
+        inner: KMCSimulation,
+        tddb: TDDBConfig,
+        cells: GenerationCells,
+        phi: np.ndarray,
+        bond_field: np.ndarray,
+        temperature_field: Optional[np.ndarray],
+    ) -> None:
+        device, solver, defects = inner.device, inner.solver, inner.defects
+        self._device = device
+        self._standoff = _global_standoff(device)
+        self._positions = defects.positions
+        # xy 周期：坐标先折回 [0, L)；z 不周期：盒长取 4·Lz，可放置区域的点都在 [0, Lz] 内，不会回绕
+        self._box = np.array([device.Lx, device.Ly, 4.0 * device.Lz])
+        self._tree = cKDTree(np.mod(defects.positions, self._box), boxsize=self._box)
+
+        n_x = int(np.ceil(device.Lx / _COLUMN_STEP - 1e-9))
+        n_y = int(np.ceil(device.Ly / _COLUMN_STEP - 1e-9))
+        self._column_size = np.array([device.Lx / n_x, device.Ly / n_y])
+        ix, iy = np.meshgrid(np.arange(n_x), np.arange(n_y), indexing="ij")
+        self._columns = np.stack(
+            [(ix.ravel() + 0.5) * self._column_size[0], (iy.ravel() + 0.5) * self._column_size[1]], axis=1
+        )
+        window = device.Lz - 2.0 * self._standoff
+        n_layers = int(np.ceil(window / _LEVEL_STEP - 1e-9))
+        self._dz = window / n_layers
+        self._levels = self._standoff + self._dz * np.arange(n_layers + 1)
+
+        n_columns = self._columns.shape[0]
+        self._weights = np.zeros(n_layers * n_columns)
+        self._cell_of = self._cell_index(cells, n_layers)
+        self.rates = np.zeros(len(cells))
+        if tddb.precursor_concentration == 0.0:
+            return
+        self._log_rate, self._barrier = self._nodes(inner, tddb, phi, bond_field, temperature_field)
+        whole = _kinked_log_linear_integral(
+            self._log_rate[:-1].ravel(),
+            self._log_rate[1:].ravel(),
+            (self._barrier[:-1].ravel(),),
+            (self._barrier[1:].ravel(),),
+            np.zeros(n_layers * n_columns),
+            np.ones(n_layers * n_columns),
+            self._dz,
+        )
+        self._blocked_column, self._blocked_lo, self._blocked_hi = self._blocked_intervals()
+        excluded, covered = self._excluded(n_layers, n_columns)
+        weights = np.where(covered >= 1.0 - 1e-9, 0.0, np.maximum(whole - excluded, 0.0))
+        # N_T 只是前置因子、不进积分：落点与 N_T 无关，"N_T 只改时间标尺"逐位成立
+        self._weights = tddb.precursor_concentration * np.prod(self._column_size) * weights
+        self.rates = np.bincount(self._cell_of, self._weights, minlength=len(cells))
+
+    def _cell_index(self, cells: GenerationCells, n_layers: int) -> np.ndarray:
+        """每段 (z 区间, 列) 所属的生成单元编号，展平成 (层 × 列,)；单元按 (ix, iy, iz) 的 C 序。"""
+        device = self._device
+        g_x = int(round(device.Lx / cells.size[0]))
+        g_y = int(round(device.Ly / cells.size[1]))
+        g_z = cells.z_centers.size
+        c_x = np.minimum((self._columns[:, 0] / cells.size[0]).astype(int), g_x - 1)
+        c_y = np.minimum((self._columns[:, 1] / cells.size[1]).astype(int), g_y - 1)
+        middle = self._levels[:-1] + 0.5 * self._dz
+        c_z = np.minimum(((middle - self._standoff) / cells.size[2]).astype(int), g_z - 1)
+        return ((c_x * g_y + c_y)[None, :] * g_z + c_z[:, None]).ravel()
+
+    def _nodes(
+        self,
+        inner: KMCSimulation,
+        tddb: TDDBConfig,
+        phi: np.ndarray,
+        bond_field: np.ndarray,
+        temperature_field: Optional[np.ndarray],
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """各 (z 节点, 列) 上的 ln R_1e,电极 与 P_bb 的折点指数 g = (E_A − p₀·(2+k)/3·|Ē|)/k_BT，
+        形状 (节点数, 列数)；被积函数（不含 N_T）= exp(ln R_1e − max(0, g))。"""
+        device, solver = self._device, inner.solver
+        material = device.stack.single_material
+        grid = np.concatenate(
+            (phi[..., None], np.stack(solver.electric_field(phi), axis=-1), bond_field)
+            + (() if temperature_field is None else (temperature_field[..., None],)),
+            axis=-1,
+        )
+        electrodes = _capture_electrodes(device, solver, phi, inner.sim.voltage, self._levels)
+        n_columns = self._columns.shape[0]
+        log_rate = np.empty((self._levels.size, n_columns))
+        barrier = np.empty((self._levels.size, n_columns))
+        for k, z in enumerate(self._levels):
+            points = np.column_stack([self._columns, np.full(n_columns, z)])
+            local = solver.interpolate(grid, points)
+            energy = (
+                device.band_reference_profile(points[:, 2])
+                - constants.elementary_charge * local[:, 0]
+                - tddb.precursor_ionization_energy
+            )
+            temperature = local[:, 7] if temperature_field is not None else np.full(n_columns, inner.sim.temperature)
+            elastic, multiphonon = self._capture_parts(
+                [side._replace(path=side.path[k], barrier=side.barrier[k], m_di_path=side.m_di_path[k])
+                 for side in electrodes],
+                energy,
+                temperature,
+                tddb,
+            )
+            field = np.linalg.norm(local[:, 1:4], axis=1)
+            rate = elastic + field ** 2 * multiphonon
+            log_rate[k] = np.log(np.maximum(rate, np.finfo(float).tiny))
+            barrier[k] = effective_activation_energy(
+                tddb.activation_energy, tddb.dipole_moment, material.kappa, np.linalg.norm(local[:, 4:7], axis=1)
+            ) / (constants.Boltzmann * temperature)
+        return log_rate, barrier
+
+    def _capture_parts(
+        self, electrodes: List[CaptureElectrode], energy: np.ndarray, temperature: np.ndarray, tddb: TDDBConfig
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """一个 z 节点上各列的 (Σ R2, Σ R4/F²)：在 [能级最小值, 最大值] 上每 `_TABLE_ENERGY_STEP` 一个节点、温度
+        不均匀时在 [最低, 最高] 上每 `_TABLE_TEMPERATURE_STEP` 一个节点建表，对 ln 值线性（双线性）插值。"""
+        material = self._device.stack.single_material
+        e_lo = float(energy.min())
+        n_e = max(2, int(np.ceil((float(energy.max()) - e_lo) / _TABLE_ENERGY_STEP)) + 1)
+        e_nodes = e_lo + _TABLE_ENERGY_STEP * np.arange(n_e)
+        t_lo, t_hi = float(temperature.min()), float(temperature.max())
+        n_t = 1 if t_hi == t_lo else max(2, int(np.ceil((t_hi - t_lo) / _TABLE_TEMPERATURE_STEP)) + 1)
+        t_nodes = np.linspace(t_lo, t_hi, n_t)
+        table_e = np.repeat(e_nodes, n_t)
+        table_t = np.tile(t_nodes, n_e)
+        tables = (np.empty(table_e.size), np.empty(table_e.size))
+        for start in range(0, table_e.size, _CELL_CHUNK):
+            rows = slice(start, start + _CELL_CHUNK)
+            n = table_e[rows].size
+            sides = [
+                side._replace(
+                    path=np.broadcast_to(side.path, (n, side.path.size)),
+                    barrier=np.broadcast_to(side.barrier, (n, side.barrier.size)),
+                    m_di_path=np.broadcast_to(side.m_di_path, (n, side.m_di_path.size)),
+                )
+                for side in electrodes
+            ]
+            parts = single_electron_capture_parts(
+                table_e[rows] + tddb.precursor_ionization_energy,
+                sides,
+                tddb.precursor_ionization_energy,
+                tddb.precursor_relaxation_energy,
+                material.phonon_energy,
+                material.band_gap,
+                material.m_di,
+                table_t[rows],
+                _PRECURSOR_N_PHONON,
+            )
+            for table, part in zip(tables, parts):
+                table[rows] = part
+        u = (energy - e_lo) / _TABLE_ENERGY_STEP
+        i = np.clip(np.floor(u).astype(int), 0, n_e - 2)
+        w = np.clip(u - i, 0.0, 1.0)
+        if n_t == 1:
+            j, x = np.zeros(energy.size, dtype=int), np.zeros(energy.size)
+        else:
+            v = (temperature - t_lo) / (t_hi - t_lo) * (n_t - 1)
+            j = np.clip(np.floor(v).astype(int), 0, n_t - 2)
+            x = np.clip(v - j, 0.0, 1.0)
+        result = []
+        for table in tables:
+            log = np.log(np.maximum(table, np.finfo(float).tiny)).reshape(n_e, n_t)
+            if n_t == 1:
+                value = (1.0 - w) * log[i, 0] + w * log[i + 1, 0]
+            else:
+                value = (1.0 - w) * ((1.0 - x) * log[i, j] + x * log[i, j + 1]) + w * (
+                    (1.0 - x) * log[i + 1, j] + x * log[i + 1, j + 1]
+                )
+            result.append(np.exp(value))
+        return result[0], result[1]
+
+    def _blocked_intervals(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """各列被禁区球挡住的 z 区间，合并成互不相交的区间并夹到可采样窗口内，按 (列, 下端) 排序。"""
+        device, standoff = self._device, self._standoff
+        empty = (np.zeros(0, dtype=int), np.zeros(0), np.zeros(0))
+        if self._positions.shape[0] == 0:
+            return empty
+        box = self._box[:2]
+        pairs = cKDTree(self._columns, boxsize=box).sparse_distance_matrix(
+            cKDTree(np.mod(self._positions[:, :2], box), boxsize=box), standoff, output_type="ndarray"
+        )
+        inside = pairs["v"] < standoff
+        column, defect, rho = pairs["i"][inside], pairs["j"][inside], pairs["v"][inside]
+        if column.size == 0:
+            return empty
+        half = np.sqrt(standoff ** 2 - rho ** 2)
+        lo, hi = self._positions[defect, 2] - half, self._positions[defect, 2] + half
+        order = np.lexsort((lo, column))
+        column, lo, hi = column[order], lo[order], hi[order]
+        shift = column * _COLUMN_KEY
+        reach = np.maximum.accumulate(hi + shift)
+        start = np.ones(column.size, dtype=bool)
+        start[1:] = lo[1:] + shift[1:] > reach[:-1]
+        first = np.flatnonzero(start)
+        column, lo, hi = column[first], lo[first], np.maximum.reduceat(hi, first)
+        lo = np.maximum(lo, self._levels[0])
+        hi = np.minimum(hi, self._levels[-1])
+        keep = hi > lo
+        return column[keep], lo[keep], hi[keep]
+
+    def _excluded(self, n_layers: int, n_columns: int) -> Tuple[np.ndarray, np.ndarray]:
+        """每段 (z 区间, 列) 里被挡住部分的积分与它占该段的长度比例，形状展平成 (层 × 列,)。"""
+        excluded = np.zeros(n_layers * n_columns)
+        covered = np.zeros(n_layers * n_columns)
+        column, lo, hi = self._blocked_column, self._blocked_lo, self._blocked_hi
+        if column.size == 0:
+            return excluded, covered
+        z0 = self._levels[0]
+        k0 = np.clip(np.floor((lo - z0) / self._dz).astype(int), 0, n_layers - 1)
+        k1 = np.clip(np.floor((hi - z0) / self._dz).astype(int), 0, n_layers - 1)
+        counts = k1 - k0 + 1
+        row = np.repeat(np.arange(column.size), counts)
+        layer = k0[row] + np.arange(row.size) - np.repeat(np.cumsum(counts) - counts, counts)
+        base = self._levels[layer]
+        t0 = np.clip((lo[row] - base) / self._dz, 0.0, 1.0)
+        t1 = np.clip((hi[row] - base) / self._dz, 0.0, 1.0)
+        c = column[row]
+        cut = _kinked_log_linear_integral(
+            self._log_rate[layer, c],
+            self._log_rate[layer + 1, c],
+            (self._barrier[layer, c],),
+            (self._barrier[layer + 1, c],),
+            t0,
+            t1,
+            self._dz,
+        )
+        flat = layer * n_columns + c
+        np.add.at(excluded, flat, cut)
+        np.add.at(covered, flat, t1 - t0)
+        return excluded, covered
+
+    def _value(self, layer: int, column: int, t: np.ndarray) -> np.ndarray:
+        """第 `layer` 段、第 `column` 列里分数位置 t 处的被积函数（与求积同一个插值模型）。"""
+        log = self._log_rate[layer, column] + t * (self._log_rate[layer + 1, column] - self._log_rate[layer, column])
+        g = self._barrier[layer, column] + t * (self._barrier[layer + 1, column] - self._barrier[layer, column])
+        return np.exp(log - np.maximum(0.0, g))
+
+    def _sample_z(self, layer: int, column: int, rng: np.random.Generator) -> float:
+        """在第 `layer` 段、第 `column` 列的可放置部分上按被积函数抽 z：先按积分选一段可放置区间，区间内按两端
+        值做对数线性密度抽样。"""
+        a = int(np.searchsorted(self._blocked_column, column, side="left"))
+        b = int(np.searchsorted(self._blocked_column, column, side="right"))
+        bottom = self._levels[layer]
+        start, gaps = 0.0, []
+        for lo, hi in zip(self._blocked_lo[a:b], self._blocked_hi[a:b]):
+            t_lo, t_hi = (lo - bottom) / self._dz, (hi - bottom) / self._dz
+            if t_hi <= 0.0 or t_lo >= 1.0:
+                continue
+            if t_lo > start:
+                gaps.append((start, t_lo))
+            start = max(start, t_hi)
+        if start < 1.0:
+            gaps.append((start, 1.0))
+        if not gaps:
+            return float("nan")  # 舍入误差下整段被挡住：落点检查不通过，重抽
+        t0, t1 = np.array(gaps).T
+        log_a = np.full(t0.size, self._log_rate[layer, column])
+        log_b = np.full(t0.size, self._log_rate[layer + 1, column])
+        g_a = np.full(t0.size, self._barrier[layer, column])
+        g_b = np.full(t0.size, self._barrier[layer + 1, column])
+        weights = np.cumsum(_kinked_log_linear_integral(log_a, log_b, (g_a,), (g_b,), t0, t1, self._dz))
+        m = min(int(np.searchsorted(weights, rng.random() * weights[-1], side="right")), t0.size - 1)
+        ends = self._value(layer, column, np.array([t0[m], t1[m]]))
+        t = t0[m] + (t1[m] - t0[m]) * _log_linear_fraction(ends[0], ends[1], rng.random())
+        return float(bottom + self._dz * t)
+
+    def sample(self, cell: int, rng: np.random.Generator) -> Optional[np.ndarray]:
+        """按单元 `cell` 内的被积函数抽一个新空位坐标；`_MAX_PLACEMENT_ATTEMPTS` 次都放不下返回 None。
+
+        先按积分权重选 (z 段, 列)，在该列的可放置部分上按被积函数抽 z，x、y 在列的横截面里均匀抽样；
+        落点再按可采样窗口与 min_separation 严格检查。后一半尝试把 x、y 放在列中心——那里的 z 区间
+        就是求积时扣掉禁区后剩下的部分。
+        """
+        members = np.flatnonzero((self._cell_of == cell) & (self._weights > 0.0))
+        if members.size == 0:
+            return None
+        cumulative = np.cumsum(self._weights[members])
+        n_columns = self._columns.shape[0]
+        for attempt in range(_MAX_PLACEMENT_ATTEMPTS):
+            index = int(np.searchsorted(cumulative, rng.random() * cumulative[-1], side="right"))
+            pick = members[min(index, members.size - 1)]
+            layer, column = divmod(int(pick), n_columns)
+            z = self._sample_z(layer, column, rng)
+            offset = (rng.random(2) - 0.5) * self._column_size if attempt < _MAX_PLACEMENT_ATTEMPTS // 2 else 0.0
+            point = np.append(np.mod(self._columns[column] + offset, self._box[:2]), z)
+            if self._admissible(point):
+                return point
+        return None
+
+    def _admissible(self, point: np.ndarray) -> bool:
+        if not self._standoff <= point[2] <= self._device.Lz - self._standoff:
+            return False
+        if self._positions.shape[0] == 0:
+            return True
+        distance, _ = self._tree.query(np.mod(point, self._box))
+        return bool(distance >= self._standoff)
+
+
+class GenerationTable(NamedTuple):
+    """一个状态下的生成事件表（式 T1，§6.1 模型 C）：单元事件在前、源陷阱事件在后（ADR-042、ADR-044）。"""
+
+    cells: ElectrodeCaptureGeneration  # 各生成单元的电极项事件，速率 `cells.rates` (M,) [1/s]
     traps: TrapCaptureGeneration  # 各源陷阱的陷阱项事件，速率 `traps.rates` (N,) [1/s]
 
 
@@ -644,140 +982,45 @@ def generation_rates(
     cells: GenerationCells,
     temperature_field: Optional[np.ndarray] = None,
 ) -> GenerationTable:
-    """O 空位生成事件表（式 T1，§6.1 模型 C）：R_1e 的电极项按生成单元、陷阱项按源陷阱（ADR-042）。
+    """O 空位生成事件表（式 T1，§6.1 模型 C）：R_1e 按电子来源分成电极项与陷阱项两类事件。
 
     `inner` 提供当前缺陷集合、工作点与泊松求解器，`occupancy` 是各缺陷的平均场占据 p。
     每个缺陷的净电荷 q·(Z − p) 与外加偏压一起解一次泊松方程（与引擎用耦合矩阵线性叠加的
     结果相同），两类事件都在这份电势上求值：
 
-    - **单元事件** G_cell = N_T·V_cell·R_1e,电极·P_bb，在单元中心对一个虚拟前驱求值，取法同
-      `kmc.KMCSimulation._rates` 处理真实陷阱：前驱处导带底 E_C = B − e·φ 定能级 E = E_C − E_t1，
-      局域场大小进 R4 的 c_MP；电极→单元的 WKB 路径沿 z 直线，势垒取横向平均剖面的导带底；
-      R_1e,电极 = Σ_两侧电极 (R2 + R4)（式 T4，`single_electron_capture_rate`，R4 取
-      `_PRECURSOR_N_PHONON` 个声子项）；P_bb 的场加速项 p₀·(2+k)/3·E 里 k 取静态 κ（式 T2）。
-      单元中心落在已有缺陷 min_separation 之内的单元记 0（`admissible_cells`）：那里放不下新空位。
-    - **P_bb 的场是宏观场**（ADR-043）：泊松解的场在标准差 `tddb.field_averaging_width` 的 Gaussian 窗口上
-      取空间平均（`PoissonSolver.gaussian_average`）。Lorentz 关系 (2+k)/3 针对在 Lorentz 球上近似均匀的宏观场；
-      带电缺陷亚纳米近旁的点电荷场不满足这个前提，经 (2+κ)/3 放大后让 P_bb 在 0.1–0.2 nm 尺度上饱和，生成率随
-      生成网格与泊松网格都不收敛。平均窗口保留 ≳1 nm 尺度的场结构（空位层的集体场、团簇尖端的聚焦场）。
+    - **单元事件**：R_1e,电极 = Σ_两侧电极 (R2 + R4)（式 T4）乘 P_bb，在单元内的可放置区域上积分
+      （`ElectrodeCaptureGeneration`，ADR-044），与生成网格无关；
     - **源陷阱事件**：近旁已占据陷阱经陷阱间通道 p·R7 送给前驱的电子（式 T5 的陷阱来源，ADR-039），
-      逐个源陷阱在它周围的可放置区域上积分（`TrapCaptureGeneration`），与生成网格无关。
+      逐个源陷阱在它周围的可放置区域上积分（`TrapCaptureGeneration`，ADR-042）。
 
-    `temperature_field` 是泊松网格上的温度场（热反馈时取 T14 的解，§6.6）：单元事件取它在单元中心
-    的值，源陷阱事件取它在每个积分节点上的值；R_1e 的声子线型、电极费米分布、陷阱项的 MA 因子与
-    P_bb 都按局域温度求值。缺省用内层的工作点温度。
+    **P_bb 的场是宏观场**（ADR-043）：泊松解的场在标准差 `tddb.field_averaging_width` 的 Gaussian 窗口上
+    取空间平均（`PoissonSolver.gaussian_average`）。Lorentz 关系 (2+k)/3 针对在 Lorentz 球上近似均匀的宏观场；
+    带电缺陷亚纳米近旁的点电荷场不满足这个前提，经 (2+κ)/3 放大后让 P_bb 在 0.1–0.2 nm 尺度上饱和，生成率随
+    生成网格与泊松网格都不收敛。平均窗口保留 ≳1 nm 尺度的场结构（空位层的集体场、团簇尖端的聚焦场）。
+
+    `temperature_field` 是泊松网格上的温度场（热反馈时取 T14 的解，§6.6）：两类事件都取它在每个求积节点上
+    的值；R_1e 的声子线型、电极费米分布、陷阱项的 MA 因子与 P_bb 都按局域温度求值。缺省用内层的工作点温度。
     """
-    device, solver, defects = inner.device, inner.solver, inner.defects
-    voltage = inner.sim.voltage
-    material = device.stack.single_material
-    q = constants.elementary_charge
-    rho = solver.deposit(defects.positions, q * (defects.charge_state - occupancy))
-    phi = solver.solve(rho, top_boundary_potential(device, voltage))
+    solver, defects = inner.solver, inner.defects
+    rho = solver.deposit(defects.positions, constants.elementary_charge * (defects.charge_state - occupancy))
+    phi = solver.solve(rho, top_boundary_potential(inner.device, inner.sim.voltage))
     bond_field = solver.gaussian_average(np.stack(solver.electric_field(phi), axis=-1), tddb.field_averaging_width)
-    traps = TrapCaptureGeneration(inner, occupancy, tddb, phi, bond_field, temperature_field)
-
-    rates = np.zeros(len(cells))
-    live = np.flatnonzero(admissible_cells(cells, defects.positions, device))
-    if live.size == 0 or tddb.precursor_concentration == 0.0:
-        return GenerationTable(rates, traps)
-    centers = cells.centers[live]
-    local = temperature_field is not None
-    temperature = solver.interpolate(temperature_field, centers) if local else inner.sim.temperature
-    field = np.linalg.norm(
-        solver.field_vectors_at(phi, centers, np.zeros(live.size, dtype=int)), axis=0
+    return GenerationTable(
+        ElectrodeCaptureGeneration(inner, tddb, cells, phi, bond_field, temperature_field),
+        TrapCaptureGeneration(inner, occupancy, tddb, phi, bond_field, temperature_field),
     )
-    conduction = device.band_reference_profile(centers[:, 2]) - q * solver.interpolate(phi, centers)
-
-    # 电极→单元的路径与势垒只依赖单元所在的 z 层，按层算好再按单元取
-    z_nodes = solver.z
-    band = conduction_band_edge(device, z_nodes, solver.lateral_average(phi))
-    iface_idx, delta_Ec = _interface_step_nodes(device, z_nodes)
-    t = np.linspace(0.0, 1.0, _TRAP_PATH_POINTS)
-    z_layer = cells.z_centers[:, None]
-    by_layer = []
-    for path, electrode, fermi in (
-        (z_layer * t[None, :], device.cathode, 0.0),
-        (z_layer + (device.Lz - z_layer) * t[None, :], device.anode, anode_fermi_level(voltage)),
-    ):
-        by_layer.append(
-            CaptureElectrode(
-                path=path,
-                barrier=_band_on_path_steps(path, z_nodes, band, iface_idx, delta_Ec),
-                m_di_path=device.stack.m_di_at(path),
-                fermi_level=fermi,
-                band_bottom=electrode_band_bottom(fermi, electrode.fermi_energy),
-                mass=electrode.effective_mass,
-            )
-        )
-
-    capture = np.empty(live.size)
-    for start in range(0, live.size, _CELL_CHUNK):
-        rows = slice(start, start + _CELL_CHUNK)
-        layer = cells.layer[live[rows]]
-        electrodes = [
-            side._replace(path=side.path[layer], barrier=side.barrier[layer], m_di_path=side.m_di_path[layer])
-            for side in by_layer
-        ]
-        capture[rows] = single_electron_capture_rate(
-            conduction[rows],
-            field[rows],
-            electrodes,
-            tddb.precursor_ionization_energy,
-            tddb.precursor_relaxation_energy,
-            material.phonon_energy,
-            material.band_gap,
-            material.m_di,
-            temperature[rows] if local else temperature,
-            _PRECURSOR_N_PHONON,
-        )
-    per_precursor = bond_break_generation_rate(
-        capture,
-        tddb.activation_energy,
-        tddb.dipole_moment,
-        material.kappa,
-        np.linalg.norm(solver.interpolate(bond_field, centers), axis=-1),
-        temperature,
-    )
-    rates[live] = tddb.precursor_concentration * cells.volume * per_precursor
-    return GenerationTable(rates, traps)
-
-
-def _place_in_cell(
-    cells: GenerationCells,
-    cell: int,
-    positions: np.ndarray,
-    standoff: float,
-    device: DeviceConfig,
-    rng: np.random.Generator,
-) -> Optional[np.ndarray]:
-    """在单元内均匀随机落点，与已有缺陷的距离 ≥ standoff（xy 取最小镜像）；放不下返回 None。"""
-    for _ in range(_MAX_PLACEMENT_ATTEMPTS):
-        candidate = cells.lower[cell] + cells.size * rng.random(3)
-        if standoff <= 0.0 or positions.shape[0] == 0:
-            return candidate
-        delta = minimum_image_delta(positions - candidate[None, :], device.Lx, device.Ly)
-        if np.min(np.linalg.norm(delta, axis=-1)) >= standoff:
-            return candidate
-    return None
 
 
 def _draw_generation(
-    rates: np.ndarray,
-    full: np.ndarray,
-    cells: GenerationCells,
-    traps: Optional[TrapCaptureGeneration],
-    positions: np.ndarray,
-    standoff: float,
-    device: DeviceConfig,
-    rng: np.random.Generator,
+    rates: np.ndarray, full: np.ndarray, table: GenerationTable, rng: np.random.Generator
 ) -> Optional[Tuple[float, np.ndarray]]:
     """抽下一次生成事件，返回 (Δt, 新空位坐标)；总生成率为 0 时返回 None。
 
-    `rates` 与 `full` 是单元事件在前、源陷阱事件（`traps`）在后的整张事件表；`traps` 为 None
-    时只有单元事件。选中单元时在单元内均匀落点，选中源陷阱时按它周围的被积函数落点。选中的事件
-    放不下新空位时把它记为已满（原地改 `full`），按剩下的事件重抽 Δt 与事件：缺陷只增不减，
-    可放置区域只缩不扩，满了的单元与源陷阱一直是满的。
+    `rates` 与 `full` 是单元事件在前、源陷阱事件在后的整张事件表。选中单元时按单元内的被积函数落点，
+    选中源陷阱时按它周围的被积函数落点。选中的事件放不下新空位时把它记为已满（原地改 `full`），按剩下
+    的事件重抽 Δt 与事件：缺陷只增不减，可放置区域只缩不扩，满了的单元与源陷阱一直是满的。
     """
+    n_cells = table.cells.rates.size
     while True:
         live = np.where(full, 0.0, rates)
         total = float(live.sum())
@@ -787,10 +1030,10 @@ def _draw_generation(
         cumulative = np.cumsum(live)
         event = int(np.searchsorted(cumulative, rng.random() * cumulative[-1], side="right"))
         event = min(event, live.size - 1)
-        if event < len(cells):
-            position = _place_in_cell(cells, event, positions, standoff, device, rng)
+        if event < n_cells:
+            position = table.cells.sample(event, rng)
         else:
-            position = traps.sample(event - len(cells), rng)
+            position = table.traps.sample(event - n_cells, rng)
         if position is not None:
             return dt, position
         full[event] = True
@@ -940,7 +1183,6 @@ def run_tddb(
     solver = PoissonSolver(device, sim.grid)
     coupling = IncrementalCoupling.build(solver, defects.positions, defects.field_side)
     cells = generation_cells(device, tddb.generation_grid)
-    standoff = _global_standoff(device)
     # 事件表 = 单元事件 + 每个缺陷一条源陷阱事件；放不下新空位的事件记为已满，缺陷只增不减，一直满着
     full = np.zeros(len(cells) + n_initial, dtype=bool)
     birth_time = np.zeros(n_initial)
@@ -965,7 +1207,7 @@ def run_tddb(
             effective = transport_temperature(solver, temperature_field, defects.positions, heat.defect, ambient)
             peak = float(temperature_field.max())
         table = generation_rates(inner, occupancy, tddb, cells, temperature_field)
-        rates = np.where(full, 0.0, np.concatenate([table.cells, table.traps.rates]))
+        rates = np.where(full, 0.0, np.concatenate([table.cells.rates, table.traps.rates]))
         n_clusters, max_cluster, largest, n_split = _cluster_diagnostics(inner)
         labels, spanning = percolation_clusters(defects.positions, device, tddb.percolation_distance)
         dense_labels, _ = percolation_clusters(defects.positions, device, _DENSE_CLUSTER_DISTANCE)
@@ -1005,7 +1247,7 @@ def run_tddb(
         if len(defects) - n_initial >= tddb.max_generated_vacancies:
             end_time, stop_reason = time, "max_generated"
             break
-        event = _draw_generation(rates, full, cells, table.traps, defects.positions, standoff, device, rng)
+        event = _draw_generation(rates, full, table, rng)
         if event is None:
             end_time, stop_reason = tddb.stop_time, "no_generation"
             break

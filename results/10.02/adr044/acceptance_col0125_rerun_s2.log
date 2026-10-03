@@ -1,0 +1,8 @@
+rerun_s2: N=1010 defects, empty (p<0.5) 498, mean-field 77.3s
+rerun_s2 gen 16x16x70                     | cells=1.77900e+08 traps=1.3452e+05 total=1.78034e+08 | cell share z<1 1.0000 1-2 0.0000 >2 2.56e-14 | births z median=0.545 q90=0.639 z>2nm=0.0000 (n=4000) | wall=47.0s
+rerun_s2 gen 32x32x70                     | cells=1.77900e+08 traps=1.3452e+05 total=1.78034e+08 | cell share z<1 1.0000 1-2 0.0000 >2 2.56e-14 | births z median=0.543 q90=0.646 z>2nm=0.0000 (n=4000) | wall=45.7s
+rerun_s2 gen 48x48x70                     | cells=1.77900e+08 traps=1.3452e+05 total=1.78034e+08 | cell share z<1 1.0000 1-2 0.0000 >2 2.56e-14 | births z median=0.543 q90=0.637 z>2nm=0.0000 (n=4000) | wall=45.3s
+rerun_s2 column step /2                   | cells=1.73559e+08 traps=1.3452e+05 total=1.73694e+08 | cell share z<1 1.0000 1-2 0.0000 >2 2.63e-14 | births z median=0.546 q90=0.643 z>2nm=0.0000 (n=4000) | wall=50.2s
+rerun_s2 level step /2                    | cells=1.83377e+08 traps=1.3452e+05 total=1.83512e+08 | cell share z<1 1.0000 1-2 0.0000 >2 2.49e-14 | births z median=0.544 q90=0.642 z>2nm=0.0000 (n=4000) | wall=48.6s
+rerun_s2 table steps /2                   | cells=1.77925e+08 traps=1.3452e+05 total=1.78059e+08 | cell share z<1 1.0000 1-2 0.0000 >2 2.56e-14 | births z median=0.545 q90=0.639 z>2nm=0.0000 (n=4000) | wall=46.1s
+rerun_s2 poisson 160^3                    | cells=1.63413e+08 traps=1.2996e+05 total=1.63543e+08 | cell share z<1 1.0000 1-2 0.0000 >2 2.80e-14 | births z median=0.544 q90=0.640 z>2nm=0.0000 (n=4000) | wall=49.0s

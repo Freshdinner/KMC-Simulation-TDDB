@@ -26,7 +26,7 @@ docs/rate_equations.md 的 R1–R8 不对应::
 全部量为 SI 单位。
 """
 
-from typing import NamedTuple, Sequence, Union
+from typing import NamedTuple, Sequence, Tuple, Union
 
 import numpy as np
 from scipy import constants
@@ -108,7 +108,41 @@ def single_electron_capture_rate(
     p = 0..n_phonon−1 求和，n_phonon 要覆盖前驱的多声子线型：E_rel1/ℏω₀ ≈ 1 时引擎的
     12 项已收敛，E_rel1 = 1.0 eV（E_rel1/ℏω₀ = 25）时要约 100 项（ADR-030）。
     `temperature` 可以是标量，也可以是与 `conduction_band` 等长的逐前驱温度（Phase 4 按
-    单元局域温度求值，§6.6），声子线型与电极费米分布都取这个温度。
+    局域温度求值，§6.6），声子线型与电极费米分布都取这个温度。
+
+    R4 的 c_MP ∝ F²，其余因子与场无关，所以 R_1e,电极 = 弹性部分 + F²·多声子部分
+    （`single_electron_capture_parts`）。
+    """
+    elastic, multiphonon = single_electron_capture_parts(
+        conduction_band,
+        electrodes,
+        ionization_energy,
+        relaxation_energy,
+        phonon_energy,
+        band_gap,
+        m_di,
+        temperature,
+        n_phonon,
+    )
+    return elastic + np.asarray(field, dtype=float) ** 2 * multiphonon
+
+
+def single_electron_capture_parts(
+    conduction_band: np.ndarray,
+    electrodes: Sequence[CaptureElectrode],
+    ionization_energy: float,
+    relaxation_energy: float,
+    phonon_energy: float,
+    band_gap: float,
+    m_di: float,
+    temperature: Union[float, np.ndarray],
+    n_phonon: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """R_1e 电极项按场依赖拆开的两部分 (Σ R2 [1/s], Σ R4/F² [1/(s·(V/m)²)])（式 T4，T5–T11）。
+
+    R_1e,电极 = Σ R2 + F²·(Σ R4/F²)：R4 的 c_MP ∝ F²（`multiphonon_coupling`），其余因子与场无关。
+    参数含义同 `single_electron_capture_rate`。生成率在大量求值点上要用同一组 (能级, 温度) 下的
+    R_1e，按这两部分建表后对任意局域场都可直接组合。
     """
     energy = np.asarray(conduction_band, dtype=float) - ionization_energy
     temperature = np.asarray(temperature, dtype=float)
@@ -121,13 +155,14 @@ def single_electron_capture_rate(
     )
     energies_p = energy[:, None] + phonon_index * phonon_energy
     precursor_r_D = localization_radius(ionization_energy, m_di)
-    coupling = multiphonon_coupling(precursor_r_D, field, band_gap, m_di)
+    coupling = multiphonon_coupling(precursor_r_D, 1.0, band_gap, m_di)  # 单位场下的 c_MP
 
-    rate = np.zeros(energy.shape)
+    elastic = np.zeros(energy.shape)
+    multiphonon = np.zeros(energy.shape)
     for side in electrodes:
         transmission = wkb_transmission(side.path, side.barrier, energy, side.m_di_path)
         occupancy = fermi_dirac(energy, side.fermi_level, temperature)
-        rate = rate + r2_elastic_capture(
+        elastic = elastic + r2_elastic_capture(
             energy - side.band_bottom, ionization_energy, side.mass, m_di, occupancy, transmission
         )
         transmission_p = wkb_transmission(
@@ -135,8 +170,8 @@ def single_electron_capture_rate(
         )
         occupancy_p = fermi_dirac(energies_p, side.fermi_level, column)
         dos_p = free_electron_dos(energies_p - side.band_bottom, side.mass)
-        rate = rate + r4_multiphonon_capture(coupling, dos_p, occupancy_p, transmission_p, weights)
-    return rate
+        multiphonon = multiphonon + r4_multiphonon_capture(coupling, dos_p, occupancy_p, transmission_p, weights)
+    return elastic, multiphonon
 
 
 def effective_activation_energy(

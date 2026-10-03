@@ -32,19 +32,16 @@ from kmc_leakage.defects import (
     DefectEnsemble,
     _global_standoff,
     append_defects,
-    layer_bulk_defects,
     localization_radius,
     minimum_image_delta,
 )
 from kmc_leakage.electrostatics import PoissonSolver
 from kmc_leakage.kmc import _B_R2A, _B_R2C, _B_R4A, _B_R4C, _N_PHONON, MECHANISMS, ElectrostaticCoupling, KMCSimulation
 from kmc_leakage.mean_field import solve_mean_field
-from kmc_leakage.rates import bond_break_probability
+from kmc_leakage.rates import bond_break_probability, single_electron_capture_rate
 from kmc_leakage.tddb import (
-    GenerationCells,
     IncrementalCoupling,
     _draw_generation,
-    admissible_cells,
     fit_power_law,
     fit_transient,
     generation_cells,
@@ -240,57 +237,160 @@ def test_trajectory_bookkeeping(trajectory):
 
 
 @pytest.mark.parametrize("width", [0.0, 0.5e-9])
-def test_generation_rate_is_model_c_with_engine_capture_rates(monkeypatch, width):
-    """G_cell = N_T·V_cell·R_1e,电极·P_bb：R_1e,电极 与引擎在单元中心放一个前驱参数陷阱时的两侧 R2 + R4 之和
-    一致；局域场、电势与能级都含当前占据下的空间电荷（§6.1）。陷阱项不进单元（ADR-042）。P_bb 取泊松解的场在
+def test_electrode_generation_nodes_match_engine_capture_rates(monkeypatch, width):
+    """单元事件的被积函数 N_T·R_1e,电极·P_bb（ADR-044）：在求积节点上，R_1e,电极 与引擎在该点放一个前驱参数陷阱时
+    的两侧 R2 + R4 之和一致（插值表误差内）；局域电势、局域场都含当前占据下的空间电荷（§6.1）。P_bb 取泊松解的场在
     Gaussian 窗口上的平均（ADR-043）；窗口宽度 0 时就是引擎在探针处读到的局域场。
 
     引擎的 R4 用 12 个声子项，这里把前驱的声子项数也设成 12 再逐项对拍。探针陷阱 Z = 0、
     占据 0，不带电，不改变别的缺陷感受到的静电环境。
     """
     monkeypatch.setattr(tddb_module, "_PRECURSOR_N_PHONON", _N_PHONON)
-    config = _config(field_averaging_width=width)
+    config = _config(concentration_cm3=3.0e19, field_averaging_width=width)
     tddb = config.tddb
     material = config.device.stack.single_material
     band_reference = float(config.device.layer_band_references()[0])
     cells = generation_cells(config.device, tddb.generation_grid)
     inner = KMCSimulation(config)
     occupancy = solve_mean_field(inner).occupancy
-    rates = generation_rates(inner, occupancy, tddb, cells).cells
+    electrode = generation_rates(inner, occupancy, tddb, cells).cells
 
-    probe_material = replace(material, huang_rhys=tddb.precursor_relaxation_energy / material.phonon_energy)
-    live = np.flatnonzero(admissible_cells(cells, inner.defects.positions, config.device))
-    chosen = live[[0, live.size // 3, 2 * live.size // 3, -1]]
+    levels = np.array([0, 3, electrode._levels.size // 2, electrode._levels.size - 1])
+    columns = np.array([0, 777, electrode._columns.shape[0] // 2, electrode._columns.shape[0] - 1])
+    positions = np.column_stack([electrode._columns[columns], electrode._levels[levels]])
     probes = DefectEnsemble.uniform(
-        cells.centers[chosen],
-        np.full(chosen.size, tddb.precursor_ionization_energy),
-        probe_material,
+        positions,
+        np.full(levels.size, tddb.precursor_ionization_energy),
+        replace(material, huang_rhys=tddb.precursor_relaxation_energy / material.phonon_energy),
         band_reference=band_reference,
         charge_state=0.0,
     )
     extended = KMCSimulation(config, defects=append_defects(inner.defects, probes))
-    occ = np.concatenate([occupancy, np.zeros(chosen.size)])
+    occ = np.concatenate([occupancy, np.zeros(levels.size)])
     energy, field, barrier_c, barrier_a = extended._trap_state(occ)
     blocks = extended._electrode_blocks(energy, field, barrier_c, barrier_a)
     probe = np.arange(inner.n_defects, extended.n_defects)
-    electrode = (blocks[_B_R2C] + blocks[_B_R2A] + blocks[_B_R4C] + blocks[_B_R4A])[probe]
+    capture = (blocks[_B_R2C] + blocks[_B_R2A] + blocks[_B_R4C] + blocks[_B_R4A])[probe]
     bond_field = field[probe]
     if width > 0.0:
         solver = inner.solver
-        charge = Q * (inner.defects.charge_state - occupancy)
         phi = solver.solve(
-            solver.deposit(inner.defects.positions, charge),
+            solver.deposit(inner.defects.positions, Q * (inner.defects.charge_state - occupancy)),
             tddb_module.top_boundary_potential(config.device, config.simulation.voltage),
         )
         mean = solver.gaussian_average(np.stack(solver.electric_field(phi), axis=-1), width)
-        bond_field = np.linalg.norm(solver.interpolate(mean, cells.centers[chosen]), axis=-1)
+        bond_field = np.linalg.norm(solver.interpolate(mean, positions), axis=-1)
         assert not np.array_equal(bond_field, field[probe])
     p_bb = bond_break_probability(
         tddb.activation_energy, tddb.dipole_moment, material.kappa, bond_field, config.simulation.temperature
     )
-    expected = tddb.precursor_concentration * cells.volume * electrode * p_bb
+    expected = tddb.precursor_concentration * capture * p_bb
+    actual = tddb.precursor_concentration * np.exp(
+        electrode._log_rate[levels, columns] - np.maximum(0.0, electrode._barrier[levels, columns])
+    )
     assert np.all(expected > 0.0)
-    np.testing.assert_allclose(rates[chosen], expected, rtol=1e-9)
+    np.testing.assert_allclose(actual, expected, rtol=2e-3)
+
+
+def _uniform_field_density(config, inner, z):
+    """均匀外场里（缺陷都不带电）单元事件的被积函数 N_T·R_1e,电极·P_bb，只依赖高度 z，直接求值。"""
+    device, tddb = config.device, config.tddb
+    material = device.stack.single_material
+    voltage, temperature = config.simulation.voltage, config.simulation.temperature
+    solver = inner.solver
+    phi = solver.solve(np.zeros(solver.grid.shape), tddb_module.top_boundary_potential(device, voltage))
+    F = abs(tddb_module.top_boundary_potential(device, voltage)) / device.Lz
+    z = np.atleast_1d(z)
+    conduction = device.band_reference_profile(z) - Q * F * z
+    rate = single_electron_capture_rate(
+        conduction,
+        np.full(z.size, F),
+        tddb_module._capture_electrodes(device, solver, phi, voltage, z),
+        tddb.precursor_ionization_energy,
+        tddb.precursor_relaxation_energy,
+        material.phonon_energy,
+        material.band_gap,
+        material.m_di,
+        temperature,
+        tddb_module._PRECURSOR_N_PHONON,
+    )
+    p_bb = bond_break_probability(tddb.activation_energy, tddb.dipole_moment, material.kappa, F, temperature)
+    return tddb.precursor_concentration * rate * p_bb
+
+
+def test_electrode_generation_is_the_admissible_volume_integral(monkeypatch):
+    """单元事件是可放置区域上的体积分（ADR-044）。均匀外场里被积函数 f 只依赖 z，与被积函数的直接求值对照：
+    (1) 远离阴极的中性缺陷挡住的部分可以忽略时，ΣG_单元 = Lx·Ly·∫_窗口 f dz。误差来自 z 向对数线性插值（ln f 在阴极
+        附近有弯曲），随节点间距二阶下降：默认 0.1 nm 时实测 −0.78%（判据 1%），0.05 nm 时 −0.20%（判据 0.3%）；
+    (2) 同一个中性缺陷放在 z₀ = 1 nm 与贴近阳极处，ΣG_单元 之差就是禁区球挡住的 ∫ f(z)·π·(s² − (z−z₀)²) dz。
+        禁区圆盘的横截面由列中点给出，默认列间距 0.08 nm 下实测 −0.25%（判据 2%）。"""
+    config = _config()
+    device = config.device
+    standoff = _global_standoff(device)
+    cells = generation_cells(device, config.tddb.generation_grid)
+    z_far, z_near = 7.4e-9, 1.0e-9
+
+    def total(z_defect):
+        inner = KMCSimulation(config, defects=_neutral_sources(config, [10.03e-9, 9.97e-9, z_defect], 1.15))
+        return generation_rates(inner, np.ones(1), config.tddb, cells).cells.rates.sum(), inner
+
+    far, inner = total(z_far)
+    window = device.Lx * device.Ly * integrate.quad(
+        lambda z: float(_uniform_field_density(config, inner, z)[0]),
+        standoff, device.Lz - standoff, epsabs=0.0, epsrel=1e-10, limit=400,
+    )[0]
+    assert far == pytest.approx(window, rel=1e-2)
+    blocked = integrate.quad(
+        lambda z: float(_uniform_field_density(config, inner, z)[0]) * np.pi * (standoff ** 2 - (z - z_near) ** 2),
+        z_near - standoff, z_near + standoff, epsabs=0.0, epsrel=1e-10,
+    )[0]
+    assert far - total(z_near)[0] == pytest.approx(blocked, rel=2e-2)
+    monkeypatch.setattr(tddb_module, "_LEVEL_STEP", tddb_module._LEVEL_STEP / 2.0)
+    assert total(z_far)[0] == pytest.approx(window, rel=3e-3)
+
+
+def test_electrode_generation_is_independent_of_generation_grid():
+    """单元事件的求积与生成网格无关（ADR-044）：生成单元只是事件分组，ΣG 在几种网格下相同；细网格单元按
+    粗网格分组求和后逐个等于粗网格单元的速率（空间分布也相同）。"""
+    config = _config(concentration_cm3=3.0e19)
+    inner = KMCSimulation(config)
+    occupancy = solve_mean_field(inner).occupancy
+    coarse = generation_rates(inner, occupancy, config.tddb, generation_cells(config.device, (2, 2, 14))).cells.rates
+    fine = generation_rates(inner, occupancy, config.tddb, generation_cells(config.device, (4, 4, 28))).cells.rates
+    other = generation_rates(inner, occupancy, config.tddb, generation_cells(config.device, (3, 5, 7))).cells.rates
+    assert np.all(coarse > 0.0)
+    assert fine.sum() == pytest.approx(coarse.sum(), rel=1e-12)
+    assert other.sum() == pytest.approx(coarse.sum(), rel=1e-12)
+    grouped = fine.reshape(2, 2, 2, 2, 14, 2).sum(axis=(1, 3, 5)).ravel()
+    np.testing.assert_allclose(grouped, coarse, rtol=1e-12)
+
+
+def test_electrode_generation_samples_follow_the_integrand():
+    """单元事件的落点（ADR-044）：都在可放置区域里，沿 z 的分布与被积函数一致——均匀外场里一个中性缺陷挡住单元的
+    一部分，3000 个落点的 ⟨z⟩ 等于 ∫ z·f(z)·A(z) dz / ∫ f(z)·A(z) dz（A 是该高度上单元的可放置面积）。"""
+    config = _config()
+    device = config.device
+    standoff = _global_standoff(device)
+    center = np.array([5.03e-9, 4.97e-9, 1.0e-9])
+    inner = KMCSimulation(config, defects=_neutral_sources(config, center, 1.15))
+    cells = generation_cells(device, (2, 2, 14))  # 单元 10×10×0.5 nm，z 第 1 层是 [1.0, 1.5] nm
+    electrode = generation_rates(inner, np.ones(1), config.tddb, cells).cells
+    cell = 1
+    lower, upper = cells.lower[cell, 2], cells.lower[cell, 2] + cells.size[2]
+    rng = np.random.default_rng(3)
+    samples = np.array([electrode.sample(cell, rng) for _ in range(3000)])
+    distance = np.linalg.norm(minimum_image_delta(samples - center, device.Lx, device.Ly), axis=-1)
+    assert np.all(distance >= standoff)
+    assert np.all((samples[:, 2] >= lower) & (samples[:, 2] <= upper))
+
+    def weight(z, moment):
+        area = cells.size[0] * cells.size[1] - np.pi * max(0.0, standoff ** 2 - (z - center[2]) ** 2)
+        return z ** moment * float(_uniform_field_density(config, inner, z)[0]) * area
+
+    norm = integrate.quad(weight, lower, upper, args=(0,), points=[center[2] + standoff], epsrel=1e-10)[0]
+    mean = integrate.quad(weight, lower, upper, args=(1,), points=[center[2] + standoff], epsrel=1e-10)[0] / norm
+    z = samples[:, 2]
+    assert z.mean() == pytest.approx(mean, abs=4.0 * z.std() / np.sqrt(z.size))
 
 
 def _neutral_sources(config, positions, ED_eV):
@@ -433,27 +533,6 @@ def test_trap_generation_samples_follow_the_integrand():
     assert u.mean() == pytest.approx(mean_u, abs=4.0 * u.std() / np.sqrt(u.size) + 0.01)
 
 
-def test_cells_within_min_separation_of_a_defect_have_zero_rate():
-    """单元中心落在已有缺陷 min_separation 之内的单元生成率为 0，其余单元不受影响（§6.1）。"""
-    config = _config()
-    inner = KMCSimulation(config)
-    occupancy = solve_mean_field(inner).occupancy
-    cells = generation_cells(config.device, config.tddb.generation_grid)
-    before = generation_rates(inner, occupancy, config.tddb, cells).cells
-    assert np.all(before > 0.0)
-
-    target = 20
-    offset = np.array([0.3e-9, 0.0, 0.0])  # 离单元中心 0.3 nm < min_separation，离别的单元中心都远
-    extra = layer_bulk_defects(config.device, 0, cells.centers[target] + offset, np.random.default_rng(0))
-    extra = replace(extra, charge_state=np.zeros(1))  # 不带电，其余单元的静电环境不变
-    grown = KMCSimulation(config, defects=append_defects(inner.defects, extra))
-    after = generation_rates(grown, np.append(occupancy, 0.0), config.tddb, cells).cells
-    assert after[target] == 0.0
-    assert np.sum(after == 0.0) == 1
-    others = np.arange(len(cells)) != target
-    np.testing.assert_allclose(after[others], before[others], rtol=1e-9)
-
-
 def test_precursor_concentration_only_rescales_time():
     """N_T 只是生成率的前置因子：同一种子下 N_T 翻 10 倍，事件序列与电流逐位相同、时刻缩为 1/10。"""
     base = run_tddb(_config(max_generated_vacancies=3))
@@ -465,8 +544,8 @@ def test_precursor_concentration_only_rescales_time():
 
 
 def test_generation_rates_follow_local_temperature():
-    """局域温度（§6.6）：每个单元的生成率等于整张温度场取该单元中心温度时的值；温度场处处取环境温度时
-    单元事件与源陷阱事件都退回缺省（按工作点温度求值）。"""
+    """局域温度（§6.6）：温度场处处取环境温度时单元事件与源陷阱事件都退回缺省（按工作点温度求值）；温度场不均匀时
+    单元事件的每个求积节点按该节点的温度求值，等于整张温度场取这个节点温度时同一节点的值（插值表误差内）。"""
     config = _config()
     inner = KMCSimulation(config)
     occupancy = solve_mean_field(inner).occupancy
@@ -476,16 +555,18 @@ def test_generation_rates_follow_local_temperature():
     base = generation_rates(inner, occupancy, config.tddb, cells)
     flat = generation_rates(inner, occupancy, config.tddb, cells, np.full(shape, ambient))
     assert np.any(base.traps.rates > 0.0)
-    np.testing.assert_allclose(flat.cells, base.cells, rtol=1e-12)
+    np.testing.assert_allclose(flat.cells.rates, base.cells.rates, rtol=1e-12)
     np.testing.assert_allclose(flat.traps.rates, base.traps.rates, rtol=1e-12)
 
     field = ambient + np.random.default_rng(4).uniform(0.0, 80.0, shape)
     local = generation_rates(inner, occupancy, config.tddb, cells, field).cells
-    assert not np.allclose(local, base.cells)
-    cell_temperature = inner.solver.interpolate(field, cells.centers)
-    for cell in (0, 17, len(cells) // 2, len(cells) - 1):
-        uniform = generation_rates(inner, occupancy, config.tddb, cells, np.full(shape, cell_temperature[cell]))
-        assert local[cell] == pytest.approx(uniform.cells[cell], rel=1e-12)
+    assert not np.allclose(local.rates, base.cells.rates)
+    for level, column in ((2, 0), (20, 9000), (60, 25000)):
+        point = np.append(local._columns[column], local._levels[level])
+        node_temperature = float(inner.solver.interpolate(field, point)[0])
+        uniform = generation_rates(inner, occupancy, config.tddb, cells, np.full(shape, node_temperature)).cells
+        assert local._log_rate[level, column] == pytest.approx(uniform._log_rate[level, column], abs=1e-3)
+        assert local._barrier[level, column] == pytest.approx(uniform._barrier[level, column], rel=1e-12)
 
 
 def test_thermal_feedback_feeds_previous_power_into_transport_and_generation(monkeypatch):
@@ -585,24 +666,28 @@ def test_compliance_stops_when_current_density_reaches_the_limit(trajectory):
     assert at_start.time.tolist() == [0.0] and at_start.end_time == 0.0
 
 
-def test_full_cell_is_skipped():
-    """选中的单元整个落在已有缺陷的 min_separation 之内：记为已满，改从其余单元抽。"""
-    config = make_config()
-    device = config.device
-    existing = np.array([[10e-9, 10e-9, 4e-9]])
-    cells = GenerationCells(
-        lower=np.array([[9.95e-9, 9.95e-9, 3.95e-9], [2e-9, 2e-9, 2e-9]]),
-        size=np.array([0.1e-9, 0.1e-9, 0.1e-9]),
-        layer=np.array([0, 1]),
-        z_centers=np.array([4e-9, 2.05e-9]),
-    )
+class _StubEvents:
+    """只有速率与落点的事件源：`places[i]` 为 None 表示第 i 个事件放不下新空位。"""
+
+    def __init__(self, places):
+        self.rates = np.ones(len(places))
+        self._places = places
+
+    def sample(self, index, rng):
+        return self._places[index]
+
+
+def test_full_event_is_skipped():
+    """选中的事件放不下新空位：记为已满，改从其余事件抽；全部已满或总速率为 0 时返回 None。"""
+    point = np.array([2e-9, 2e-9, 2e-9])
+    table = tddb_module.GenerationTable(_StubEvents([None, point]), _StubEvents([]))
     full = np.zeros(2, dtype=bool)
     rng = np.random.default_rng(0)
-    dt, position = _draw_generation(np.array([1e12, 1.0]), full, cells, None, existing, 0.5e-9, device, rng)
+    dt, position = _draw_generation(np.array([1e12, 1.0]), full, table, rng)
     assert full.tolist() == [True, False]
-    assert np.all((position >= cells.lower[1]) & (position < cells.lower[1] + cells.size))
+    assert np.array_equal(position, point)
     assert dt > 0.0
-    assert _draw_generation(np.zeros(2), full, cells, None, existing, 0.5e-9, device, rng) is None
+    assert _draw_generation(np.zeros(2), full, table, rng) is None
 
 
 def test_source_event_places_by_its_sampler_and_is_marked_full_when_it_cannot():
@@ -612,17 +697,18 @@ def test_source_event_places_by_its_sampler_and_is_marked_full_when_it_cannot():
     device = config.device
     inner = KMCSimulation(config, defects=_neutral_sources(config, [10e-9, 10e-9, 4e-9], 1.15))
     cells = generation_cells(device, config.tddb.generation_grid)
-    traps = generation_rates(inner, np.ones(1), config.tddb, cells).traps
+    table = generation_rates(inner, np.ones(1), config.tddb, cells)
+    traps = table.traps
     standoff = _global_standoff(device)
     rates = np.concatenate([np.zeros(len(cells)), traps.rates])
     full = np.zeros(rates.size, dtype=bool)
     rng = np.random.default_rng(0)
-    dt, position = _draw_generation(rates, full, cells, traps, inner.defects.positions, standoff, device, rng)
+    dt, position = _draw_generation(rates, full, table, rng)
     assert dt > 0.0 and not full.any()
     assert standoff <= np.linalg.norm(position - inner.defects.positions[0]) < 2e-9
 
     traps.sample = lambda source, rng: None  # 源陷阱周围放不下
-    assert _draw_generation(rates, full, cells, traps, inner.defects.positions, standoff, device, rng) is None
+    assert _draw_generation(rates, full, table, rng) is None
     assert full.tolist() == [False] * len(cells) + [True]
 
 
@@ -635,7 +721,8 @@ def test_trajectory_driven_by_source_events_keeps_bookkeeping(monkeypatch):
     def traps_only(inner, occupancy, tddb, cells, temperature_field=None):
         table = original(inner, occupancy, tddb, cells, temperature_field)
         tables.append(table)
-        return table._replace(cells=np.zeros_like(table.cells))
+        table.cells.rates = np.zeros_like(table.cells.rates)
+        return table
 
     monkeypatch.setattr(tddb_module, "generation_rates", traps_only)
     config = _config(seed=1, concentration_cm3=3.0e19, max_generated_vacancies=3)

@@ -9,6 +9,21 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。实测数据与方案对�
 
 #### TDDB 阶段
 
+- **单元电极项改为对单元内可放置区域的积分，与生成网格无关**（ADR-044，ADR-033 第 5、7、8 条 superseded；新增
+  `tddb.ElectrodeCaptureGeneration`、`rates/generation.py::single_electron_capture_parts`，删去 `admissible_cells`、`_place_in_cell`；
+  `GenerationTable.cells` 改为事件对象（`rates` + `sample()`），`_draw_generation(rates, full, table, rng)`；验收脚本与日志在
+  `results/10.02/adr044/`）。
+  **为什么**：单元中心点值 × V_cell、中心落进禁区就整格记 0，在致密空位层上 16 格比 32 格以上低 100–1000 倍、32–128 格之间差
+  ±7–40%（ADR-043），轨迹后段的时间标尺不可信。
+  **做法**：G_cell = N_T·∫_{cell ∩ A} R_1e,电极·P_bb d³x。横向在间距 0.08 nm 的竖直列上取中点，每列沿 z 在 0.1 nm 节点之间按
+  对数线性积分，P_bb 饱和折点与禁区球边界精确切开；R_1e,电极 = Σ R2 + F²·Σ R4/F²，每个 z 节点按前驱能级（与温度）建插值表；
+  生成单元只用来给事件分组；选中单元后按被积函数连续落点。
+  **验证**：求积节点上与引擎探针一致（2e-3）；均匀外场里等于直接积分、禁区球挡住的部分等于解析体积分；三种生成网格 ΣG 相同；
+  落点 ⟨z⟩ 等于被积函数一阶矩；N_T 只改时间标尺（逐位）。304 passed。
+  **实测**：9 个状态上 ΣG 与 z 分布在 16 / 32 / 48 格下逐位相同；求积参数加密 ≤ 3%，与旧算法 128×128×140 的极限差 ≤ 2.7%。
+  剩下泊松网格 80³ → 160³ 时致密状态 −8% ～ −11%（来自前驱能级用的局域电势）。ADR-041 的"阴极层填满、ΣG 降到 13.5 s⁻¹"是
+  旧单元中心规则的假象，致密终态实际 ΣG 约 1.7×10⁸ s⁻¹。生成仍贴阴极。16 格下每步事件表多 3–17 s。
+
 - **P_bb 改用 Gaussian 窗口平均的宏观场**（ADR-043，ADR-034 待定第 1 条由此定下；`PoissonSolver.gaussian_average`，
   `tddb.field_averaging_width_nm` = 0.5 nm，`TrapCaptureGeneration` 新增 `bond_field`；验收脚本与日志在 `results/10.02/adr043/`）。
   **为什么**：Lorentz 关系 (2+k)/3 只对约 1 nm 尺度上近似均匀的宏观场成立，带电空位 0.5 nm 处的点电荷场不满足；局域场经

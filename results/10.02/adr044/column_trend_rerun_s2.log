@@ -1,0 +1,7 @@
+rerun_s2 column step 0.2500 nm: sum_G_cells=1.79948e+08 wall=1.2s
+rerun_s2 column step 0.2000 nm: sum_G_cells=1.73139e+08 wall=1.6s
+rerun_s2 column step 0.1600 nm: sum_G_cells=1.75276e+08 wall=1.9s
+rerun_s2 column step 0.1250 nm: sum_G_cells=1.77900e+08 wall=2.9s
+rerun_s2 column step 0.1000 nm: sum_G_cells=1.71348e+08 wall=4.3s
+rerun_s2 column step 0.0800 nm: sum_G_cells=1.73651e+08 wall=6.0s
+rerun_s2 column step 0.0625 nm: sum_G_cells=1.73559e+08 wall=9.2s

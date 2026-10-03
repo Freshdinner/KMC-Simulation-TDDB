@@ -21,6 +21,7 @@ from kmc_leakage.rates import (
     bond_break_generation_rate,
     bond_break_probability,
     effective_activation_energy,
+    single_electron_capture_parts,
     single_electron_capture_rate,
     trap_precursor_capture_rate,
 )
@@ -128,6 +129,20 @@ def test_single_electron_capture_rate_matches_engine_r2_plus_r4(voltage):
     assert np.all(expected > 0.0)
     assert np.all(blocks[_B_R4C] + blocks[_B_R4A] > 0.0)  # 多声子通道确实参与
     assert r_1e == pytest.approx(expected, rel=1e-12)
+    # 按场依赖拆开的两部分（ADR-044）：弹性部分 = 两侧 R2，F² × 多声子部分 = 两侧 R4
+    elastic, multiphonon = single_electron_capture_parts(
+        sim.defects.band_reference - Q * phi_at,
+        electrodes,
+        ionization_energy,
+        relaxation_energy,
+        material.phonon_energy,
+        material.band_gap,
+        material.m_di,
+        sim.sim.temperature,
+        _N_PHONON,
+    )
+    assert elastic == pytest.approx(blocks[_B_R2C] + blocks[_B_R2A], rel=1e-12)
+    assert field_at ** 2 * multiphonon == pytest.approx(blocks[_B_R4C] + blocks[_B_R4A], rel=1e-12)
 
 
 def test_trap_term_is_occupancy_weighted_miller_abrahams_hop():
