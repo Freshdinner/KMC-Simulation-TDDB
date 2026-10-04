@@ -1,0 +1,5 @@
+s3 n=50 N=60 T_transport=298.150000 K | ΣG rebuilt (masked) 3.500577826e+02 vs recorded 3.500577826e+02 (rel -4.2e-12); full events 0
+  gen 16x16x70 : cells 3.462327387e+02 traps 3.825043895e+00 total 3.500577826e+02 | cell share z<1 0.988430 1-2 0.011570 >2 1.514e-07 | wall 22.8s
+  gen 32x32x70 : cells 3.462327387e+02 traps 3.825043895e+00 total 3.500577826e+02 | cell share z<1 0.988430 1-2 0.011570 >2 1.514e-07 | wall 21.2s
+  16 vs 32     : cells rel +4.4e-16, traps rel +0.0e+00 (bitwise True), total rel +4.4e-16, max share diff 0.0e+00
+  poisson 160^3: cells 3.525369123e+02 (+1.82%) traps 3.726364418e+00 (-2.58%) total 3.562632767e+02 (+1.77%) | cell share z<1 0.988535 1-2 0.011465 >2 1.489e-07 | wall 27.8s

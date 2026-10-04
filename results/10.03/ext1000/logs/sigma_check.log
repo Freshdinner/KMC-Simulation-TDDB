@@ -1,0 +1,16 @@
+results/10.03/rerun/snap_s1_n0400.npz | N = 410 (400 generated, Z_generated = 1) | net charge +250.3 e
+  sigma 0.35 nm: ΣG 4.3796e+04 (cells 4.3599e+04, traps 1.9750e+02, trap share 0.5%) | electrode term by z <1 / 1-2 / >2 nm: 0.999 / 0.001 / 0.000
+  sigma 0.50 nm: ΣG 9.3068e+03 (cells 9.1621e+03, traps 1.4470e+02, trap share 1.6%) | electrode term by z <1 / 1-2 / >2 nm: 0.988 / 0.012 / 0.000
+  sigma 0.70 nm: ΣG 3.6258e+03 (cells 3.2334e+03, traps 3.9239e+02, trap share 10.8%) | electrode term by z <1 / 1-2 / >2 nm: 0.921 / 0.079 / 0.000
+results/10.03/rerun/snap_s1_n0050.npz | N = 60 (50 generated, Z_generated = 1) | net charge +41.7 e
+  sigma 0.35 nm: ΣG 7.7538e+02 (cells 7.7335e+02, traps 2.0278e+00, trap share 0.3%) | electrode term by z <1 / 1-2 / >2 nm: 0.997 / 0.003 / 0.000
+  sigma 0.50 nm: ΣG 1.2164e+02 (cells 1.1981e+02, traps 1.8301e+00, trap share 1.5%) | electrode term by z <1 / 1-2 / >2 nm: 0.974 / 0.026 / 0.000
+  sigma 0.70 nm: ΣG 3.1676e+01 (cells 2.9198e+01, traps 2.4783e+00, trap share 7.8%) | electrode term by z <1 / 1-2 / >2 nm: 0.879 / 0.121 / 0.000
+results/10.03/oi_colocated/snap_s1_n0050.npz | N = 60 (50 generated, Z_generated = 0) | net charge +1.0 e
+  sigma 0.35 nm: ΣG 7.5751e+00 (cells 4.7405e-01, traps 7.1010e+00, trap share 93.7%) | electrode term by z <1 / 1-2 / >2 nm: 0.425 / 0.575 / 0.000
+  sigma 0.50 nm: ΣG 2.7703e+00 (cells 4.5918e-01, traps 2.3111e+00, trap share 83.4%) | electrode term by z <1 / 1-2 / >2 nm: 0.406 / 0.594 / 0.000
+  sigma 0.70 nm: ΣG 1.5818e+00 (cells 4.5471e-01, traps 1.1271e+00, trap share 71.3%) | electrode term by z <1 / 1-2 / >2 nm: 0.399 / 0.601 / 0.000
+results/10.03/oi_colocated/snap_s2_n0050.npz | N = 60 (50 generated, Z_generated = 0) | net charge +4.2 e
+  sigma 0.35 nm: ΣG 1.9898e+00 (cells 5.8873e-01, traps 1.4010e+00, trap share 70.4%) | electrode term by z <1 / 1-2 / >2 nm: 0.409 / 0.591 / 0.000
+  sigma 0.50 nm: ΣG 1.3384e+00 (cells 5.5827e-01, traps 7.8015e-01, trap share 58.3%) | electrode term by z <1 / 1-2 / >2 nm: 0.405 / 0.595 / 0.000
+  sigma 0.70 nm: ΣG 1.1553e+00 (cells 5.4247e-01, traps 6.1279e-01, trap share 53.0%) | electrode term by z <1 / 1-2 / >2 nm: 0.402 / 0.598 / 0.000

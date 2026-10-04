@@ -1,0 +1,4 @@
+s1 n=100 grid 80^3: J 2.1935e-01 A/cm2 | direct_fn 0.000 thermionic 0.000 tat 0.337 pf 0.663 | empty generated 64.9 | it 1 res 6.5e-11 | 17 s | local |F| median z<1 nm 0.58 V/nm, z>=1 nm 0.38 V/nm
+s1 n=100 grid 160^3: J 1.8198e-01 A/cm2 | direct_fn 0.000 thermionic 0.000 tat 0.404 pf 0.596 | empty generated 65.3 | it 20 res 3.5e-11 | 119 s
+s1 n=400 grid 80^3: J 6.4409e+00 A/cm2 | direct_fn 0.000 thermionic 0.000 tat 0.008 pf 0.992 | empty generated 242.3 | it 1 res 4.3e-11 | 64 s | local |F| median z<1 nm 0.66 V/nm, z>=1 nm 0.33 V/nm
+s1 n=400 grid 160^3: J 5.0906e+00 A/cm2 | direct_fn 0.000 thermionic 0.000 tat 0.010 pf 0.990 | empty generated 244.4 | it 23 res 2.6e-11 | 472 s
