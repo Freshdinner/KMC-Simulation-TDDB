@@ -9,6 +9,21 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。实测数据与方案对�
 
 #### TDDB 阶段
 
+- **生成反应按电荷守恒记账（O_i⁻ 固定电荷），平均场加牛顿法**（ADR-048，ADR-046 方案 1；§6.2、§6.7）。
+  `DefectEnsemble` 加 `fixed_charge`（q_fix）与 `fixed_charge_offset`，缺陷净电荷 q·(Z − n) + q_fix；生成空位带与之重合的 O_i⁻
+  （q_fix = −e，`tddb._INTERSTITIAL_CHARGE`），出生时连同 O_i⁻ 带 −e。`KMCSimulation` 把固定电荷作为与组态无关的静电背景（多一次
+  泊松求解，重合的 q_fix 自作用整项扣除），R8 的 β 取 Z 加重合的 q_fix/q；`generation_rates` 的泊松源项与 `space_charge` 记录含 q_fix。
+  `solve_mean_field` 的 Anderson 混合 50 次内没收敛就改用牛顿法（有限差分 Jacobian + Broyden 更新 + 回溯线搜索，起点先热启动、
+  再 p̂(0)），`MeanFieldResult.newton_steps` / `TDDBResult.newton_steps` / CSV `mf_newton_steps`；CLI 摘要报告用了牛顿法的状态数。
+  **为什么**：生成反应每次丢掉一个 −e 是生成贴阴极、自加速的根因（ADR-046）；按电荷守恒记账的 what-if 里平均场 7–31% 的记录不收敛。
+  **不收敛的原因**：膜体内致密空位网络里分数占据的近距陷阱按平均场处理时，不动点映射有 1.17 的特征值，Anderson 游走；同一组空位
+  q_fix = 0 时也不收敛，与 O_i⁻ 无关。不动点良态，牛顿法收敛（`results/10.09/mf_convergence/`）。
+  **验证**：q_fix = 0 时 113 个数组与改动前逐位相同（`results/10.09/qfix0_bitwise/`）；what-if 里不收敛的 s2_n150、s2_n200、
+  seed 1 第 29 个空位现在收敛，后者 J = 6.48 A/cm²（what-if 的未收敛值 12.6 A/cm² 被当成了击穿，ADR-047 的 t = 15.4 s 作废）。
+  **测试**：新增重合 q_fix 等价于 Z + q_fix/q、离开缺陷的 q_fix 是独立点电荷、出生时总电荷正好多一个 −e、生成率泊松源项与引擎静电
+  一致（缺陷带 q_fix）、牛顿法接手收敛到同一不动点、what-if 不收敛状态（`tests/data/whatif_s1_n29.npz`）现在收敛；出生测试改为
+  "其余缺陷处的变化就是出生位置一个 −e 的贡献"。`pytest tests/ -v` 308 passed。
+
 - **击穿判据改为电流判据：J 超过 10 A/cm² 即击穿**（ADR-047；ADR-035 的 d_c 与限流、ADR-036 第 3、4 条 superseded）。
   删去渗流判据、`tddb.percolation_distance_nm`、`TDDBResult.percolation_size` 与 CSV 的 `percolation_size` 列；
   `compliance_current_density_A_cm2` 更名为 `breakdown_current_density_A_cm2`（`zro2_tddb.yaml` 取 10），电流密度超过它的

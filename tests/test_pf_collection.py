@@ -107,7 +107,8 @@ def _zaz_ensemble():
     m_di = np.full(4, 1.2 * M_E)
     return DefectEnsemble(
         positions=positions, ED=ED, r_D=localization_radius(ED, m_di),
-        charge_state=np.ones(4), m_di=m_di, eps_opt=np.full(4, 5.6),
+        charge_state=np.ones(4), fixed_charge=np.zeros(4), fixed_charge_offset=np.zeros((4, 3)),
+        m_di=m_di, eps_opt=np.full(4, 5.6),
         band_gap=np.full(4, 5.4 * EV), phonon_energy=np.full(4, 0.04 * EV),
         huang_rhys=np.ones(4), attempt_frequency=np.full(4, 1.0e13),
         band_reference=np.full(4, 1.74 * EV),

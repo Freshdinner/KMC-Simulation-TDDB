@@ -373,8 +373,9 @@ def _report_tddb(result: TDDBResult) -> None:
             )
         )
     typer.echo(
-        "  平均场：{}/{} 个状态收敛，最多 {} 次迭代".format(
-            int(result.converged.sum()), result.converged.size, int(result.iterations.max())
+        "  平均场：{}/{} 个状态收敛，最多求 F {} 次，{} 个状态改用牛顿法".format(
+            int(result.converged.sum()), result.converged.size, int(result.iterations.max()),
+            int(np.count_nonzero(result.newton_steps)),
         )
     )
     typer.echo(

@@ -7,11 +7,16 @@
   单陷阱条件通量在不动点处的值，不动点与独立写的简单阻尼迭代一致；
 - 收敛判据是占据的相对残差：占据只有 1e-10 量级、经快跃迁供给邻居的陷阱也要收敛到位；
 - 不动点与初值无关，从不动点热启动一次求值即收敛；未收敛时如实标出；
+- Anderson 混合走不动时牛顿法接手（ADR-048）：收敛到同一个不动点；ADR-046 what-if 里 Anderson 不收敛的状态
+  （膜体内致密的空位网络）现在收敛；
 - 按机制、按缺陷分解之和 = 总电流；无缺陷时只剩 R1；
 - 电流连续（ADR-038）：强耦合分量被切开的致密体系上，阴极净注入 = 阳极净收集；
 - 零偏压平衡（ADR-038）：逐陷阱平均场里每一对陷阱的正反向通量相等（KMC 的 −U_ab 口径做不到）；
   簇–孤立边界按簇内组态求速率，零偏压下没有净通量。
 """
+
+import os
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -22,7 +27,14 @@ from test_fast_traps import _three_trap_sim
 from test_master_equation import _two_trap_sim
 from kmc_leakage import mean_field
 from kmc_leakage.config import DeviceConfig, DielectricStack, ElectrodeMaterial
-from kmc_leakage.defects import DefectEnsemble
+from kmc_leakage.defects import (
+    DefectEnsemble,
+    append_defects,
+    generate_defects,
+    layer_bulk_defects,
+    localization_radius,
+)
+from kmc_leakage.io import load_config
 from kmc_leakage.kmc import (
     _B_R2A,
     _B_R2C,
@@ -188,15 +200,67 @@ def test_fixed_point_does_not_depend_on_initial_occupancy(clustered):
 
 
 def test_unconverged_result_is_flagged(clustered, monkeypatch):
-    """迭代次数用完仍未收敛：标 converged=False，电流与占据取最后一次求值处。"""
+    """Anderson 与牛顿法的步数都用完仍未收敛：标 converged=False，电流与占据取残差最小的那次求值处。
+    Anderson 2 次、牛顿法 0 步时求 F 4 次：Anderson 2 次、p̂(0) 1 次、从 p̂(0) 出发的起点 1 次。"""
     sim, reference = clustered
-    monkeypatch.setattr(mean_field, "_MAX_ITER", 2)
+    monkeypatch.setattr(mean_field, "_ANDERSON_MAX_ITER", 2)
+    monkeypatch.setattr(mean_field, "_NEWTON_MAX_STEPS", 0)
     result = solve_mean_field(sim)
-    assert result.iterations == 2
+    assert result.iterations == 4 and result.newton_steps == 0
     assert not result.converged and result.residual > mean_field._TOL
-    tat, pf, _ = mean_field_flux(sim, result.occupancy)
+    tat, pf, p_hat = mean_field_flux(sim, result.occupancy)
     assert np.array_equal(result.by_defect, (tat + pf) * Q)
+    gap = mean_field._log_occupancy(p_hat) - mean_field._log_occupancy(result.occupancy)
+    assert result.residual == pytest.approx(np.max(np.abs(gap)), abs=1e-12)
     assert result.current != reference.current
+
+
+def _whatif_state():
+    """ADR-046 what-if（O_i⁻ 与空位重合，seed 1、3.0 V，`zro2_tddb.yaml`）第 29 个空位出生后交给平均场的状态：
+    39 个缺陷（10 个初始、29 个生成空位带 q_fix = −e）与热启动占据（`tests/data/whatif_s1_n29.npz`，按 ADR-048 的
+    代码重放 what-if 轨迹得到，前 29 个出生位置与 what-if 相同）。"""
+    data = np.load(os.path.join(os.path.dirname(__file__), "data", "whatif_s1_n29.npz"))
+    config = load_config(os.path.join(os.path.dirname(__file__), "..", "examples", "zro2_tddb.yaml"))
+    config = replace(config, simulation=replace(
+        config.simulation, voltage=3.0, seed=1, temperature=float(data["temperature"])))
+    device, n_initial = config.device, int(data["n_initial"])
+    rng = np.random.default_rng(1)
+    initial = generate_defects(device, rng)
+    assert np.array_equal(initial.positions, data["positions"][:n_initial])
+    generated = layer_bulk_defects(device, 0, data["positions"][n_initial:], rng)
+    ED = data["ED"][n_initial:]
+    generated = replace(generated, ED=ED, r_D=localization_radius(ED, generated.m_di),
+                        fixed_charge=np.full(len(generated), -Q))
+    return KMCSimulation(config, defects=append_defects(initial, generated)), data["occupancy"]
+
+
+def test_state_that_defeated_anderson_converges_with_newton(monkeypatch):
+    """ADR-046 what-if 里平均场不收敛的状态：Anderson 混合 200 次仍不收敛（what-if 把这条记录的 12.6 A/cm² 当成了
+    击穿），牛顿法接手后收敛到 6.48 A/cm²（ADR-048）。"""
+    sim, start = _whatif_state()
+    with monkeypatch.context() as patch:
+        patch.setattr(mean_field, "_ANDERSON_MAX_ITER", 200)
+        patch.setattr(mean_field, "_NEWTON_MAX_STEPS", 0)
+        anderson = solve_mean_field(sim, start)
+    assert not anderson.converged and anderson.residual > 1e-2
+    result = solve_mean_field(sim, start)
+    assert result.converged and result.newton_steps > 0
+    assert result.current_density * 1e-4 == pytest.approx(6.4786, rel=1e-4)
+    tat, pf, p_hat = mean_field_flux(sim, result.occupancy)
+    assert np.allclose(p_hat, result.occupancy, rtol=1e-9, atol=0.0)
+
+
+def test_newton_takes_over_when_anderson_stops(clustered, monkeypatch):
+    """Anderson 只给 2 次时牛顿法接手（有限差分 Jacobian + Broyden 更新，ADR-048），收敛到同一个不动点；
+    Anderson 自己收敛时不走牛顿法。"""
+    sim, reference = clustered
+    assert reference.converged and reference.newton_steps == 0
+    monkeypatch.setattr(mean_field, "_ANDERSON_MAX_ITER", 2)
+    result = solve_mean_field(sim)
+    assert result.converged and result.newton_steps > 0
+    assert result.iterations > sim.n_defects  # 至少求过一次有限差分 Jacobian
+    assert result.occupancy == pytest.approx(reference.occupancy, rel=1e-8, abs=1e-14)
+    assert result.current == pytest.approx(reference.current, rel=1e-8)
 
 
 def test_decompositions_sum_to_total_current(clustered):

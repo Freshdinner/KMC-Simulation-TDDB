@@ -1,0 +1,1 @@
+solve_mean_field: converged=True it=1006 res=1.712e-11 J=4.1955e+01 A/cm2

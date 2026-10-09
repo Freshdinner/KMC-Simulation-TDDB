@@ -16,7 +16,7 @@
    温度 T(t)（§6.6）。输运与热不迭代自洽，每步只走一遍"输运 → 功率 → 温度"（§8.4），
    所以第 k 条记录的电流是在第 k−1 条记录的功率给出的温度下求的；温度随生成一步步爬升，
    这一步的滞后可以忽略。没有 k_TH 时温度固定为环境值（Phase 3 的等温口径）。
-3. **生成率表**（§6.1 模型 C）：各缺陷净电荷 q·(Z − p) 与外加偏压一起解一次泊松方程。式 T4 的
+3. **生成率表**（§6.1 模型 C）：各缺陷净电荷 q·(Z − p) + q_fix 与外加偏压一起解一次泊松方程。式 T4 的
    R_1e 按电子来源分成两类事件（ADR-042）：
    - **电极项**（两侧电极 R2 + R4）：对虚拟前驱求值、乘断键概率 P_bb（式 T2），在单元内离已有缺陷
      ≥ min_separation 的可放置区域上积分，G_cell = N_T·∫ R_1e,电极·P_bb d³x（式 T1，`ElectrodeCaptureGeneration`，
@@ -30,15 +30,16 @@
 5. **抽事件**：Δt = −ln(r)/ΣG，在单元事件与源陷阱事件里按速率选一条。选中单元时按单元内的被积函数
    落点，选中源陷阱时按它周围的被积函数落点，位置连续；与已有缺陷的距离小于 min_separation 就重抽
    （§6.1、§6.8）。
-6. **出生**：新空位与初始缺陷同一物种（能级按缺陷预设的分布抽样，S、m_di 取预设），出生时
-   被前驱俘获的那个电子占据，电荷态为 0（中性）；电子发射后空位才带 +1（施主约定，代码里
-   `charge_state` = +1 是电子离开后的电荷，§6.7、ADR-035）。所以它出生这一刻不改变其余缺陷
-   处的电势与电场。静电耦合增量扩一行一列（§6.4），回到 1。
+6. **出生**：新空位与初始缺陷同一物种（能级按缺陷预设的分布抽样，S、m_di 取预设），出生占据 1，
+   施主约定 `charge_state` = +1（§6.7、ADR-035）。生成反应"前驱 + e⁻ → V_O + O_i⁻"按电荷守恒记账
+   （ADR-048）：前驱俘获的那个电子的电荷留在 O 间隙离子上，O_i⁻ 作为新空位的固定电荷
+   q_fix = −e，与空位重合放置（`DefectEnsemble.fixed_charge_offset` = 0）。新空位与 O_i⁻ 合起来出生时
+   带 −e，就是被俘获的那个电子；空位放出电子后合起来为中性。静电耦合增量扩一行一列（§6.4），回到 1。
 
 未击穿时按生成空位数上限或应力时间上限停止。
 
-**电荷记账**：新空位出生时带的那个电子来自前驱俘获，不经过电极，不计入输运电流（§6.7）。
-平均场没有时间推进，每条记录的电流就是该缺陷集合下的稳态电流。
+**电荷记账**：新空位出生时带的那个电子来自前驱俘获，不计入输运电流（§6.7）；它的电荷随新空位与
+O_i⁻ 一起留在介质里。平均场没有时间推进，每条记录的电流就是该缺陷集合下的稳态电流。
 """
 
 import csv
@@ -93,6 +94,8 @@ from .thermal import heat_release, power_map, solve_temperature, transport_tempe
 # 前驱俘获 R4 的声子项数：E_rel1 = 1.0 eV（E_rel1/ℏω₀ = 25）时 80 项最大相对误差 1e-4、
 # 100 项到机器精度（ADR-030）
 _PRECURSOR_N_PHONON = 100
+# 生成反应里 O 间隙离子带的电荷：前驱俘获的那个电子（ADR-048）。作为新空位的固定电荷 q_fix，与空位重合
+_INTERSTITIAL_CHARGE = -constants.elementary_charge
 # 论文的致密团簇标志"25 个空位、间距 ≤ 6 Å"（§6.3）：只记录最大团簇的大小与首次达到的时刻，
 # 不作击穿判据（那是针对 ~2.7 nm 膜定的）
 _DENSE_CLUSTER_DISTANCE = 0.6 * constants.nano
@@ -984,8 +987,8 @@ def generation_rates(
     """O 空位生成事件表（式 T1，§6.1 模型 C）：R_1e 按电子来源分成电极项与陷阱项两类事件。
 
     `inner` 提供当前缺陷集合、工作点与泊松求解器，`occupancy` 是各缺陷的平均场占据 p。
-    每个缺陷的净电荷 q·(Z − p) 与外加偏压一起解一次泊松方程（与引擎用耦合矩阵线性叠加的
-    结果相同），两类事件都在这份电势上求值：
+    每个缺陷随占据变的电荷 q·(Z − p)（放在缺陷处）与固定电荷 q_fix（放在固定电荷处）和外加偏压
+    一起解一次泊松方程（与引擎用耦合矩阵线性叠加的结果相同），两类事件都在这份电势上求值：
 
     - **单元事件**：R_1e,电极 = Σ_两侧电极 (R2 + R4)（式 T4）乘 P_bb，在单元内的可放置区域上积分
       （`ElectrodeCaptureGeneration`，ADR-044），与生成网格无关；
@@ -1001,7 +1004,10 @@ def generation_rates(
     的值；R_1e 的声子线型、电极费米分布、陷阱项的 MA 因子与 P_bb 都按局域温度求值。缺省用内层的工作点温度。
     """
     solver, defects = inner.solver, inner.defects
-    rho = solver.deposit(defects.positions, constants.elementary_charge * (defects.charge_state - occupancy))
+    rho = solver.deposit(
+        np.concatenate([defects.positions, defects.fixed_charge_positions]),
+        np.concatenate([constants.elementary_charge * (defects.charge_state - occupancy), defects.fixed_charge]),
+    )
     phi = solver.solve(rho, top_boundary_potential(inner.device, inner.sim.voltage))
     bond_field = solver.gaussian_average(np.stack(solver.electric_field(phi), axis=-1), tddb.field_averaging_width)
     return GenerationTable(
@@ -1092,9 +1098,10 @@ class TDDBResult:
     by_mechanism: Dict[str, np.ndarray]  # 各机制 (K,) [A]，四项之和 = current
     generation_rate: np.ndarray  # (K,) 这一状态下的总生成速率 ΣG [1/s]：单元事件 + 源陷阱事件（已满的不计）
     n_defects: np.ndarray  # (K,) 缺陷总数（初始 + 生成）
-    space_charge: np.ndarray  # (K,) 全部缺陷的净电荷 q·Σ(Z − p) [C]（§8.6）
+    space_charge: np.ndarray  # (K,) 全部缺陷的净电荷 Σ[q·(Z − p) + q_fix] [C]（§8.6）
     empty_generated: np.ndarray  # (K,) 生成的空位里处于空态的期望个数 Σ(1 − p)（§8.6）
     iterations: np.ndarray  # (K,) 平均场求 F 的次数
+    newton_steps: np.ndarray  # (K,) 平均场牛顿法的步数（0 = Anderson 混合已收敛，ADR-048）
     residual: np.ndarray  # (K,) 平均场的相对残差
     converged: np.ndarray  # (K,) 平均场是否收敛（未收敛的记录不能当稳态电流交付）
     n_clusters: np.ndarray  # (K,) 强耦合簇个数
@@ -1208,9 +1215,11 @@ def run_tddb(
                 by_mechanism=mf.by_mechanism,
                 generation_rate=float(rates.sum()),
                 n_defects=len(defects),
-                space_charge=constants.elementary_charge * float(np.sum(defects.charge_state - occupancy)),
+                space_charge=constants.elementary_charge * float(np.sum(defects.charge_state - occupancy))
+                + float(np.sum(defects.fixed_charge)),
                 empty_generated=float(np.sum(1.0 - occupancy[n_initial:])),
                 iterations=mf.iterations,
+                newton_steps=mf.newton_steps,
                 residual=mf.residual,
                 converged=mf.converged,
                 n_clusters=n_clusters,
@@ -1242,10 +1251,11 @@ def run_tddb(
             end_time, stop_reason = tddb.stop_time, "stop_time"
             break
         time += dt
-        defects = append_defects(defects, layer_bulk_defects(device, 0, position, rng))
+        vacancy = layer_bulk_defects(device, 0, position, rng)
+        defects = append_defects(defects, replace(vacancy, fixed_charge=np.full(1, _INTERSTITIAL_CHARGE)))
         coupling = coupling.extended(position)
         full = np.append(full, False)
-        occupancy = np.append(occupancy, 1.0)  # §6.7：出生即被一个电子占据，电荷态为 0
+        occupancy = np.append(occupancy, 1.0)  # §6.7：出生即被一个电子占据；连同 O_i⁻ 带 −e
         birth_time = np.append(birth_time, time)
         transport = effective
 
@@ -1267,6 +1277,7 @@ def run_tddb(
         space_charge=column("space_charge"),
         empty_generated=column("empty_generated"),
         iterations=column("iterations", int),
+        newton_steps=column("newton_steps", int),
         residual=column("residual"),
         converged=column("converged", bool),
         n_clusters=column("n_clusters", int),
@@ -1352,7 +1363,7 @@ def write_tddb_csv(result: TDDBResult, path: str) -> None:
             + ["J_{}_A_cm2".format(name) for name in MECHANISMS]
             + [
                 "generation_rate_s", "space_charge_C", "empty_generated",
-                "mf_iterations", "mf_residual", "mf_converged",
+                "mf_iterations", "mf_newton_steps", "mf_residual", "mf_converged",
                 "n_clusters", "max_cluster_size", "largest_component", "n_split",
                 "power_W", "T_transport_K", "T_effective_K", "T_peak_K",
                 "dense_cluster_size",
@@ -1368,6 +1379,7 @@ def write_tddb_csv(result: TDDBResult, path: str) -> None:
                     "{:.6e}".format(result.space_charge[k]),
                     "{:.6g}".format(result.empty_generated[k]),
                     str(int(result.iterations[k])),
+                    str(int(result.newton_steps[k])),
                     "{:.3e}".format(result.residual[k]),
                     str(int(result.converged[k])),
                     str(int(result.n_clusters[k])),

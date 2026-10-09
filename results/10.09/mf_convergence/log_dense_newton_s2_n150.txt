@@ -1,0 +1,1 @@
+newton 0 max|g| 8.249e-01 |g|2 1.578e+00 wall 0

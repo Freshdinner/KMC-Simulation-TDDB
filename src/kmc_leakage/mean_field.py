@@ -38,16 +38,25 @@ TDDB 外层每生成一个空位都要重求一次输运稳态，KMC 当主路�
 净电流同量级。绝对残差判据会在 p=0 处提前停下、把这条通路整个漏掉；相对判据要求每个
 陷阱的占据都收敛到相对精度。p 接近 1 时 ln p ≈ −(1−p)，相对判据退化为绝对判据。
 
-不动点用 Anderson 混合（type II，保留最近 `_HISTORY` 步）求解：静电反馈让简单阻尼迭代
+不动点先用 Anderson 混合（type II，保留最近 `_HISTORY` 步）求解：静电反馈让简单阻尼迭代
 收敛慢，Anderson 混合用历史残差的最小二乘组合外推下一步（§6.2）。初值可以含 0（全空、
 ln 空间放不下），所以第一步直接取 p̂(p₀)，之后在 ln p 上混合，ln p 截在 ≤ 0（p ≤ 1）。
 外层热启动时把上一步的占据作初值传入，新生空位的初值取 1（§6.7）。
+
+**Anderson 在 `_ANDERSON_MAX_ITER` 次内没收敛就改用牛顿法**（`_newton`，ADR-048）。膜体内致密的空位网络里，
+相距 0.5–1 nm、分数占据的陷阱之间既有快跃迁供给、又有几个 k_BT 的库仑排斥，簇大小上限把它们切开后按平均场
+处理，不动点映射 F 的 Jacobian 有大于 1 的特征值（实测 1.17），而且 ln p 在迭代之间成 O(1) 地变，Anderson
+用 5 步历史拟合的割线模型跟不上，在不动点附近来回游走。不动点本身良态（G = ln F − ln p 的 Jacobian 最小
+特征值模 0.15），牛顿法按完整 Jacobian 走，不稳定方向也能一步解掉。Jacobian 用有限差分（每列一次 F），之后
+各步做 Broyden 秩一更新；沿牛顿方向回溯线搜索，‖G‖₂ 下降才接受。起点先取传入的初值，停住了（重求 Jacobian
+后线搜索仍不下降）再从 p̂(0)（全空环境下的条件占据）重来：Anderson 游走过的迭代值上 ‖G‖₂ 有不为 0 的局部
+极小，从那里出发的牛顿法会停在极小处。
 
 KMC 的快陷阱（ADR-023）只改变时间推进，平均场没有时间推进，不用它（§6.9 第 4 条）。
 """
 
 from dataclasses import dataclass, replace
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 import numpy as np
 from scipy import constants
@@ -70,8 +79,15 @@ from .rates import miller_abrahams_factor
 
 # 收敛判据：占据的相对残差 max|ln p̂ − ln p| ≤ _TOL
 _TOL = 1e-10
-_MAX_ITER = 200
+# Anderson 混合的迭代上限，没收敛就改用牛顿法。ADR-046 的参考轨迹（约 2800 条记录）最多用 28 次
+_ANDERSON_MAX_ITER = 50
 _HISTORY = 5  # Anderson 混合保留的历史步数
+# 牛顿法（ADR-048）：每个起点的步数上限、有限差分 Jacobian 的求值次数上限（起点一次，Broyden 更新后的 Jacobian
+# 走不动时重求一次）、ln p 上的差分步长、回溯线搜索的最小步长比例
+_NEWTON_MAX_STEPS = 100
+_NEWTON_JACOBIANS = 2
+_JACOBIAN_STEP = 1e-7
+_MIN_STEP_FRACTION = 2.0 ** -10
 # ln p 的下限：p̂ 下溢成 0 时取最小正规格化浮点数，ln 空间里仍是有限值
 _LOG_FLOOR = float(np.log(np.finfo(float).tiny))
 
@@ -88,10 +104,12 @@ class MeanFieldResult:
     by_mechanism: Dict[str, float]  # 各机制电流 [A]，四项之和 = current
     by_defect: np.ndarray  # 各缺陷电流贡献 [A]，之和 + R1 两项 = current
     occupancy: np.ndarray  # 不动点占据 p*（强耦合簇成员是簇内稳态下的占据期望）
-    # 求 F 的次数（含最后一次确认收敛的求值）；电流与占据都取最后一次求值处
+    # 求 F 的次数（含最后一次确认收敛的求值；牛顿法的有限差分 Jacobian 与线搜索都算在内）。电流与占据取残差
+    # 最小的那次求值处，收敛时就是最后一次
     iterations: int
-    residual: float  # 最后一次求值的相对残差 max|ln p̂ − ln p|
+    residual: float  # 那次求值的相对残差 max|ln p̂ − ln p|
     converged: bool  # residual ≤ _TOL；未收敛的结果不得当稳态电流交付
+    newton_steps: int = 0  # 牛顿法走的步数；0 表示 Anderson 混合已经收敛
 
 
 def _log_occupancy(p: np.ndarray) -> np.ndarray:
@@ -248,20 +266,99 @@ def mean_field_flux(
     return tat, pf, p_hat
 
 
+class _Iterate(NamedTuple):
+    """不动点迭代里的一次求值：x = ln p 处的残差 G(x) = ln p̂ − x 与阳极净通量 (TAT, PF)。"""
+
+    x: np.ndarray
+    gap: np.ndarray
+    tat: np.ndarray
+    pf: np.ndarray
+
+    @property
+    def residual(self) -> float:
+        return float(np.max(np.abs(self.gap))) if self.gap.size else 0.0
+
+
+def _evaluate(sim: KMCSimulation, x: np.ndarray) -> _Iterate:
+    tat, pf, p_hat = mean_field_flux(sim, np.exp(x))
+    return _Iterate(x, _log_occupancy(p_hat) - x, tat, pf)
+
+
+def _jacobian(sim: KMCSimulation, current: _Iterate) -> np.ndarray:
+    """∂G/∂x 的有限差分（每列一次 F）；差分向 x 减小的方向取，p 不越过 1。"""
+    n = sim.n_defects
+    jacobian = np.empty((n, n))
+    for j in range(n):
+        shifted = current.x.copy()
+        shifted[j] -= _JACOBIAN_STEP
+        jacobian[:, j] = (_evaluate(sim, shifted).gap - current.gap) / -_JACOBIAN_STEP
+    return jacobian
+
+
+def _newton(sim: KMCSimulation, starts: List[np.ndarray]) -> Tuple[_Iterate, int, int]:
+    """牛顿法求 G(x) = 0（x = ln p ≤ 0），依次从 `starts` 出发，返回 (残差最小的求值, 求 F 的次数, 牛顿步数)。
+
+    每个起点先求有限差分 Jacobian，之后每步做 Broyden 秩一更新 J ← J + (Δg − J·Δx)·Δxᵀ/(Δx·Δx)。牛顿方向上
+    回溯线搜索：‖G‖₂ 按 Armijo 条件下降才接受；步长比例降到 `_MIN_STEP_FRACTION` 仍不下降就重求 Jacobian。
+    刚求的 Jacobian 也走不动、Jacobian 已求满 `_NEWTON_JACOBIANS` 次，或步数用满，就换下一个起点。
+    """
+    evaluations = steps = 0
+    best: Optional[_Iterate] = None
+    for start in starts:
+        current = _evaluate(sim, start)
+        evaluations += 1
+        if best is None or current.residual < best.residual:
+            best = current
+        jacobian, jacobians, fresh = None, 0, False
+        for _ in range(_NEWTON_MAX_STEPS):
+            if current.residual <= _TOL:
+                return current, evaluations, steps
+            if jacobian is None:
+                if jacobians == _NEWTON_JACOBIANS:
+                    break
+                jacobian = _jacobian(sim, current)
+                evaluations += sim.n_defects
+                jacobians += 1
+                fresh = True
+            direction = np.linalg.solve(jacobian, -current.gap)
+            norm = np.linalg.norm(current.gap)
+            accepted, fraction = None, 1.0
+            while fraction >= _MIN_STEP_FRACTION:
+                trial = _evaluate(sim, np.clip(current.x + fraction * direction, _LOG_FLOOR, 0.0))
+                evaluations += 1
+                if np.linalg.norm(trial.gap) <= (1.0 - 1e-4 * fraction) * norm:
+                    accepted = trial
+                    break
+                fraction *= 0.5
+            if accepted is None:
+                if fresh:
+                    break
+                jacobian = None
+                continue
+            dx, dg = accepted.x - current.x, accepted.gap - current.gap
+            jacobian += np.outer(dg - jacobian @ dx, dx) / (dx @ dx)
+            current, fresh = accepted, False
+            steps += 1
+            if current.residual < best.residual:
+                best = current
+    return best, evaluations, steps
+
+
 def solve_mean_field(
     sim: KMCSimulation, occupancy: Optional[np.ndarray] = None
 ) -> MeanFieldResult:
     """在 `sim` 的缺陷实现与工作点上求簇级平均场不动点。
 
     `sim` 提供速率、近邻表与强耦合簇（工作点初始化时已分好）。`occupancy` 是占据初值，
-    缺省为全空；热启动时传上一步的不动点占据。返回的电流在最后一次求值的 p 处给出，
-    分解口径与 `KMCSimulation.run` 相同。
+    缺省为全空；热启动时传上一步的不动点占据。先用 Anderson 混合，`_ANDERSON_MAX_ITER` 次内没收敛
+    就改用牛顿法（模块文档），起点依次是初值与 p̂(0)。返回的电流在残差最小的那次求值处给出（收敛时
+    就是最后一次），分解口径与 `KMCSimulation.run` 相同。
     """
     n = sim.n_defects
     p = np.zeros(n) if occupancy is None else np.clip(np.asarray(occupancy, dtype=float), 0.0, 1.0)
     x_history: List[np.ndarray] = []
     g_history: List[np.ndarray] = []
-    for iterations in range(1, _MAX_ITER + 1):
+    for iterations in range(1, _ANDERSON_MAX_ITER + 1):
         tat, pf, p_hat = mean_field_flux(sim, p)
         x_hat = _log_occupancy(p_hat)
         if iterations == 1:
@@ -274,7 +371,7 @@ def solve_mean_field(
         else:
             g = x_hat - x
             residual = float(np.max(np.abs(g)))
-            if residual <= _TOL or iterations == _MAX_ITER:
+            if residual <= _TOL or iterations == _ANDERSON_MAX_ITER:
                 break
             x_history.append(x)
             g_history.append(g)
@@ -290,6 +387,16 @@ def solve_mean_field(
                 step = step - (dx + dg) @ gamma
             x = np.clip(step, _LOG_FLOOR, 0.0)
         p = np.exp(x)
+
+    newton_steps = 0
+    if residual > _TOL:
+        # Anderson 没收敛：改用牛顿法，起点依次是传入的初值与 p̂(0)
+        starts = [] if occupancy is None else [_log_occupancy(np.clip(np.asarray(occupancy, dtype=float), 0.0, 1.0))]
+        starts.append(_log_occupancy(mean_field_flux(sim, np.zeros(n))[2]))
+        best, evaluations, newton_steps = _newton(sim, starts)
+        iterations += 1 + evaluations
+        if best.residual < residual:
+            p, tat, pf, residual = np.exp(best.x), best.tat, best.pf, best.residual
 
     q = constants.elementary_charge
     r1_tunnel, r1_thermionic = sim._r1_current
@@ -312,4 +419,5 @@ def solve_mean_field(
         iterations=iterations,
         residual=residual,
         converged=residual <= _TOL,
+        newton_steps=newton_steps,
     )

@@ -6,8 +6,9 @@
 
 1. **静电求解的线性叠加。** 泊松方程是线性的，缺陷位置在一次实现里固定
    不变，因此初始化时解 N+1 次泊松方程（外加偏压 1 次 + 每个缺陷单位电荷
-   各 1 次），之后任一占据组态的电势/电场都由这些解按占据数线性叠加得到，
-   主循环里不再需要解泊松方程。这既精确又把每步开销降到矩阵-向量乘。
+   各 1 次；有固定电荷 q_fix 时再加 1 次，它们与组态无关），之后任一占据组态的
+   电势/电场都由这些解按占据数线性叠加得到，主循环里不再需要解泊松方程。
+   这既精确又把每步开销降到矩阵-向量乘。
    缺陷 i 自身电荷在 i 处的贡献（CIC 自作用）就是这些矩阵的对角元，按
    项目"不考虑镜像力"的约定整项扣除。
 
@@ -523,6 +524,10 @@ class KMCSimulation:
             phi_applied, positions, self.defects.field_side
         )
         self._phi_bar_applied = self.solver.lateral_average(phi_applied)
+        # 固定电荷（TDDB 生成空位带的 O_i⁻，ADR-048）不随占据变，与外加偏压一起作为每个组态共用的静电背景
+        self._phi_fixed_at, self._field_fixed_at, self._phi_bar_fixed = self._fixed_charge_background()
+        # R8 的 β 取电子发射后缺陷所在位置留下的电荷（以 e 为单位）：Z 加上与缺陷重合的固定电荷
+        self._emission_charge = defects.charge_state + defects.colocated_fixed_charge / constants.elementary_charge
 
         # 电极侧能量参考（全局零点 = 阴极费米能级）
         self._fermi_cathode = 0.0
@@ -599,6 +604,24 @@ class KMCSimulation:
             self._clusters = self._build_clusters(blocks, hop)
         # 快↔快跃迁不进事件表（两端都用 p̂，交换不改变任何慢变量）
         self._hop_event_mask = (~(self._fast[self._pairs.a] & self._fast[self._pairs.b])).astype(float)
+
+    def _fixed_charge_background(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """全部固定电荷在各缺陷处的电势 (N,) 与电场矢量 (3, N)，以及横向平均电势剖面，一次泊松求解。
+
+        与缺陷重合的固定电荷是该缺陷净电荷 q·(Z − n) + q_fix 的一部分，它在本缺陷处的贡献（耦合矩阵对角元
+        那一项）与缺陷自身的电荷一样整项扣除；离开缺陷位置的固定电荷是另一个点电荷，对本缺陷照常计入。
+        横向平均剖面不扣自身项，与 `_electrostatics` 的口径相同。没有固定电荷时全为 0。
+        """
+        defects, solver = self.defects, self.solver
+        n = self.n_defects
+        if not np.any(defects.fixed_charge != 0.0):
+            return np.zeros(n), np.zeros((3, n)), np.zeros(solver.nz + 1)
+        phi = solver.solve(solver.deposit(defects.fixed_charge_positions, defects.fixed_charge), 0.0)
+        # 耦合矩阵按一个电子（−q）预计算：重合的 q_fix 折合成 −q_fix/q 个电子
+        own = -defects.colocated_fixed_charge / constants.elementary_charge
+        phi_at = solver.interpolate(phi, defects.positions) - own * self.coupling.phi_self
+        field_at = solver.field_vectors_at(phi, defects.positions, defects.field_side) - own * self.coupling.field_self
+        return phi_at, field_at, solver.lateral_average(phi)
 
     @property
     def cluster_members(self) -> List[np.ndarray]:
@@ -763,23 +786,26 @@ class KMCSimulation:
     def _electrostatics(self, occ: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """返回 (缺陷处电势, 缺陷处电场大小, 横向平均电势剖面)。
 
-        每个缺陷的净电荷是 q·(Z_i − n_i)：空施主带 +Z·q，俘获一个电子后中性。
-        耦合矩阵按一个电子的负电荷 −q 预计算，所以组态叠加权重取 n_i − Z_i
-        （见 ADR-021 F01）；局部电势、电场与自作用扣除三处用同一权重。缺陷自身
-        电荷的贡献（对角元）按此权重整项扣除。
+        每个缺陷的净电荷是 q·(Z_i − n_i) + q_fix,i：空施主带 +Z·q，俘获一个电子后少一个 q，
+        固定电荷 q_fix 不随占据变。随占据变的部分：耦合矩阵按一个电子的负电荷 −q 预计算，
+        所以组态叠加权重取 n_i − Z_i（见 ADR-021 F01）；局部电势、电场与自作用扣除三处用
+        同一权重，缺陷自身电荷的贡献（对角元）按此权重整项扣除。固定电荷的贡献是与组态
+        无关的背景（`_fixed_charge_background`），与外加偏压的解一起加上。
         """
         weight = occ.astype(float) - self.defects.charge_state
         phi = (
             self._phi_applied_at
+            + self._phi_fixed_at
             + weight @ self.coupling.phi_matrix
             - weight * self.coupling.phi_self
         )
         field = (
             self._field_applied_at
+            + self._field_fixed_at
             + weight @ self.coupling.field_matrix
             - weight * self.coupling.field_self
         )
-        phi_bar = self._phi_bar_applied + weight @ self.coupling.phi_bar
+        phi_bar = self._phi_bar_applied + self._phi_bar_fixed + weight @ self.coupling.phi_bar
         return phi, np.linalg.norm(field, axis=0), phi_bar
 
     def _electrostatics_batch(
@@ -792,13 +818,14 @@ class KMCSimulation:
         """
         coupling = self.coupling
         weight = occ_states.astype(float) - self.defects.charge_state
-        phi = self._phi_applied_at + weight @ coupling.phi_matrix - weight * coupling.phi_self
+        phi = self._phi_applied_at + self._phi_fixed_at + weight @ coupling.phi_matrix - weight * coupling.phi_self
         field = (
             self._field_applied_at[:, None, :]
+            + self._field_fixed_at[:, None, :]
             + np.matmul(weight, coupling.field_matrix)
             - weight[None, :, :] * coupling.field_self[:, None, :]
         )
-        phi_bar = self._phi_bar_applied + weight @ coupling.phi_bar
+        phi_bar = self._phi_bar_applied + self._phi_bar_fixed + weight @ coupling.phi_bar
         return phi, np.linalg.norm(field, axis=0), phi_bar
 
     def _path_barriers(self, band: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -891,12 +918,13 @@ class KMCSimulation:
         # --- R8：PF 热发射（折进 F03 收集概率 → R8_eff = P_A·R8） ---
         # 被阻挡层挡回原陷阱的分支是 KMC 空事件（状态不变），不单列——直接把 R8 换成
         # R8_eff 进事件表与 _conditional_flux（ADR-009/021 F03）。field 沿用 Phase 3
-        # 的界面单侧场（ADR-017 §2），R8_eff 不另取场。
+        # 的界面单侧场（ADR-017 §2），R8_eff 不另取场。β 的电荷取发射后缺陷处留下的电荷
+        # （Z 加上重合的固定电荷，`_emission_charge`）。
         blocks[_B_R8] = pick(self._pf_collection) * r8_pf_emission(
             pick(defects.attempt_frequency),
             ED,
             field,
-            pick(defects.charge_state),
+            pick(self._emission_charge),
             pick(defects.eps_opt),
             sim.temperature,
         )

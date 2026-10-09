@@ -1,0 +1,34 @@
+start empty
+  step  0 max|g| 4.439e+01 evals 161 fresh 1
+  step  1 max|g| 1.123e+01 evals 162 fresh 0
+  step  2 max|g| 1.053e+01 evals 163 fresh 0
+  step  3 max|g| 1.391e+01 evals 164 fresh 0
+  step  4 max|g| 6.405e+00 evals 165 fresh 0
+  step  5 max|g| 4.173e+00 evals 166 fresh 0
+  step  6 max|g| 2.341e+00 evals 167 fresh 0
+  step  7 max|g| 1.724e+00 evals 168 fresh 0
+  step  8 max|g| 9.236e-01 evals 169 fresh 0
+  step  9 max|g| 7.438e-01 evals 170 fresh 0
+  step 10 max|g| 8.615e-01 evals 171 fresh 0
+  step 11 max|g| 7.269e-01 evals 173 fresh 0
+  step 12 max|g| 6.943e-01 evals 174 fresh 0
+  step 13 max|g| 6.207e-01 evals 175 fresh 0
+  step 14 max|g| 5.008e-01 evals 176 fresh 0
+  step 15 max|g| 1.310e-01 evals 177 fresh 0
+  step 16 max|g| 1.682e-01 evals 180 fresh 0
+  step 17 max|g| 1.022e-01 evals 183 fresh 0
+  step 18 max|g| 1.342e-01 evals 184 fresh 0
+  step 19 max|g| 4.834e-02 evals 185 fresh 0
+  step 20 max|g| 3.196e-02 evals 186 fresh 0
+  step 21 max|g| 2.715e-02 evals 189 fresh 0
+  step 22 max|g| 2.764e-02 evals 192 fresh 0
+  step 23 max|g| 2.764e-02 evals 194 fresh 0
+  step 24 max|g| 1.926e-02 evals 195 fresh 0
+  step 25 max|g| 1.926e-02 evals 366 fresh 1
+  step 26 max|g| 2.562e-03 evals 367 fresh 0
+  step 27 max|g| 2.266e-04 evals 368 fresh 0
+  step 28 max|g| 6.088e-06 evals 369 fresh 0
+  step 29 max|g| 1.251e-07 evals 370 fresh 0
+  step 30 max|g| 3.243e-09 evals 371 fresh 0
+  step 31 max|g| 5.908e-11 evals 372 fresh 0
+start empty converged True evals 372 wall 201

@@ -7,11 +7,15 @@
 - **F02**：陷阱间跃迁 R7 的 MA 能量因子要用完整事件能量差
   ΔH_{a→b}=(E_b−E_a)−U_ab（U_ab=q²·G_ab 是两处电子的库仑互作用能），而不是
   跳跃前组态里的单点能级差。正反向速率因此满足细致平衡。
+- **固定电荷 q_fix**（ADR-048，TDDB 生成空位带的 O_i⁻）：净电荷 q·(Z_i−n_i) + q_fix,i。与缺陷重合的
+  q_fix 是该缺陷净电荷的一部分（等价于把 Z 换成 Z + q_fix/q）；离开缺陷位置的 q_fix 是独立的点电荷。
 
 数值锚点取自 docs/reviews/zaz-stack-review-2026-09-15.md（同一套静电接口的独立
 复核）：50×50×9 nm、32×32×36 网格、300 K、零偏压、陷阱在 (25,25,4) 与
 (25,25,5) nm 时 U_ab = 0.03476324 eV，F02 修好后正反比 = 0.5105069。
 """
+
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -141,6 +145,59 @@ def test_net_charge_weight_reaches_field_and_band_profile():
     assert np.array_equal(phi_bar, bar_expected)
     # 空施主真的在近旁产生了非零场（否则等于没进源项）
     assert field_mag[0] > 0.0
+
+
+# --------------------------------------------------------------------------
+# 固定电荷 q_fix（ADR-048）：净电荷 q·(Z−n) + q_fix
+# --------------------------------------------------------------------------
+_OCCUPATIONS = [np.array(occ) for occ in ([False, False], [True, False], [False, True], [True, True])]
+
+
+def _field_vectors(sim, occ):
+    """`_electrostatics` 里的场矢量 (3, N)（它只返回大小）。"""
+    weight = occ.astype(float) - sim.defects.charge_state
+    return (
+        sim._field_applied_at + sim._field_fixed_at
+        + weight @ sim.coupling.field_matrix - weight * sim.coupling.field_self
+    )
+
+
+def test_colocated_fixed_charge_is_part_of_the_defect_net_charge():
+    """与缺陷重合的 q_fix 是该缺陷净电荷 q·(Z−n) + q_fix 的一部分：Z = 1、q_fix = −e 的缺陷与 Z = 0、q_fix = 0
+    的缺陷在每个组态下给出相同的电势、电场、横向平均剖面与全部速率（自作用整项扣除，R8 的 β 取 Z + q_fix/q = 0），
+    只差固定电荷那一次泊松求解的舍入误差。"""
+    base = _two_trap_sim(1.15, 1.10, voltage=2.0)
+    fixed = KMCSimulation(base.config, defects=replace(base.defects, fixed_charge=np.array([-Q, 0.0])))
+    shifted = KMCSimulation(base.config, defects=replace(base.defects, charge_state=np.array([0.0, 1.0])))
+    assert fixed._emission_charge.tolist() == [0.0, 1.0]
+    for occ in _OCCUPATIONS:
+        for a, b in zip(fixed._electrostatics(occ), shifted._electrostatics(occ)):
+            np.testing.assert_allclose(a, b, rtol=1e-12, atol=1e-15)
+        blocks_a, hop_a = fixed._rates(occ)
+        blocks_b, hop_b = shifted._rates(occ)
+        np.testing.assert_allclose(blocks_a, blocks_b, rtol=1e-9)
+        np.testing.assert_allclose(hop_a, hop_b, rtol=1e-9)
+    # 固定电荷确实进了静电：两种组态记账都不同于不带 q_fix 的原缺陷
+    assert not np.allclose(fixed._electrostatics(_OCCUPATIONS[0])[0], base._electrostatics(_OCCUPATIONS[0])[0])
+
+
+def test_displaced_fixed_charge_is_an_independent_point_charge():
+    """离开缺陷位置的 q_fix 是另一个点电荷：它对每个缺陷（包括它所属的缺陷）的电势与场就是它单独的泊松解在缺陷处
+    的读数，横向平均剖面同样；R8 的 β 仍取 Z（发射后缺陷处只留下 +Z·q）。"""
+    base = _two_trap_sim(1.15, 1.10, voltage=2.0)
+    offset = np.array([[0.3e-9, 0.0, 0.6e-9], [0.0, 0.0, 0.0]])
+    defects = replace(base.defects, fixed_charge=np.array([-Q, 0.0]), fixed_charge_offset=offset)
+    sim = KMCSimulation(base.config, defects=defects)
+    assert sim._emission_charge.tolist() == [1.0, 1.0]
+    solver = sim.solver
+    point = solver.solve(solver.deposit(defects.positions[:1] + offset[:1], np.array([-Q])), 0.0)
+    for occ in _OCCUPATIONS:
+        phi, field, bar = sim._electrostatics(occ)
+        phi0, _, bar0 = base._electrostatics(occ)
+        np.testing.assert_allclose(phi, phi0 + solver.interpolate(point, defects.positions), rtol=1e-12)
+        np.testing.assert_allclose(bar, bar0 + solver.lateral_average(point), rtol=1e-12, atol=1e-15)
+        expected = _field_vectors(base, occ) + solver.field_vectors_at(point, defects.positions, defects.field_side)
+        np.testing.assert_allclose(field, np.linalg.norm(expected, axis=0), rtol=1e-12)
 
 
 # --------------------------------------------------------------------------

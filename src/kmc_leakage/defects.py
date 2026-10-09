@@ -42,12 +42,18 @@ class DefectEnsemble:
 
     体缺陷与界面缺陷合并存储；`layer_id` / `interface_id` 区分归属（另一个取 -1），
     `field_side` 标记读局域场的方式（0=体缺陷用常规插值，±1=界面缺陷用单侧差分）。
+
+    缺陷 i 带的电荷是 q·(Z_i − n_i) + q_fix,i：q·(Z_i − n_i) 在缺陷位置上、随占据 n_i 变；固定电荷 q_fix,i
+    不随占据变，放在缺陷位置加 `fixed_charge_offset` 处。初始缺陷 q_fix = 0；TDDB 生成的空位带着生成反应
+    留下的 O 间隙离子 O_i⁻（q_fix = −e，PROJECT_CONTEXT_TDDB.md §6.7，ADR-048）。
     """
 
     positions: np.ndarray  # (N, 3) [m]
     ED: np.ndarray  # (N,) 能级深度（相对该缺陷所属材料侧的局部导带底）[J]
     r_D: np.ndarray  # (N,) 局域化半径 [m]
     charge_state: np.ndarray  # (N,) Z（未占据时的电荷）
+    fixed_charge: np.ndarray  # (N,) 固定电荷 q_fix [C]
+    fixed_charge_offset: np.ndarray  # (N, 3) 固定电荷相对缺陷位置的位移 [m]，0 = 与缺陷重合
     m_di: np.ndarray  # (N,) 隧穿有效质量 [kg]
     eps_opt: np.ndarray  # (N,) 光学介电常数（R8 用）
     band_gap: np.ndarray  # (N,) Eg [J]（R4/R5 的 c_MP 用）
@@ -61,6 +67,17 @@ class DefectEnsemble:
 
     def __len__(self) -> int:
         return int(self.positions.shape[0])
+
+    @property
+    def fixed_charge_positions(self) -> np.ndarray:
+        """各固定电荷的坐标 (N, 3) [m]。"""
+        return self.positions + self.fixed_charge_offset
+
+    @property
+    def colocated_fixed_charge(self) -> np.ndarray:
+        """(N,) 与缺陷重合的那部分固定电荷 [C]；离开缺陷位置的固定电荷记 0。"""
+        colocated = np.all(self.fixed_charge_offset == 0.0, axis=1)
+        return np.where(colocated, self.fixed_charge, 0.0)
 
     @classmethod
     def uniform(
@@ -85,6 +102,8 @@ class DefectEnsemble:
             ED=ED,
             r_D=localization_radius(ED, material.m_di),
             charge_state=full(charge_state),
+            fixed_charge=full(0.0),
+            fixed_charge_offset=np.zeros((n, 3)),
             m_di=full(material.m_di),
             eps_opt=full(material.eps_opt),
             band_gap=full(material.band_gap),
@@ -105,7 +124,8 @@ def empty_ensemble() -> DefectEnsemble:
     zi = np.zeros(0, dtype=int)
     return DefectEnsemble(
         positions=np.zeros((0, 3)),
-        ED=z, r_D=z, charge_state=z, m_di=z, eps_opt=z, band_gap=z,
+        ED=z, r_D=z, charge_state=z, fixed_charge=z, fixed_charge_offset=np.zeros((0, 3)),
+        m_di=z, eps_opt=z, band_gap=z,
         phonon_energy=z, huang_rhys=z, attempt_frequency=z, band_reference=z,
         layer_id=zi, interface_id=zi, field_side=zi,
     )
@@ -420,11 +440,14 @@ def generate_defects(device: DeviceConfig, rng: np.random.Generator) -> DefectEn
     if not store["ED"]:
         return empty_ensemble()
 
+    n = sum(len(ED) for ED in store["ED"])
     return DefectEnsemble(
         positions=np.concatenate(store["positions"]),
         ED=np.concatenate(store["ED"]),
         r_D=np.concatenate(store["r_D"]),
         charge_state=np.concatenate(store["charge_state"]),
+        fixed_charge=np.zeros(n),
+        fixed_charge_offset=np.zeros((n, 3)),
         m_di=np.concatenate(store["m_di"]),
         eps_opt=np.concatenate(store["eps_opt"]),
         band_gap=np.concatenate(store["band_gap"]),

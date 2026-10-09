@@ -1,8 +1,9 @@
 """TDDB 瞬态驱动（Phase 3/4，ADR-032–036，PROJECT_CONTEXT_TDDB.md §5、§6、§9）。
 
 - 增量静电耦合（§6.4）：逐个追加缺陷后的耦合矩阵与对全体缺陷从头计算的一致；
-- 新空位出生（§6.7）：出生时被一个电子占据（电荷态 0）、与初始缺陷同一物种，出生前后其余
-  缺陷处的电势与电场不变；外层每步从上一步的占据热启动；
+- 新空位出生（§6.7、ADR-048）：出生时被一个电子占据、与初始缺陷同一物种，带着与它重合的 O_i⁻
+  （q_fix = −e）；出生时介质总电荷正好多一个 −e，其余缺陷处的电势与电场的变化就是这个 −e 的贡献；
+  外层每步从上一步的占据热启动；
 - G = 0 时 I(t) 恒定，且逐位等于同一初始实现下的稳态结果（等温与开热反馈都成立）；
 - 每步的强耦合簇与对当前缺陷集合新建 `KMCSimulation` 的分簇相同，终态电流与对终态缺陷
   从头求解的稳态一致；
@@ -137,9 +138,19 @@ def test_incremental_coupling_matches_full_recomputation():
     np.testing.assert_allclose(incremental.field_self, full.field_self, rtol=1e-9, atol=1e-11 * field_scale)
 
 
-def test_new_vacancy_is_born_occupied_same_species_and_neutral(trajectory):
-    """新空位出生占据 = 1（其余缺陷从上一步不动点热启动），与初始缺陷同一物种；
-    出生前后其余缺陷处的电势、电场与横向平均剖面只差舍入误差（新空位 q·(Z−n) = 0，§6.7）。"""
+def _field_vectors(sim, occupancy):
+    """`KMCSimulation._electrostatics` 里的场矢量 (3, N)（它只返回大小）。"""
+    weight = occupancy - sim.defects.charge_state
+    return (
+        sim._field_applied_at + sim._field_fixed_at
+        + weight @ sim.coupling.field_matrix - weight * sim.coupling.field_self
+    )
+
+
+def test_new_vacancy_is_born_occupied_with_its_interstitial_charge(trajectory):
+    """新空位出生占据 = 1（其余缺陷从上一步不动点热启动），与初始缺陷同一物种，带着与它重合的 O_i⁻
+    （q_fix = −e，ADR-048）；初始缺陷 q_fix = 0。新空位连同 O_i⁻ 出生时带 −e：其余缺陷处的电势、电场与
+    横向平均剖面在出生前后的变化，就是出生位置上一个 −e 点电荷的贡献（耦合矩阵新的一行）。"""
     config, result, calls = trajectory
     for (_, _, previous), (sim, start, _) in zip(calls[:-1], calls[1:]):
         assert start[-1] == 1.0
@@ -152,14 +163,38 @@ def test_new_vacancy_is_born_occupied_same_species_and_neutral(trajectory):
         values = getattr(defects, name)
         assert np.all(values[result.n_initial:] == values[initial[0]]), name
     np.testing.assert_allclose(defects.r_D, localization_radius(defects.ED, defects.m_di), rtol=1e-15)
+    assert np.all(defects.fixed_charge[initial] == 0.0)
+    assert np.all(defects.fixed_charge[result.n_initial:] == -Q)
+    assert np.all(defects.fixed_charge_offset == 0.0)
 
     for (before, _, solved), (after, start, _) in zip(calls[:-1], calls[1:]):
         n = before.n_defects
-        phi0, field0, bar0 = before._electrostatics(solved.occupancy)
+        coupling = after.coupling
+        phi0, _, bar0 = before._electrostatics(solved.occupancy)
         phi1, field1, bar1 = after._electrostatics(start)
-        np.testing.assert_allclose(phi1[:n], phi0, rtol=1e-12)
-        np.testing.assert_allclose(field1[:n], field0, rtol=1e-11)
-        np.testing.assert_allclose(bar1, bar0, rtol=1e-12, atol=1e-15)
+        np.testing.assert_allclose(phi1[:n], phi0 + coupling.phi_matrix[n, :n], rtol=1e-11)
+        np.testing.assert_allclose(bar1, bar0 + coupling.phi_bar[n], rtol=1e-11, atol=1e-15)
+        expected = _field_vectors(before, solved.occupancy) + coupling.field_matrix[:, n, :n]
+        np.testing.assert_allclose(field1[:n], np.linalg.norm(expected, axis=0), rtol=1e-10)
+
+
+def test_generation_conserves_charge(trajectory):
+    """生成反应按电荷守恒记账（ADR-048）：介质里全部电荷 Σ[q·(Z − p) + q_fix] 在每次出生时正好多一个 −e，
+    就是前驱俘获的那个电子；记录的净空间电荷就是这个总和。O_i 的电荷取 0（旧记账）时出生前后总电荷不变，
+    那个 −e 丢掉了。"""
+    config, result, calls = trajectory
+
+    def total(defects, occupancy):
+        return Q * np.sum(defects.charge_state - occupancy) + np.sum(defects.fixed_charge)
+
+    for k, (sim, _, solved) in enumerate(calls):
+        assert result.space_charge[k] == pytest.approx(total(sim.defects, solved.occupancy), rel=1e-12)
+    for (before, _, solved), (after, start, _) in zip(calls[:-1], calls[1:]):
+        born = total(after.defects, start) - total(before.defects, solved.occupancy)
+        assert born == pytest.approx(-Q, rel=1e-9)
+        # 只算随占据变的 q·(Z − p)：新空位出生占据 1、Z = 1，这部分不变
+        occupancy_part = np.sum(after.defects.charge_state - start) - np.sum(before.defects.charge_state - solved.occupancy)
+        assert occupancy_part == pytest.approx(0.0, abs=1e-9)
 
 
 @pytest.mark.parametrize("thermal_conductivity", [None, 1.0])
@@ -219,7 +254,7 @@ def test_trajectory_bookkeeping(trajectory):
     np.testing.assert_allclose(total, result.current, rtol=1e-12)
     assert np.all(result.generation_rate > 0.0)
     assert np.all(result.max_cluster_size <= result.largest_component)
-    final_charge = Q * np.sum(result.defects.charge_state - result.occupancy)
+    final_charge = Q * np.sum(result.defects.charge_state - result.occupancy) + np.sum(result.defects.fixed_charge)
     assert result.space_charge[-1] == pytest.approx(final_charge, rel=1e-12)
     assert result.empty_generated[-1] == pytest.approx(np.sum(1.0 - result.occupancy[n_initial:]), rel=1e-12)
     assert result.empty_generated[0] == 0.0
@@ -241,7 +276,8 @@ def test_electrode_generation_nodes_match_engine_capture_rates(monkeypatch, widt
     Gaussian 窗口上的平均（ADR-043）；窗口宽度 0 时就是引擎在探针处读到的局域场。
 
     引擎的 R4 用 12 个声子项，这里把前驱的声子项数也设成 12 再逐项对拍。探针陷阱 Z = 0、
-    占据 0，不带电，不改变别的缺陷感受到的静电环境。
+    占据 0，不带电，不改变别的缺陷感受到的静电环境。三分之一的缺陷带与之重合的固定电荷 −e，另有一个
+    离开缺陷 0.6 nm：生成率的泊松源项（固定电荷放在各自的位置）与引擎的静电背景一致（ADR-048）。
     """
     monkeypatch.setattr(tddb_module, "_PRECURSOR_N_PHONON", _N_PHONON)
     config = _config(concentration_cm3=3.0e19, field_averaging_width=width)
@@ -249,7 +285,12 @@ def test_electrode_generation_nodes_match_engine_capture_rates(monkeypatch, widt
     material = config.device.stack.single_material
     band_reference = float(config.device.layer_band_references()[0])
     cells = generation_cells(config.device, tddb.generation_grid)
-    inner = KMCSimulation(config)
+    defects = KMCSimulation(config).defects
+    fixed = np.where(np.arange(len(defects)) % 3 == 0, -Q, 0.0)
+    offset = np.zeros((len(defects), 3))
+    fixed[1] = -Q
+    offset[1, 2] = 0.6e-9 if defects.positions[1, 2] < 0.5 * config.device.Lz else -0.6e-9
+    inner = KMCSimulation(config, defects=replace(defects, fixed_charge=fixed, fixed_charge_offset=offset))
     occupancy = solve_mean_field(inner).occupancy
     electrode = generation_rates(inner, occupancy, tddb, cells).cells
 
@@ -273,7 +314,8 @@ def test_electrode_generation_nodes_match_engine_capture_rates(monkeypatch, widt
     if width > 0.0:
         solver = inner.solver
         phi = solver.solve(
-            solver.deposit(inner.defects.positions, Q * (inner.defects.charge_state - occupancy)),
+            solver.deposit(inner.defects.positions, Q * (inner.defects.charge_state - occupancy))
+            + solver.deposit(inner.defects.fixed_charge_positions, inner.defects.fixed_charge),
             tddb_module.top_boundary_potential(config.device, config.simulation.voltage),
         )
         mean = solver.gaussian_average(np.stack(solver.electric_field(phi), axis=-1), width)
@@ -761,6 +803,7 @@ def test_write_tddb_csv(tmp_path, trajectory):
         assert float(row["power_W"]) == pytest.approx(result.power[k], rel=1e-5)
         assert float(row["T_effective_K"]) == pytest.approx(result.effective_temperature[k], abs=1e-6)
         assert int(row["dense_cluster_size"]) == result.dense_cluster_size[k]
+        assert int(row["mf_newton_steps"]) == result.newton_steps[k]
 
 
 def test_cli_tddb_writes_csv_and_figure(tmp_path, capsys):

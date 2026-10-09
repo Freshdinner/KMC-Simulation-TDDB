@@ -285,7 +285,8 @@ def test_rates_consume_per_defect_material_params():
     # 两个缺陷物性不同：ε_opt 与 ν 各异
     ensemble = DefectEnsemble(
         positions=positions, ED=ED, r_D=localization_radius(ED, m_di),
-        charge_state=np.array([1.0, 1.0]), m_di=m_di,
+        charge_state=np.array([1.0, 1.0]), fixed_charge=np.zeros(2), fixed_charge_offset=np.zeros((2, 3)),
+        m_di=m_di,
         eps_opt=np.array([5.6, 3.0]), band_gap=np.array([5.4, 6.4]) * EV,
         phonon_energy=np.array([0.04, 0.09]) * EV, huang_rhys=np.array([1.0, 1.0]),
         attempt_frequency=np.array([1.0e13, 2.0e13]),
