@@ -27,13 +27,7 @@ from test_fast_traps import _three_trap_sim
 from test_master_equation import _two_trap_sim
 from kmc_leakage import mean_field
 from kmc_leakage.config import DeviceConfig, DielectricStack, ElectrodeMaterial
-from kmc_leakage.defects import (
-    DefectEnsemble,
-    append_defects,
-    generate_defects,
-    layer_bulk_defects,
-    localization_radius,
-)
+from kmc_leakage.defects import DefectEnsemble, layer_bulk_defects, localization_radius
 from kmc_leakage.io import load_config
 from kmc_leakage.kmc import (
     _B_R2A,
@@ -218,20 +212,19 @@ def test_unconverged_result_is_flagged(clustered, monkeypatch):
 def _whatif_state():
     """ADR-046 what-if（O_i⁻ 与空位重合，seed 1、3.0 V，`zro2_tddb.yaml`）第 29 个空位出生后交给平均场的状态：
     39 个缺陷（10 个初始、29 个生成空位带 q_fix = −e）与热启动占据（`tests/data/whatif_s1_n29.npz`，按 ADR-048 的
-    代码重放 what-if 轨迹得到，前 29 个出生位置与 what-if 相同）。"""
+    代码重放 what-if 轨迹得到，前 29 个出生位置与 what-if 相同）。what-if 的能级按当时的高斯分布抽样，数据里存了全部
+    缺陷的位置与能级，这里直接用，与 `zro2_tddb.yaml` 现在的能级设置（ADR-049 起取定值）无关。"""
     data = np.load(os.path.join(os.path.dirname(__file__), "data", "whatif_s1_n29.npz"))
     config = load_config(os.path.join(os.path.dirname(__file__), "..", "examples", "zro2_tddb.yaml"))
     config = replace(config, simulation=replace(
         config.simulation, voltage=3.0, seed=1, temperature=float(data["temperature"])))
-    device, n_initial = config.device, int(data["n_initial"])
-    rng = np.random.default_rng(1)
-    initial = generate_defects(device, rng)
-    assert np.array_equal(initial.positions, data["positions"][:n_initial])
-    generated = layer_bulk_defects(device, 0, data["positions"][n_initial:], rng)
-    ED = data["ED"][n_initial:]
-    generated = replace(generated, ED=ED, r_D=localization_radius(ED, generated.m_di),
-                        fixed_charge=np.full(len(generated), -Q))
-    return KMCSimulation(config, defects=append_defects(initial, generated)), data["occupancy"]
+    n_initial = int(data["n_initial"])
+    defects = layer_bulk_defects(config.device, 0, data["positions"], np.random.default_rng(1))
+    defects = replace(
+        defects, ED=data["ED"], r_D=localization_radius(data["ED"], defects.m_di),
+        fixed_charge=np.where(np.arange(len(defects)) >= n_initial, -Q, 0.0),
+    )
+    return KMCSimulation(config, defects=defects), data["occupancy"]
 
 
 def test_state_that_defeated_anderson_converges_with_newton(monkeypatch):

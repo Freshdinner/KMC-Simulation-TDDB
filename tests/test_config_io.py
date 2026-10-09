@@ -383,6 +383,7 @@ def test_example_configs_load():
 
 def test_tddb_example_matches_leakage_reference_preset():
     """zro2_tddb.yaml 的材料、缺陷、电极与默认盒子 single_run.yaml 逐项相同（材料名之外），
+    缺陷能级取预设高斯分布的均值作定值（ADR-049），
     只把侧向尺寸改成 20×20 nm 小盒子；横向网格按团簇库仑能收敛取 hx = hy = 0.25 nm、hz 不变
     （ADR-032）；前驱的 E_t1 与 O 空位预设相同（ADR-028）；E_rel1 与材料的 huang_rhys 各自取值
     （ADR-030）；生成单元在 z 方向与泊松网格同步长（ADR-033）；E_A = 0.95 eV、p₀ = 1 eÅ、
@@ -395,7 +396,9 @@ def test_tddb_example_matches_leakage_reference_preset():
     ref_material = ref.device.stack.single_material
     assert material.name == "ZrO2"
     assert dataclasses.replace(material, name=ref_material.name) == ref_material
-    assert tddb.defects == ref.defects
+    assert ref.defects.level.mode == "gaussian"
+    assert tddb.defects.level == dataclasses.replace(ref.defects.level, mode="fixed", sigma=0.0)
+    assert dataclasses.replace(tddb.defects, level=ref.defects.level) == ref.defects
     assert tddb.device.cathode == ref.device.cathode
     assert tddb.device.anode == ref.device.anode
     assert tddb.device.barrier_height == ref.device.barrier_height

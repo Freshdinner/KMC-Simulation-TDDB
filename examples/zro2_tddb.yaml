@@ -1,9 +1,10 @@
 # TDDB 仿真配置：ZrO₂ 单层 MIM（规格见 PROJECT_CONTEXT_TDDB.md）
 #
 # 材料与缺陷沿用漏电流侧的参考预设（docs/physics_model.md），与
-# examples/single_run.yaml 逐项相同（材料名之外）。t=0 的初始缺陷集合由现有
+# examples/single_run.yaml 逐项相同（材料名之外），只有缺陷能级取预设均值的定值
+# 1.15 eV、不取高斯分布（ADR-049）。t=0 的初始缺陷集合由现有
 # generate_defects 按下面的 defects 段生成；应力生成的 O 空位与初始缺陷是同一物种，
-# 共用这一段（能级分布、S、m_di、施主型 charge_state_Z），不另设物种参数（第 1 节、6.7）。
+# 共用这一段（能级、S、m_di、施主型 charge_state_Z），不另设物种参数（第 1 节、6.7）。
 #
 # 与默认盒子（single_run.yaml，50×50×8 nm、60 个缺陷）的差别只在侧向尺寸及随之
 # 配套的网格与系综个数：TDDB 在 20×20 nm 小盒子里跑（6.3），
@@ -29,16 +30,17 @@ layers:
   - material: ZrO2
     thickness_nm: 8.0
     defects:
-      # 初始缺陷与生成的 O 空位共用这一段。生成的空位出生时被前驱俘获的那个电子占据，
-      # 电荷态为 0（中性），电子发射后才带 +1（6.7、ADR-035）；出生占据是瞬态驱动给的初值，
-      # 不属于这段缺陷配置
+      # 初始缺陷与生成的 O 空位共用这一段。生成的空位出生时被一个电子占据，带着与它重合的 O_i⁻
+      # （q_fix = −e），连同 O_i⁻ 出生时带 −e，电子发射后合起来为中性（6.7、ADR-048）；出生占据与 O_i⁻
+      # 由瞬态驱动给出，不属于这段缺陷配置
       concentration_cm3: 3.0e18    # 只管 t=0 的初始缺陷个数
       charge_state_Z: 1.0          # 施主型：电子离开后（未占据）+1，占据一个电子时中性，不可双占据
       min_separation_nm: 0.5       # 缺陷两两之间 + 缺陷到电极界面的最小距离
+      # 能级取定值（用户定，ADR-049）：漏电流参考预设的高斯分布（σ_E = 0.15 eV）在这里取均值。t = 0 电流在
+      # 种子之间的散布由承载电流的那个缺陷的深度决定，与能级取定值还是高斯基本无关（3.6 V 下 σ(log₁₀J) 1.22 对 1.18）
       level:
-        mode: gaussian
+        mode: fixed
         ED_eV: 1.15
-        sigma_eV: 0.15
       spatial:
         mode: interface
         enrichment: 5.0
