@@ -58,8 +58,8 @@ electrodes:
   anode: *electrode
 
 simulation:
-  # 应力电压与温度待实验数据确定（第 1 节"待确认"），先取 3 V / 25 °C
-  voltage_V: 3.0
+  # 应力电压与温度待实验数据确定（第 1 节"待确认"），先取 3.6 V / 25 °C
+  voltage_V: 3.6
   temperature_C: 25.0
   n_events: 20000
   burn_in_fraction: 0.2

@@ -9,6 +9,9 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。实测数据与方案对�
 
 #### TDDB 阶段
 
+- **`examples/zro2_tddb.yaml` 的恒压应力默认值从 3.0 V 改为 3.6 V**（`simulation.voltage_V`，8 nm 膜平均场 0.45 V/nm）。
+  **为什么**：用户指定。ADR-045/046 的 seed 1–4 结果都是 3.0 V 下的数据。`pytest tests/test_config_io.py` 通过（23 项）。
+
 - **精简 `docs/adr/tddb-decisions.md`**（ADR-024–046）。从 1414 行压到 305 行：每条 ADR 只保留决策、理由、关键结论与
   superseded 关系，删去运行细节（机时、内存、并发）、中间对照表与逐种子长表，数据位置改为注明 `results/` 目录，完整原文见
   git 历史（c540c66）。**为什么**：原文过长，难以快速查到核心方法与结论。只改文档，未跑 pytest。
