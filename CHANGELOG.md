@@ -9,6 +9,10 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。实测数据与方案对�
 
 #### TDDB 阶段
 
+- **`examples/zro2_tddb.yaml` 的缺陷能级改回高斯分布**（均值 1.15 eV、σ_E = 0.15 eV；ADR-049 superseded）。配置一致性测试恢复为
+  与 `single_run.yaml` 缺陷段逐项相同，README 与 PROJECT_CONTEXT_TDDB.md §1/§3 同步。保留 ADR-049 时顺带的出生电荷注释修正与 what-if
+  回归测试的改法。**为什么**：用户指定。按用户要求未跑 pytest。
+
 - **`examples/zro2_tddb.yaml` 的缺陷能级改为定值 1.15 eV**（ADR-049）。原为高斯（均值 1.15 eV、σ_E = 0.15 eV），初始缺陷与生成空位
   都用定值；漏电流参考预设（`single_run.yaml`、`iv_sweep.yaml`、叠层示例、`docs/physics_model.md`）仍是高斯。顺带改正 YAML 里
   ADR-048 之后过时的出生电荷注释与 PROJECT_CONTEXT_TDDB.md §1 的同一段。
