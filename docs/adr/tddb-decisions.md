@@ -319,7 +319,7 @@ E_A、p₀ 也是按宏观场标定的。代价是丢掉"带电空位近旁加�
 
 **后续状态**：what-if 的 t = 15.4 s 是未收敛记录的假象，收敛后 J = 6.48 A/cm²（ADR-048）。
 
-## ADR-048 生成反应按电荷守恒记账（O_i⁻ 固定电荷），平均场加牛顿法（Phase 4）
+## ADR-048 生成反应按电荷守恒处理（O_i⁻ 固定电荷），平均场加牛顿法（Phase 4）
 **决策**（用户定，ADR-046 方案 1）：
 1. `DefectEnsemble` 加逐缺陷固定电荷 `fixed_charge`（q_fix）与位移 `fixed_charge_offset`，缺陷净电荷 q·(Z − n) + q_fix。
    初始缺陷 q_fix = 0；生成空位带 O_i⁻，q_fix = −e（`tddb._INTERSTITIAL_CHARGE`），与空位重合（offset = 0）。新空位出生占据 1，

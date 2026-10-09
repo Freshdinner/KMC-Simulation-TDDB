@@ -177,7 +177,7 @@ def test_colocated_fixed_charge_is_part_of_the_defect_net_charge():
         blocks_b, hop_b = shifted._rates(occ)
         np.testing.assert_allclose(blocks_a, blocks_b, rtol=1e-9)
         np.testing.assert_allclose(hop_a, hop_b, rtol=1e-9)
-    # 固定电荷确实进了静电：两种组态记账都不同于不带 q_fix 的原缺陷
+    # 固定电荷确实进了静电：电势不同于不带 q_fix 的原缺陷
     assert not np.allclose(fixed._electrostatics(_OCCUPATIONS[0])[0], base._electrostatics(_OCCUPATIONS[0])[0])
 
 

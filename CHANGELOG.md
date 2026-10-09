@@ -16,13 +16,13 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。实测数据与方案对�
   数量级），单条轨迹看不出幂律。**为什么**：用户要求的验收。只跑数据与改文档（ADR-048 验收段、PROJECT_CONTEXT_TDDB.md §1/§10、
   README），未改代码。
 
-- **生成反应按电荷守恒记账（O_i⁻ 固定电荷），平均场加牛顿法**（ADR-048，ADR-046 方案 1；§6.2、§6.7）。
+- **生成反应按电荷守恒处理（O_i⁻ 固定电荷），平均场加牛顿法**（ADR-048，ADR-046 方案 1；§6.2、§6.7）。
   `DefectEnsemble` 加 `fixed_charge`（q_fix）与 `fixed_charge_offset`，缺陷净电荷 q·(Z − n) + q_fix；生成空位带与之重合的 O_i⁻
   （q_fix = −e，`tddb._INTERSTITIAL_CHARGE`），出生时连同 O_i⁻ 带 −e。`KMCSimulation` 把固定电荷作为与组态无关的静电背景（多一次
   泊松求解，重合的 q_fix 自作用整项扣除），R8 的 β 取 Z 加重合的 q_fix/q；`generation_rates` 的泊松源项与 `space_charge` 记录含 q_fix。
   `solve_mean_field` 的 Anderson 混合 50 次内没收敛就改用牛顿法（有限差分 Jacobian + Broyden 更新 + 回溯线搜索，起点先热启动、
   再 p̂(0)），`MeanFieldResult.newton_steps` / `TDDBResult.newton_steps` / CSV `mf_newton_steps`；CLI 摘要报告用了牛顿法的状态数。
-  **为什么**：生成反应每次丢掉一个 −e 是生成贴阴极、自加速的根因（ADR-046）；按电荷守恒记账的 what-if 里平均场 7–31% 的记录不收敛。
+  **为什么**：生成反应每次丢掉一个 −e 是生成贴阴极、自加速的根因（ADR-046）；按电荷守恒处理的 what-if 里平均场 7–31% 的记录不收敛。
   **不收敛的原因**：膜体内致密空位网络里分数占据的近距陷阱按平均场处理时，不动点映射有 1.17 的特征值，Anderson 游走；同一组空位
   q_fix = 0 时也不收敛，与 O_i⁻ 无关。不动点良态，牛顿法收敛（`results/10.09/mf_convergence/`）。
   **验证**：q_fix = 0 时 113 个数组与改动前逐位相同（`results/10.09/qfix0_bitwise/`）；what-if 里不收敛的 s2_n150、s2_n200、

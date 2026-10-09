@@ -179,8 +179,8 @@ def test_new_vacancy_is_born_occupied_with_its_interstitial_charge(trajectory):
 
 
 def test_generation_conserves_charge(trajectory):
-    """生成反应按电荷守恒记账（ADR-048）：介质里全部电荷 Σ[q·(Z − p) + q_fix] 在每次出生时正好多一个 −e，
-    就是前驱俘获的那个电子；记录的净空间电荷就是这个总和。O_i 的电荷取 0（旧记账）时出生前后总电荷不变，
+    """生成反应按电荷守恒处理（ADR-048）：介质里全部电荷 Σ[q·(Z − p) + q_fix] 在每次出生时正好多一个 −e，
+    就是前驱俘获的那个电子；记录的净空间电荷就是这个总和。O_i 的电荷取 0（旧的处理方式）时出生前后总电荷不变，
     那个 −e 丢掉了。"""
     config, result, calls = trajectory
 
