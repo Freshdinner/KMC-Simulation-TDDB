@@ -439,10 +439,6 @@ def _draw_current_transient(
     return density
 
 
-# TDDB 轨迹的终止方式 → 终点标记的图例（渗流击穿是主判据，限流是第二停止条件）
-_STOP_LABELS = {"breakdown": "breakdown (percolation)", "compliance": "compliance reached"}
-
-
 def plot_stress_transient(
     time: np.ndarray,
     current_density: np.ndarray,
@@ -457,8 +453,8 @@ def plot_stress_transient(
     ----
     time, current_density, end_time, fit : 同 `plot_current_transient`
     temperature : 各状态的温度 [K]，与 `time` 等长（`TDDBResult.effective_temperature`）
-    stop : 轨迹的终止方式；"breakdown"（渗流判据）或 "compliance"（限流）时在终点
-        (end_time, J) 画标记并在图例里写出时刻，其余取值不画
+    stop : 轨迹的终止方式（`TDDBResult.stop_reason`）；"breakdown"（电流密度超过击穿电流密度）
+        时在终点 (end_time, J) 画标记并在图例里写出时刻，其余取值不画
 
     上图是双对数的 J(t)（与 `plot_current_transient` 相同），下图是温度（°C），横轴共用。
     """
@@ -467,10 +463,10 @@ def plot_stress_transient(
     top = figure.add_subplot(2, 1, 1)
     bottom = figure.add_subplot(2, 1, 2, sharex=top)
     density = _draw_current_transient(top, time, current_density, end_time, fit)
-    if stop in _STOP_LABELS:
+    if stop == "breakdown":
         top.plot(
             [end_time], [density[-1]], ls="none", marker="X", ms=9, color="k",
-            label="{}, t = {:.3g} s".format(_STOP_LABELS[stop], end_time),
+            label="breakdown, t = {:.3g} s".format(end_time),
         )
     top.legend(loc="best", fontsize=9)
 

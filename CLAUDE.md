@@ -56,5 +56,5 @@
 
 新增（与现有 `run/sweep/plot` 并列）：
 
-- TDDB 瞬态运行（一个缺陷实现的恒压应力 I-t 轨迹，热反馈 + 渗流击穿判据，Phase 4）：`python -m kmc_leakage tddb --config examples/zro2_tddb.yaml --seed 1 --out it.csv --plot it.png`
+- TDDB 瞬态运行（一个缺陷实现的恒压应力 I-t 轨迹，热反馈 + 电流击穿判据，Phase 4）：`python -m kmc_leakage tddb --config examples/zro2_tddb.yaml --seed 1 --out it.csv --plot it.png`
 - I-t / t_BD 系综与 Weibull 出图：Phase 5 落地时补全本节。

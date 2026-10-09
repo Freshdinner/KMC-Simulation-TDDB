@@ -403,7 +403,7 @@ class EnsembleConfig:
 
 @dataclass(frozen=True)
 class TDDBConfig:
-    """TDDB 缺陷生成参数（PROJECT_CONTEXT_TDDB.md 第 3 节参数表，ADR-024/028/035/036）。
+    """TDDB 缺陷生成参数（PROJECT_CONTEXT_TDDB.md 第 3 节参数表，ADR-024/028/035/036/047）。
 
     只收已定取值的参数，每个字段在用到它的 Phase 加入。G 场加速项里的相对介电常数 k 取
     介质材料的静态 κ，前驱俘获线型用的声子能量 ℏω₀ 取宿主介质的值，应力电压与环境温度
@@ -427,11 +427,9 @@ class TDDBConfig:
     generation_grid: Tuple[int, int, int]
     max_generated_vacancies: int  # 生成的空位数达到此值即停（机时上限）
     stop_time: float  # 应力时间上限 [s]
-    # --- 击穿判据与热反馈（Phase 4，ADR-036）---
-    # d_c：渗流判据的连边截断 [m]。间距 < d_c 的缺陷连边，某个连通分量同时触到两个电极即击穿（§6.3）
-    percolation_distance: float
-    # 限流值 [A/m^2]：电流密度达到它即停，是击穿的第二停止条件（渗流仍是主判据）
-    compliance_current_density: float
+    # --- 击穿判据与热反馈（Phase 4，ADR-036/047）---
+    # 击穿电流密度 [A/m^2]：电流密度超过它即判击穿，这一刻就是 t_BD（§6.3，ADR-047）
+    breakdown_current_density: float
     # k_TH：介质热导率 [W/(m·K)]（式 T14）。None = 等温，温度固定为环境值（Phase 3 的口径）
     thermal_conductivity: Optional[float] = None
 

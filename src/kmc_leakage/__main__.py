@@ -336,8 +336,7 @@ def _report_tddb(result: TDDBResult) -> None:
     """打印一条 TDDB 瞬态轨迹的摘要。"""
     density = result.current_density * _PER_CM2
     reasons = {
-        "breakdown": "击穿（渗流团簇连通两个电极），t_end 即 t_BD",
-        "compliance": "电流密度达到限流值",
+        "breakdown": "击穿（电流密度超过击穿电流密度），t_end 即 t_BD",
         "max_generated": "生成空位数达到上限",
         "stop_time": "应力时间达到上限",
         "no_generation": "总生成率为 0（G = 0），电流保持初始值",
@@ -351,8 +350,8 @@ def _report_tddb(result: TDDBResult) -> None:
     typer.echo("  J(t=0) = {:.4e} A/cm²   J(t_end) = {:.4e} A/cm²".format(density[0], density[-1]))
     dense_time = result.dense_cluster_time
     typer.echo(
-        "  渗流团簇最大 {} 个缺陷；致密团簇（间距 < 6 Å）最大 {} 个，{}".format(
-            int(result.percolation_size[-1]), int(result.dense_cluster_size.max()),
+        "  致密团簇（间距 < 6 Å）最大 {} 个，{}".format(
+            int(result.dense_cluster_size.max()),
             "未达到 25 个" if dense_time is None else "t = {:.4e} s 首次达到 25 个".format(dense_time),
         )
     )
@@ -392,7 +391,7 @@ def tddb(
     out: Optional[str] = typer.Option(None, "--out", help="轨迹 CSV 输出路径"),
     plot: Optional[str] = typer.Option(None, "--plot", help="I-t（双对数）与温度演化图输出路径"),
 ) -> None:
-    """TDDB 瞬态运行（恒压应力，热反馈与渗流击穿判据）：一个缺陷实现的 I-t 轨迹。"""
+    """TDDB 瞬态运行（恒压应力，热反馈与电流击穿判据）：一个缺陷实现的 I-t 轨迹。"""
     from dataclasses import replace
 
     cfg = load_config(config)

@@ -13,8 +13,9 @@
   全空时为 0；落点按被积函数分布、都在可放置区域内；
 - N_T 只改变时间标尺；放不下新空位的单元被跳过；
 - 热反馈（§6.6、§8.4）：每步的输运温度是上一步功率给出的缺陷处加权温度，生成率取同一步的温度场；
-- 击穿判据（§6.3）：渗流团簇同时触到两个电极即击穿，轨迹停在第一条连通的记录上；电流密度
-  达到限流值是第二停止条件；
+- 击穿判据（§6.3，ADR-047）：轨迹停在电流密度第一次超过击穿电流密度的记录上，之前的记录与不停的
+  轨迹逐位相同；
+- 致密团簇标志：间距 < 截断的缺陷连边，xy 取最小镜像；
 - I-t 幂律拟合对纯幂律精确还原 n，对带噪声的幂律给出合理的拟合优度。
 """
 
@@ -42,11 +43,11 @@ from kmc_leakage.rates import bond_break_probability, single_electron_capture_ra
 from kmc_leakage.tddb import (
     IncrementalCoupling,
     _draw_generation,
+    distance_clusters,
     fit_power_law,
     fit_transient,
     generation_cells,
     generation_rates,
-    percolation_clusters,
     run_tddb,
     write_tddb_csv,
 )
@@ -69,8 +70,7 @@ def _tddb(**overrides) -> TDDBConfig:
         generation_grid=(2, 2, 14),
         max_generated_vacancies=4,
         stop_time=1.0e4,
-        percolation_distance=0.9e-9,
-        compliance_current_density=1.0e8,  # 1e4 A/cm²，远高于这些小体系的电流
+        breakdown_current_density=1.0e8,  # 1e4 A/cm²，远高于这些小体系的电流
     )
     params.update(overrides)
     return TDDBConfig(**params)
@@ -224,16 +224,14 @@ def test_trajectory_bookkeeping(trajectory):
     assert result.empty_generated[-1] == pytest.approx(np.sum(1.0 - result.occupancy[n_initial:]), rel=1e-12)
     assert result.empty_generated[0] == 0.0
 
-    # 等温：温度全是环境值；没有击穿，渗流团簇没有连通两个电极
+    # 等温：温度全是环境值；电流远低于击穿电流密度，没有击穿
     ambient = config.simulation.temperature
     assert not result.thermal
     for name in ("transport_temperature", "effective_temperature", "peak_temperature"):
         assert np.all(getattr(result, name) == ambient), name
-    assert result.breakdown_time is None
-    for k, size in enumerate(result.percolation_size):
-        labels, spanning = percolation_clusters(positions[: n_initial + k], device, config.tddb.percolation_distance)
-        assert size == np.bincount(labels).max() and not spanning.any()
-    assert np.all(result.dense_cluster_size <= result.percolation_size)
+    assert result.breakdown_time is None and result.stop_reason == "max_generated"
+    for k, size in enumerate(result.dense_cluster_size):
+        assert size == np.bincount(distance_clusters(positions[: n_initial + k], device, 0.6e-9)).max()
 
 
 @pytest.mark.parametrize("width", [0.0, 0.5e-9])
@@ -609,61 +607,41 @@ def test_thermal_feedback_feeds_previous_power_into_transport_and_generation(mon
         assert np.array_equal(temperature_field, field)
 
 
-def test_percolation_clusters_detect_a_chain_spanning_both_electrodes():
-    """渗流团簇（§6.3）：间距 < d_c 连边、xy 取最小镜像；分量里有缺陷离阴极、阳极界面都 < d_c
-    才算连通两个电极。"""
+def test_distance_clusters_link_defects_closer_than_the_cutoff():
+    """几何团簇（致密团簇标志用）：间距 < 截断的缺陷连边，xy 取最小镜像。"""
     device = make_device()  # 20×20×8 nm
     z = np.linspace(0.6e-9, 7.4e-9, 10)  # 相邻间距 0.756 nm
     x = np.where(np.arange(10) % 2 == 0, 19.9e-9, 0.1e-9)  # 横向来回跨过周期边界，最小镜像下只差 0.2 nm
     chain = np.column_stack([x, np.full(10, 10e-9), z])
-    labels, spanning = percolation_clusters(chain, device, 0.9e-9)
-    assert np.all(labels == labels[0]) and spanning.tolist() == [True]
+    labels = distance_clusters(chain, device, 0.9e-9)
+    assert np.all(labels == labels[0])
     # 截断小于链上的间距：每个缺陷各成一个分量
-    labels, spanning = percolation_clusters(chain, device, 0.7e-9)
-    assert np.unique(labels).size == 10 and not spanning.any()
-    # 去掉中间一个：断成两段，各自只触到一个电极
-    labels, spanning = percolation_clusters(np.delete(chain, 5, axis=0), device, 0.9e-9)
-    assert np.unique(labels).size == 2 and not spanning.any()
-    # 整条链上移 0.35 nm：最下端离阴极 0.95 nm ≥ d_c，没触到阴极
-    assert not percolation_clusters(chain + np.array([0.0, 0.0, 0.35e-9]), device, 0.9e-9)[1].any()
-    labels, spanning = percolation_clusters(np.zeros((0, 3)), device, 0.9e-9)
-    assert labels.size == 0 and spanning.size == 0
+    assert np.unique(distance_clusters(chain, device, 0.7e-9)).size == 10
+    # 去掉中间一个：断成两段
+    assert np.unique(distance_clusters(np.delete(chain, 5, axis=0), device, 0.9e-9)).size == 2
+    assert distance_clusters(np.zeros((0, 3)), device, 0.9e-9).size == 0
 
 
-def test_trajectory_stops_at_first_spanning_record(monkeypatch, trajectory):
-    """渗流判据触发即停：轨迹停在第一条连通两个电极的记录上，t_BD 就是这条记录的时刻，之前的
-    记录与不停的轨迹逐位相同。这里由包装触发"连通"：缺陷数达到初始 + 2 起，判据的截断换成
-    膜厚，每个分量都触到两个电极（判据本身由上一个测试单独验证）。"""
+def test_trajectory_breaks_down_when_current_density_exceeds_the_threshold(trajectory):
+    """击穿判据（ADR-047）：轨迹停在电流密度第一次超过击穿电流密度的记录上，t_BD 就是这条记录的
+    时刻，之前的记录与不停的轨迹逐位相同；J(0) 就超过时停在 t = 0；等于阈值不算超过。"""
     config, reference, _ = trajectory
-    original = tddb_module.percolation_clusters
-
-    def spanning_from_second_generation(positions, device, distance):
-        if distance == config.tddb.percolation_distance and positions.shape[0] >= reference.n_initial + 2:
-            distance = device.Lz
-        return original(positions, device, distance)
-
-    monkeypatch.setattr(tddb_module, "percolation_clusters", spanning_from_second_generation)
-    result = run_tddb(config)
+    density = reference.current_density
+    threshold = 0.5 * (density[1] + density[2])
+    assert np.all(density[:2] < threshold) and density[2] > threshold
+    result = run_tddb(replace(config, tddb=replace(config.tddb, breakdown_current_density=threshold)))
     assert result.stop_reason == "breakdown"
     assert result.breakdown_time == result.end_time == reference.time[2]
     assert np.array_equal(result.time, reference.time[:3])
     assert np.array_equal(result.current, reference.current[:3])
 
+    at_start = run_tddb(replace(config, tddb=replace(config.tddb, breakdown_current_density=0.5 * density[0])))
+    assert at_start.stop_reason == "breakdown"
+    assert at_start.time.tolist() == [0.0] and at_start.breakdown_time == 0.0
 
-def test_compliance_stops_when_current_density_reaches_the_limit(trajectory):
-    """限流是第二停止条件：电流密度第一次达到限流值的那条记录停下；J(0) 就达到时停在 t = 0。"""
-    config, reference, _ = trajectory
-    density = reference.current_density
-    limit = 0.5 * (density[1] + density[2])
-    assert np.all(density[:2] < limit) and density[2] >= limit
-    result = run_tddb(replace(config, tddb=replace(config.tddb, compliance_current_density=limit)))
-    assert result.stop_reason == "compliance" and result.breakdown_time is None
-    assert result.end_time == reference.time[2]
-    assert np.array_equal(result.current, reference.current[:3])
-
-    at_start = run_tddb(replace(config, tddb=replace(config.tddb, compliance_current_density=density[0])))
-    assert at_start.stop_reason == "compliance"
-    assert at_start.time.tolist() == [0.0] and at_start.end_time == 0.0
+    at_peak = run_tddb(replace(config, tddb=replace(config.tddb, breakdown_current_density=density.max())))
+    assert at_peak.stop_reason == "max_generated" and at_peak.breakdown_time is None
+    assert np.array_equal(at_peak.current, reference.current)
 
 
 class _StubEvents:
@@ -782,7 +760,6 @@ def test_write_tddb_csv(tmp_path, trajectory):
         assert parts == pytest.approx(float(row["J_total_A_cm2"]), rel=1e-5)
         assert float(row["power_W"]) == pytest.approx(result.power[k], rel=1e-5)
         assert float(row["T_effective_K"]) == pytest.approx(result.effective_temperature[k], abs=1e-6)
-        assert int(row["percolation_size"]) == result.percolation_size[k]
         assert int(row["dense_cluster_size"]) == result.dense_cluster_size[k]
 
 
@@ -808,7 +785,7 @@ def test_cli_tddb_writes_csv_and_figure(tmp_path, capsys):
             "precursor_relaxation_energy_eV": 1.0, "dipole_moment_eA": 7.1, "field_averaging_width_nm": 0.5,
             "precursor_concentration_cm3": 4.0e19, "generation_grid": {"nx": 2, "ny": 2, "nz": 14},
             "max_generated_vacancies": 2, "stop_time_s": 1.0e4,
-            "percolation_distance_nm": 0.9, "compliance_current_density_A_cm2": 1.0e4,
+            "breakdown_current_density_A_cm2": 1.0e4,
             "thermal_conductivity_W_mK": 1.0,
         },
     }

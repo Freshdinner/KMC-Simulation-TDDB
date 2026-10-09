@@ -25,9 +25,8 @@
      r_D/2 ≈ 0.083 nm 衰减 e 倍，远小于生成单元，所以不放在单元上，而是逐个源陷阱在它周围的
      可放置区域里对 N_T·p·R7·P_bb 做体积分（`TrapCaptureGeneration`），每个源陷阱一条事件。
    两类事件里 P_bb 的场都是泊松解的场在 Gaussian 窗口上的平均（宏观场，ADR-043）。
-4. **击穿判据**（§6.3）：间距 < d_c 的缺陷连边，某个连通分量同时触到两个电极（离电极界面
-   < d_c）即击穿，这一刻就是 t_BD；电流密度达到限流值是第二停止条件。论文的"25 个空位、
-   间距 ≤ 6 Å"团簇只作标志记录，不作判据。
+4. **击穿判据**（§6.3，ADR-047）：电流密度超过击穿电流密度即击穿，这一刻就是 t_BD。论文的
+   "25 个空位、间距 ≤ 6 Å"团簇只作标志记录，不作判据。
 5. **抽事件**：Δt = −ln(r)/ΣG，在单元事件与源陷阱事件里按速率选一条。选中单元时按单元内的被积函数
    落点，选中源陷阱时按它周围的被积函数落点，位置连续；与已有缺陷的距离小于 min_separation 就重抽
    （§6.1、§6.8）。
@@ -1061,25 +1060,18 @@ def _cluster_diagnostics(inner: KMCSimulation) -> Tuple[int, int, int, int]:
     return len(members), max_cluster, int(sizes.max()), int(np.sum(sizes > _CLUSTER_MAX_SIZE))
 
 
-def percolation_clusters(
-    positions: np.ndarray, device: DeviceConfig, distance: float
-) -> Tuple[np.ndarray, np.ndarray]:
-    """渗流团簇（§6.3）：间距 < `distance` 的缺陷连边后的连通分量。
+def distance_clusters(positions: np.ndarray, device: DeviceConfig, distance: float) -> np.ndarray:
+    """几何团簇：间距 < `distance` 的缺陷连边后的连通分量，返回各缺陷所在分量的编号 (N,)。
 
-    返回 (各缺陷所在分量的编号 (N,), 各分量是否同时触到两个电极 (分量数,))。电极当作一个
-    节点、与缺陷按同一截断连边：缺陷离电极界面 < `distance` 就算触到该电极。xy 取最小镜像。
-    与强耦合簇（按速率连边、用于电流估计，ADR-022）是两回事。
+    xy 取最小镜像。用于论文的致密团簇标志（间距 ≤ 6 Å），只记录、不作判据；与强耦合簇
+    （按速率连边、用于电流估计，ADR-022）是两回事。
     """
     n = positions.shape[0]
     if n == 0:
-        return np.zeros(0, dtype=int), np.zeros(0, dtype=bool)
+        return np.zeros(0, dtype=int)
     pairs = neighbor_pairs(positions, device.Lx, device.Ly, distance)
     graph = coo_matrix((np.ones(len(pairs)), (pairs.a, pairs.b)), shape=(n, n))
-    count, labels = connected_components(graph, directed=False)
-    z = positions[:, 2]
-    cathode = np.bincount(labels, z < distance, count) > 0
-    anode = np.bincount(labels, z > device.Lz - distance, count) > 0
-    return labels, cathode & anode
+    return connected_components(graph, directed=False)[1]
 
 
 @dataclass
@@ -1114,11 +1106,10 @@ class TDDBResult:
     transport_temperature: np.ndarray  # (K,) 内层输运用的全局标量温度 [K]（上一条记录的功率给出）
     effective_temperature: np.ndarray  # (K,) 本条记录功率下、缺陷处按放热加权的平均温度 [K]
     peak_temperature: np.ndarray  # (K,) 本条记录温度场的最高值 [K]
-    # --- 击穿判据（§6.3）---
-    percolation_size: np.ndarray  # (K,) 最大渗流团簇（间距 < d_c）的缺陷数
-    dense_cluster_size: np.ndarray  # (K,) 最大致密团簇（间距 < 6 Å，论文的标志）的缺陷数
+    # --- 击穿（§6.3）---
+    dense_cluster_size: np.ndarray  # (K,) 最大致密团簇（间距 < 6 Å，论文的标志，只记录）的缺陷数
     end_time: float  # 轨迹终点 [s]；击穿时就是 t_BD
-    # "breakdown"（渗流）| "compliance"（限流）| "max_generated" | "stop_time" | "no_generation"
+    # "breakdown"（电流密度超过击穿电流密度）| "max_generated" | "stop_time" | "no_generation"
     stop_reason: str
     n_initial: int  # 初始缺陷个数：编号 < n_initial 的是初始缺陷，其余是应力生成的空位
     birth_time: np.ndarray  # (N,) 各缺陷的出生时刻 [s]，初始缺陷记 0
@@ -1133,7 +1124,7 @@ class TDDBResult:
 
     @property
     def breakdown_time(self) -> Optional[float]:
-        """渗流判据触发的时刻 t_BD [s]；没有击穿时为 None。"""
+        """电流密度第一次超过击穿电流密度的时刻 t_BD [s]；没有击穿时为 None。"""
         return self.end_time if self.stop_reason == "breakdown" else None
 
     @property
@@ -1209,8 +1200,7 @@ def run_tddb(
         table = generation_rates(inner, occupancy, tddb, cells, temperature_field)
         rates = np.where(full, 0.0, np.concatenate([table.cells.rates, table.traps.rates]))
         n_clusters, max_cluster, largest, n_split = _cluster_diagnostics(inner)
-        labels, spanning = percolation_clusters(defects.positions, device, tddb.percolation_distance)
-        dense_labels, _ = percolation_clusters(defects.positions, device, _DENSE_CLUSTER_DISTANCE)
+        dense_labels = distance_clusters(defects.positions, device, _DENSE_CLUSTER_DISTANCE)
         records.append(
             dict(
                 time=time,
@@ -1231,18 +1221,14 @@ def run_tddb(
                 transport_temperature=transport,
                 effective_temperature=effective,
                 peak_temperature=peak,
-                percolation_size=int(np.bincount(labels).max(initial=0)),
                 dense_cluster_size=int(np.bincount(dense_labels).max(initial=0)),
             )
         )
         if progress is not None:
             progress(len(defects) - n_initial, time, mf.current_density)
 
-        if np.any(spanning):
+        if mf.current_density > tddb.breakdown_current_density:
             end_time, stop_reason = time, "breakdown"
-            break
-        if mf.current_density >= tddb.compliance_current_density:
-            end_time, stop_reason = time, "compliance"
             break
         if len(defects) - n_initial >= tddb.max_generated_vacancies:
             end_time, stop_reason = time, "max_generated"
@@ -1291,7 +1277,6 @@ def run_tddb(
         transport_temperature=column("transport_temperature"),
         effective_temperature=column("effective_temperature"),
         peak_temperature=column("peak_temperature"),
-        percolation_size=column("percolation_size", int),
         dense_cluster_size=column("dense_cluster_size", int),
         end_time=end_time,
         stop_reason=stop_reason,
@@ -1370,7 +1355,7 @@ def write_tddb_csv(result: TDDBResult, path: str) -> None:
                 "mf_iterations", "mf_residual", "mf_converged",
                 "n_clusters", "max_cluster_size", "largest_component", "n_split",
                 "power_W", "T_transport_K", "T_effective_K", "T_peak_K",
-                "percolation_size", "dense_cluster_size",
+                "dense_cluster_size",
             ]
         )
         for k in range(result.time.size):
@@ -1393,7 +1378,6 @@ def write_tddb_csv(result: TDDBResult, path: str) -> None:
                     "{:.6f}".format(result.transport_temperature[k]),
                     "{:.6f}".format(result.effective_temperature[k]),
                     "{:.6f}".format(result.peak_temperature[k]),
-                    str(int(result.percolation_size[k])),
                     str(int(result.dense_cluster_size[k])),
                 ]
             )

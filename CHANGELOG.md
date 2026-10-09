@@ -9,6 +9,17 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。实测数据与方案对�
 
 #### TDDB 阶段
 
+- **击穿判据改为电流判据：J 超过 10 A/cm² 即击穿**（ADR-047；ADR-035 的 d_c 与限流、ADR-036 第 3、4 条 superseded）。
+  删去渗流判据、`tddb.percolation_distance_nm`、`TDDBResult.percolation_size` 与 CSV 的 `percolation_size` 列；
+  `compliance_current_density_A_cm2` 更名为 `breakdown_current_density_A_cm2`（`zro2_tddb.yaml` 取 10），电流密度超过它的
+  第一条记录给出 t_BD（`stop_reason = "breakdown"`，不再有 `"compliance"`）；`tddb.percolation_clusters` 改为
+  `distance_clusters`，只给致密团簇标志用；CLI 摘要与应力图的击穿标记同步。
+  **为什么**：用户指定，取消渗流判据，只保留电流判据。
+  **回看已有轨迹**（判据只决定停在哪条记录）：ADR-046 主轨迹（3.0 V，seed 1–4）在第 452–597 个空位、t = 11.4–20.1 s 击穿，
+  落在生成自加速之后的陡升段；电荷守恒 what-if 在 t = 15.4 s、41.6 s 击穿。
+  **测试**：渗流与限流的 3 个测试换成电流判据测试（停在第一条超过阈值的记录、之前的记录逐位相同，J(0) 超过时停在 t = 0，
+  等于阈值不算击穿）与几何团簇测试。`pytest tests/ -v` 303 passed。
+
 - **`examples/zro2_tddb.yaml` 的恒压应力默认值从 3.0 V 改为 3.6 V**（`simulation.voltage_V`，8 nm 膜平均场 0.45 V/nm）。
   **为什么**：用户指定。ADR-045/046 的 seed 1–4 结果都是 3.0 V 下的数据。`pytest tests/test_config_io.py` 通过（23 项）。
 

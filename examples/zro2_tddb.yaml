@@ -113,10 +113,8 @@ tddb:
     nx: 16
     ny: 16
     nz: 70
-  # 击穿判据（6.3，ADR-036）：间距 < d_c 的空位连边，某个连通分量同时触到两个电极即击穿
-  percolation_distance_nm: 0.9
-  # 限流值：电流密度达到它即停，是击穿的第二停止条件（ADR-036）
-  compliance_current_density_A_cm2: 1.0e4
+  # 击穿判据（6.3，ADR-047）：电流密度超过它即判击穿，这一刻就是 t_BD
+  breakdown_current_density_A_cm2: 10.0
   # k_TH：ZrO₂ 热导率（式 T14，ADR-040）。删掉这一项即等温运行
   thermal_conductivity_W_mK: 2.0
   # 未击穿时按生成空位数或应力时间上限停止（机时上限）

@@ -104,8 +104,8 @@ def test_tddb_section_is_optional_and_converted():
     """tddb 段缺省为 None（纯漏电流仿真）；三个能量从 eV 换算成 J、必须为正，p₀ 从 e·Å
     换算成 C·m、必须 ≥ 0，P_bb 宏观场的平均窗口从 nm 换算成 m、必须 ≥ 0（ADR-043），
     N_T 从 cm⁻³ 换算成 m⁻³、必须 ≥ 0，生成网格与空位数上限是正整数，
-    应力时间上限必须为正，d_c 从 nm 换算成 m、限流值从 A/cm² 换算成 A/m²，都必须为正，以上各项
-    都必须给出；k_TH 可省略（等温），给出时必须为正（ADR-024/028/033/036）。"""
+    应力时间上限必须为正，击穿电流密度从 A/cm² 换算成 A/m²、必须为正，以上各项都必须给出；
+    k_TH 可省略（等温），给出时必须为正（ADR-024/028/033/036/047）。"""
     raw = _base_dict()
     assert config_from_dict(raw).tddb is None
     section = {
@@ -118,8 +118,7 @@ def test_tddb_section_is_optional_and_converted():
         "generation_grid": {"nx": 16, "ny": 12, "nz": 70},
         "max_generated_vacancies": 300,
         "stop_time_s": 1.0e4,
-        "percolation_distance_nm": 0.9,
-        "compliance_current_density_A_cm2": 1.0e4,
+        "breakdown_current_density_A_cm2": 10.0,
     }
     raw["tddb"] = dict(section)
     tddb = config_from_dict(raw).tddb
@@ -132,8 +131,7 @@ def test_tddb_section_is_optional_and_converted():
     assert tddb.generation_grid == (16, 12, 70)
     assert tddb.max_generated_vacancies == 300
     assert tddb.stop_time == pytest.approx(1.0e4)
-    assert tddb.percolation_distance == pytest.approx(0.9e-9)
-    assert tddb.compliance_current_density == pytest.approx(1.0e8)
+    assert tddb.breakdown_current_density == pytest.approx(1.0e5)
     assert tddb.thermal_conductivity is None  # 省略 k_TH：等温
     raw["tddb"] = dict(section, thermal_conductivity_W_mK=1.5)
     assert config_from_dict(raw).tddb.thermal_conductivity == 1.5
@@ -158,8 +156,8 @@ def test_tddb_section_is_optional_and_converted():
         ("max_generated_vacancies", 0),
         ("max_generated_vacancies", 2.5),
         ("stop_time_s", 0.0),
-        ("percolation_distance_nm", 0.0),
-        ("compliance_current_density_A_cm2", -1.0),
+        ("breakdown_current_density_A_cm2", 0.0),
+        ("breakdown_current_density_A_cm2", -1.0),
     ):
         raw["tddb"] = dict(section, **{key: bad})
         with pytest.raises(ValueError, match=key):
@@ -388,7 +386,7 @@ def test_tddb_example_matches_leakage_reference_preset():
     只把侧向尺寸改成 20×20 nm 小盒子；横向网格按团簇库仑能收敛取 hx = hy = 0.25 nm、hz 不变
     （ADR-032）；前驱的 E_t1 与 O 空位预设相同（ADR-028）；E_rel1 与材料的 huang_rhys 各自取值
     （ADR-030）；生成单元在 z 方向与泊松网格同步长（ADR-033）；E_A = 0.95 eV、p₀ = 1 eÅ、
-    N_T = 3×10¹⁸ cm⁻³（ADR-035），k_TH = 2 W/(m·K)（ADR-040），d_c = 0.9 nm（ADR-036）。"""
+    N_T = 3×10¹⁸ cm⁻³（ADR-035），k_TH = 2 W/(m·K)（ADR-040），击穿电流密度 10 A/cm²（ADR-047）。"""
     root = pathlib.Path(__file__).resolve().parents[1]
     tddb = load_config(str(root / "examples" / "zro2_tddb.yaml"))
     ref = load_config(str(root / "examples" / "single_run.yaml"))
@@ -422,8 +420,7 @@ def test_tddb_example_matches_leakage_reference_preset():
     assert tddb.tddb.precursor_concentration == pytest.approx(tddb.defects.concentration)
     assert tddb.tddb.precursor_concentration == pytest.approx(3.0e18 * constants.centi ** -3)
     assert tddb.tddb.thermal_conductivity == pytest.approx(2.0)
-    assert tddb.tddb.percolation_distance == pytest.approx(0.9e-9)
-    assert tddb.tddb.compliance_current_density > 0.0
+    assert tddb.tddb.breakdown_current_density == pytest.approx(10.0 * constants.centi ** -2)  # 10 A/cm²（ADR-047）
     hz = tddb.device.Lz / grid.nz
     window = tddb.device.Lz - 2.0 * tddb.defects.min_separation
     assert window / tddb.tddb.generation_grid[2] == pytest.approx(hz)

@@ -366,7 +366,7 @@ def test_stress_transient_marks_breakdown_and_shows_temperature():
     assert marker.get_xdata().tolist() == [2.0]
     assert np.allclose(marker.get_ydata(), TRANSIENT_DENSITY[-1] * PER_CM2)
     labels = [text.get_text() for text in top.get_legend().get_texts()]
-    assert labels[-1] == "breakdown (percolation), t = 2 s"
+    assert labels[-1] == "breakdown, t = 2 s"
 
     background, steps = bottom.lines
     assert np.allclose(background.get_ydata(), TRANSIENT_TEMPERATURE[0] - constants.zero_Celsius)
@@ -375,13 +375,11 @@ def test_stress_transient_marks_breakdown_and_shows_temperature():
     assert bottom.get_xscale() == "log"
 
 
-def test_stress_transient_marks_only_breakdown_and_compliance():
-    """限流停止也画终点标记；达到空位数或时间上限不画。"""
-    compliance = plot_stress_transient(TRANSIENT_TIME, TRANSIENT_DENSITY, TRANSIENT_TEMPERATURE, 2.0, stop="compliance")
-    assert len(compliance.axes[0].lines) == 3
-    assert compliance.axes[0].get_legend().get_texts()[-1].get_text() == "compliance reached, t = 2 s"
-    capped = plot_stress_transient(TRANSIENT_TIME, TRANSIENT_DENSITY, TRANSIENT_TEMPERATURE, 2.0, stop="max_generated")
-    assert len(capped.axes[0].lines) == 2
+def test_stress_transient_marks_only_breakdown():
+    """只有击穿画终点标记；达到空位数或时间上限不画。"""
+    for stop in ("max_generated", "stop_time"):
+        capped = plot_stress_transient(TRANSIENT_TIME, TRANSIENT_DENSITY, TRANSIENT_TEMPERATURE, 2.0, stop=stop)
+        assert len(capped.axes[0].lines) == 2
 
 
 def test_iv_curves_one_curve_per_temperature():
