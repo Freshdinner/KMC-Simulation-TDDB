@@ -1,0 +1,37 @@
+code c3266dc7acea48c29e613a9c6e8310caee5b15ee (src modified) | seed 1 | V 3.6 V | T 298.15 K | breakdown 10.0 A/cm2 | k_TH 2.0 W/(m K) | O_i charge -1.602e-19 C
+   0 t=0.0000e+00 J=2.3576e-02 G=4.007e+02 (cells 4.005e+02 traps 1.493e-01) empty=0.0 it=5 newton=0 res=1.1e-12 split=0 top=0.00 dT=0.00e+00 birth=none z=nan wall=11 ws=205/692 MB
+   1 t=1.1086e-03 J=1.1344e+00 G=4.024e+02 (cells 3.921e+02 traps 1.023e+01) empty=0.6 it=6 newton=0 res=4.6e-12 split=0 top=1.47 dT=3.38e-08 birth=cell z=1.472 wall=24 ws=205/832 MB
+   2 t=5.8584e-03 J=1.1987e+00 G=4.072e+02 (cells 3.738e+02 traps 3.338e+01) empty=0.6 it=6 newton=0 res=8.5e-14 split=0 top=1.47 dT=3.32e-08 birth=cell z=1.217 wall=36 ws=205/833 MB
+   3 t=6.2424e-03 J=1.2030e+00 G=4.067e+02 (cells 3.733e+02 traps 3.338e+01) empty=1.6 it=6 newton=0 res=1.4e-11 split=0 top=1.47 dT=3.32e-08 birth=cell z=1.030 wall=47 ws=205/833 MB
+   4 t=6.6841e-03 J=1.2083e+00 G=4.007e+02 (cells 3.598e+02 traps 4.094e+01) empty=1.8 it=7 newton=0 res=1.4e-14 split=0 top=1.47 dT=3.28e-08 birth=cell z=0.983 wall=60 ws=205/833 MB
+   5 t=6.9618e-03 J=1.2099e+00 G=3.998e+02 (cells 3.588e+02 traps 4.095e+01) empty=2.8 it=7 newton=0 res=9.2e-12 split=0 top=1.47 dT=3.28e-08 birth=cell z=0.872 wall=72 ws=206/833 MB
+   6 t=7.9998e-03 J=1.2100e+00 G=3.994e+02 (cells 3.585e+02 traps 4.095e+01) empty=3.8 it=7 newton=0 res=1.3e-11 split=0 top=1.47 dT=3.28e-08 birth=cell z=0.786 wall=84 ws=206/833 MB
+   7 t=1.0454e-02 J=1.2183e+00 G=3.783e+02 (cells 3.246e+02 traps 5.377e+01) empty=3.8 it=7 newton=0 res=1.6e-12 split=0 top=1.47 dT=1.74e-07 birth=cell z=1.235 wall=95 ws=206/833 MB
+   8 t=1.6388e-02 J=1.4411e+00 G=3.781e+02 (cells 3.236e+02 traps 5.451e+01) empty=4.8 it=7 newton=0 res=6.5e-11 split=0 top=1.47 dT=1.74e-07 birth=cell z=1.167 wall=108 ws=206/833 MB
+   9 t=1.6945e-02 J=1.4455e+00 G=3.777e+02 (cells 3.232e+02 traps 5.451e+01) empty=5.8 it=7 newton=0 res=1.2e-11 split=0 top=1.47 dT=1.74e-07 birth=cell z=1.000 wall=121 ws=206/833 MB
+  10 t=2.0534e-02 J=1.4650e+00 G=3.772e+02 (cells 3.227e+02 traps 5.452e+01) empty=6.8 it=8 newton=0 res=7.9e-13 split=0 top=1.47 dT=1.74e-07 birth=cell z=1.141 wall=133 ws=206/833 MB
+  11 t=2.1948e-02 J=1.5370e+00 G=3.766e+02 (cells 3.221e+02 traps 5.453e+01) empty=7.8 it=8 newton=0 res=1.4e-12 split=0 top=1.47 dT=1.74e-07 birth=cell z=1.333 wall=146 ws=206/833 MB
+  12 t=2.5292e-02 J=1.5370e+00 G=3.764e+02 (cells 3.219e+02 traps 5.453e+01) empty=8.8 it=7 newton=0 res=4.5e-11 split=0 top=1.47 dT=1.74e-07 birth=cell z=0.598 wall=157 ws=206/833 MB
+  13 t=2.6663e-02 J=1.7217e+00 G=3.740e+02 (cells 3.076e+02 traps 6.636e+01) empty=8.9 it=7 newton=0 res=2.8e-11 split=0 top=1.71 dT=4.99e-06 birth=trap z=1.706 wall=170 ws=206/834 MB
+  14 t=3.2063e-02 J=1.7850e+00 G=3.735e+02 (cells 3.072e+02 traps 6.637e+01) empty=9.9 it=8 newton=0 res=5.3e-12 split=0 top=1.71 dT=4.99e-06 birth=cell z=1.275 wall=183 ws=206/834 MB
+  15 t=3.4505e-02 J=1.8119e+00 G=3.742e+02 (cells 2.939e+02 traps 8.034e+01) empty=9.9 it=7 newton=0 res=1.6e-11 split=0 top=1.71 dT=4.86e-06 birth=cell z=1.078 wall=194 ws=207/834 MB
+  16 t=3.4967e-02 J=1.8122e+00 G=3.727e+02 (cells 2.924e+02 traps 8.034e+01) empty=10.9 it=7 newton=0 res=1.0e-11 split=0 top=1.71 dT=4.86e-06 birth=cell z=0.772 wall=207 ws=207/834 MB
+  17 t=3.5130e-02 J=1.8123e+00 G=3.727e+02 (cells 2.923e+02 traps 8.035e+01) empty=11.9 it=7 newton=0 res=1.9e-11 split=0 top=1.71 dT=4.86e-06 birth=cell z=0.742 wall=220 ws=207/834 MB
+  18 t=3.6970e-02 J=1.8005e+00 G=3.672e+02 (cells 2.785e+02 traps 8.868e+01) empty=11.9 it=6 newton=0 res=1.5e-11 split=0 top=1.71 dT=4.95e-06 birth=cell z=1.226 wall=232 ws=207/834 MB
+  19 t=3.7242e-02 J=1.8015e+00 G=3.667e+02 (cells 2.781e+02 traps 8.868e+01) empty=12.9 it=7 newton=0 res=5.3e-11 split=0 top=1.71 dT=4.95e-06 birth=cell z=0.930 wall=244 ws=207/834 MB
+  20 t=3.8500e-02 J=1.8017e+00 G=3.664e+02 (cells 2.777e+02 traps 8.868e+01) empty=13.9 it=7 newton=0 res=2.0e-11 split=0 top=1.71 dT=4.95e-06 birth=cell z=0.749 wall=257 ws=207/834 MB
+  21 t=4.2601e-02 J=1.9381e+00 G=3.661e+02 (cells 2.774e+02 traps 8.870e+01) empty=14.9 it=8 newton=0 res=8.9e-14 split=0 top=1.71 dT=4.95e-06 birth=cell z=1.350 wall=269 ws=207/834 MB
+  22 t=4.6005e-02 J=2.8225e+00 G=3.638e+02 (cells 2.800e+02 traps 8.380e+01) empty=16.1 it=7 newton=0 res=3.3e-12 split=0 top=1.71 dT=3.73e-05 birth=trap z=1.632 wall=278 ws=207/835 MB
+  23 t=4.7754e-02 J=3.0013e+00 G=3.636e+02 (cells 2.793e+02 traps 8.430e+01) empty=17.1 it=7 newton=0 res=2.3e-11 split=0 top=1.71 dT=3.73e-05 birth=cell z=1.169 wall=285 ws=208/835 MB
+  24 t=5.2894e-02 J=3.0589e+00 G=3.631e+02 (cells 2.788e+02 traps 8.434e+01) empty=18.1 it=7 newton=0 res=1.6e-11 split=0 top=1.71 dT=3.73e-05 birth=cell z=1.129 wall=293 ws=208/835 MB
+  25 t=5.7441e-02 J=3.0598e+00 G=3.627e+02 (cells 2.784e+02 traps 8.434e+01) empty=19.1 it=7 newton=0 res=1.9e-12 split=0 top=1.71 dT=3.73e-05 birth=cell z=1.196 wall=301 ws=208/835 MB
+  26 t=5.7615e-02 J=3.0621e+00 G=3.622e+02 (cells 2.779e+02 traps 8.435e+01) empty=20.1 it=7 newton=0 res=8.5e-12 split=0 top=1.71 dT=3.73e-05 birth=cell z=0.911 wall=309 ws=208/835 MB
+  27 t=6.1049e-02 J=3.3498e+00 G=3.630e+02 (cells 2.733e+02 traps 8.967e+01) empty=20.8 it=7 newton=0 res=1.3e-11 split=0 top=1.71 dT=3.73e-05 birth=cell z=1.163 wall=317 ws=208/835 MB
+  28 t=6.6162e-02 J=3.3544e+00 G=3.623e+02 (cells 2.726e+02 traps 8.972e+01) empty=21.8 it=7 newton=0 res=1.4e-11 split=0 top=1.71 dT=3.73e-05 birth=cell z=0.925 wall=325 ws=208/835 MB
+  29 t=6.9335e-02 J=3.3544e+00 G=3.622e+02 (cells 2.724e+02 traps 8.972e+01) empty=22.8 it=7 newton=0 res=2.9e-11 split=0 top=1.71 dT=3.73e-05 birth=cell z=0.611 wall=333 ws=209/835 MB
+  30 t=7.4923e-02 J=3.3545e+00 G=3.616e+02 (cells 2.719e+02 traps 8.972e+01) empty=23.8 it=7 newton=0 res=1.6e-11 split=0 top=1.71 dT=3.73e-05 birth=cell z=1.239 wall=340 ws=209/835 MB
+  31 t=8.0862e-02 J=3.4004e+00 G=3.646e+02 (cells 2.614e+02 traps 1.032e+02) empty=23.8 it=7 newton=0 res=3.4e-12 split=0 top=1.71 dT=3.70e-05 birth=cell z=1.165 wall=349 ws=209/835 MB
+  32 t=8.1520e-02 J=7.9757e+00 G=3.644e+02 (cells 2.621e+02 traps 1.023e+02) empty=24.9 it=7 newton=0 res=9.4e-11 split=0 top=1.75 dT=3.69e-05 birth=trap z=1.749 wall=357 ws=209/836 MB
+  33 t=8.1619e-02 J=8.9087e+00 G=3.756e+02 (cells 2.543e+02 traps 1.213e+02) empty=25.2 it=7 newton=0 res=3.6e-12 split=0 top=1.75 dT=3.66e-05 birth=cell z=1.367 wall=365 ws=210/836 MB
+  34 t=8.3209e-02 J=1.0094e+01 G=3.758e+02 (cells 2.531e+02 traps 1.227e+02) empty=26.1 it=7 newton=0 res=6.2e-12 split=0 top=1.75 dT=3.67e-05 birth=cell z=1.346 wall=373 ws=210/836 MB
+done breakdown end_time=8.320930e-02 breakdown_time=0.08320929960767641 wall=373

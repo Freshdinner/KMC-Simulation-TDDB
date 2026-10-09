@@ -1,0 +1,38 @@
+== seed 1: 35 records, t_BD = 0.0832 s at n = 34
+  ΣG: min 362 max 407 s^-1, first 401 last 376; mean field converged 35/35, newton 0 records, max it 8
+  J: 0.024 1.1 1.2 1.2 1.2 1.2 1.2 1.2 1.4 1.4 1.5 1.5 1.5 1.7 1.8 1.8 1.8 1.8 1.8 1.8 1.8 1.9 2.8 3 3.1 3.1 3.1 3.3 3.4 3.4 3.4 3.4 8 8.9 10
+  TAT share at end 1.00, PF 0.00; generated top z 1.75 nm, median z 1.16 nm; trap-term births 3/34
+  fit from n=1 (t=0.00111 s): n = 0.27, R² = 0.616
+  fit from n=2 (t=0.00586 s): n = 0.53, R² = 0.751
+  fit from n=3 (t=0.00624 s): n = 0.54, R² = 0.745
+  fit from n=5 (t=0.00696 s): n = 0.57, R² = 0.757
+== seed 2: 23 records, t_BD = 0.0631 s at n = 22
+  ΣG: min 362 max 411 s^-1, first 407 last 411; mean field converged 23/23, newton 0 records, max it 7
+  J: 0.087 0.096 0.13 0.13 0.13 0.13 0.13 0.27 2.5 2.5 2.6 2.6 2.8 2.8 2.8 2.8 2.8 6.4 7.1 7.1 7.1 7.1 18
+  TAT share at end 1.00, PF 0.00; generated top z 1.74 nm, median z 1.14 nm; trap-term births 3/22
+  fit from n=1 (t=0.00028 s): n = 0.51, R² = 0.399
+  fit from n=2 (t=0.00606 s): n = 1.93, R² = 0.663
+  fit from n=3 (t=0.00739 s): n = 2.16, R² = 0.661
+  fit from n=5 (t=0.0181 s): n = 4.47, R² = 0.858
+== seed 3: 25 records, t_BD = 0.0651 s at n = 24
+  ΣG: min 369 max 407 s^-1, first 391 last 407; mean field converged 25/25, newton 0 records, max it 8
+  J: 5e-05 0.15 0.3 0.44 0.59 0.72 1.4 1.6 1.7 1.6 1.5 2 2 2.4 4.1 4.1 4.4 4.4 4.4 4.5 4.5 4.5 4.5 4.5 11
+  TAT share at end 1.00, PF 0.00; generated top z 1.61 nm, median z 1.17 nm; trap-term births 1/24
+  fit from n=1 (t=0.00107 s): n = 0.96, R² = 0.940
+  fit from n=2 (t=0.00344 s): n = 1.09, R² = 0.936
+  fit from n=3 (t=0.00577 s): n = 1.14, R² = 0.913
+  fit from n=5 (t=0.0104 s): n = 1.20, R² = 0.870
+== seed 4: 22 records, t_BD = 0.0397 s at n = 21
+  ΣG: min 372 max 442 s^-1, first 377 last 392; mean field converged 22/22, newton 0 records, max it 10
+  J: 2.2 2.2 2.3 2.4 2.4 2.5 2.5 2.8 2.9 2.9 4.2 4.2 4.5 4.5 4.5 6.4 6.3 5.8 5.7 7.9 7.9 13
+  TAT share at end 1.00, PF 0.00; generated top z 2.43 nm, median z 1.22 nm; trap-term births 5/21
+  fit from n=1 (t=0.00439 s): n = 0.45, R² = 0.493
+  fit from n=2 (t=0.0052 s): n = 0.52, R² = 0.516
+  fit from n=3 (t=0.00527 s): n = 0.52, R² = 0.512
+  fit from n=5 (t=0.0144 s): n = 1.45, R² = 0.771
+== J vs N (generated vacancies, N >= 1)
+  seed 1: J ∝ N^0.51, R² = 0.583; J(N=1) 1.13, J(N_BD) 10.1 A/cm²
+  seed 2: J ∝ N^1.89, R² = 0.819; J(N=1) 0.0959, J(N_BD) 18.4 A/cm²
+  seed 3: J ∝ N^1.21, R² = 0.953; J(N=1) 0.154, J(N_BD) 11.2 A/cm²
+  seed 4: J ∝ N^0.51, R² = 0.708; J(N=1) 2.24, J(N_BD) 13 A/cm²
+  4-seed geometric-mean J(t), t = 1e-3 … 0.0396 s: n = 0.54, R² = 0.633
