@@ -1,0 +1,5 @@
+50x50 nm: grid GridConfig(nx=200, ny=200, nz=80) | generation grid (40, 40, 70)
+  0 t=0.0000e+00 s J=5.4081e-01 A/cm2 | step wall 57.9 s | ws 977/1196 MB
+  1 t=3.9167e-04 s J=5.3967e-01 A/cm2 | step wall 41.6 s | ws 980/1197 MB
+  2 t=5.5773e-04 s J=6.6157e-01 A/cm2 | step wall 41.4 s | ws 979/1197 MB
+done max_generated | peak ws 1197 MB

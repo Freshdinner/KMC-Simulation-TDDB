@@ -9,6 +9,14 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。实测数据与方案对�
 
 #### TDDB 阶段
 
+- **电极项求积按 z 层分块，建新事件表前释放旧表**（ADR-050，§8.7）。`ElectrodeCaptureGeneration` 的整段积分逐层求、直接写进权重
+  数组，`_excluded` 只返回被禁区球挡住的段；`run_tddb` 抽完生成事件即释放这一步的事件表。
+  **为什么**：评估加大横向盒子缩小 t = 0 电流散布（σ(log₁₀J) 20 / 30 / 40 / 50 nm 为 1.18 / 0.68 / 0.39 / 0.35，`results/10.09/big_box/`）
+  时，外层每步峰值内存与面积成正比，50 nm 外推约 4.8 GB，超过本机空闲内存。剖析定位到电极项整段积分的临时数组（30 nm 时 +1.1 GB）
+  与新旧事件表同时在内存里（+0.31 GB）。
+  **结果**：与改动前逐位相同（6 个状态的事件表、落点与两条 10 个空位的轨迹，`results/10.09/mem_chunk/`）；峰值工作集 20 nm 831 → 245 MB、
+  30 nm 1802 → 472 MB，50 nm 实测 1.20 GB；每步耗时不变。`pytest tests/ -v` 308 passed。
+
 - **`examples/zro2_tddb.yaml` 的缺陷能级改回高斯分布**（均值 1.15 eV、σ_E = 0.15 eV；ADR-049 superseded）。配置一致性测试恢复为
   与 `single_run.yaml` 缺陷段逐项相同，README 与 PROJECT_CONTEXT_TDDB.md §1/§3 同步。保留 ADR-049 时顺带的出生电荷注释修正与 what-if
   回归测试的改法。**为什么**：用户指定。按用户要求未跑 pytest。

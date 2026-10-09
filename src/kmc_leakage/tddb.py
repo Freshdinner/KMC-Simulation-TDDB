@@ -710,20 +710,26 @@ class ElectrodeCaptureGeneration:
         if tddb.precursor_concentration == 0.0:
             return
         self._log_rate, self._barrier = self._nodes(inner, tddb, phi, bond_field, temperature_field)
-        whole = _kinked_log_linear_integral(
-            self._log_rate[:-1].ravel(),
-            self._log_rate[1:].ravel(),
-            (self._barrier[:-1].ravel(),),
-            (self._barrier[1:].ravel(),),
-            np.zeros(n_layers * n_columns),
-            np.ones(n_layers * n_columns),
-            self._dz,
-        )
+        # 整段积分逐层求、直接写进权重数组：临时数组只有一层的列数长，与全部段等长的只有常驻的权重（ADR-050）
+        weights = self._weights.reshape(n_layers, n_columns)
+        start, stop = np.zeros(n_columns), np.ones(n_columns)
+        for k in range(n_layers):
+            weights[k] = _kinked_log_linear_integral(
+                self._log_rate[k],
+                self._log_rate[k + 1],
+                (self._barrier[k],),
+                (self._barrier[k + 1],),
+                start,
+                stop,
+                self._dz,
+            )
         self._blocked_column, self._blocked_lo, self._blocked_hi = self._blocked_intervals()
-        excluded, covered = self._excluded(n_layers, n_columns)
-        weights = np.where(covered >= 1.0 - 1e-9, 0.0, np.maximum(whole - excluded, 0.0))
+        segment, excluded, covered = self._excluded(n_layers, n_columns)
+        self._weights[segment] = np.where(
+            covered >= 1.0 - 1e-9, 0.0, np.maximum(self._weights[segment] - excluded, 0.0)
+        )
         # N_T 只是前置因子、不进积分：落点与 N_T 无关，"N_T 只改时间标尺"逐位成立
-        self._weights = tddb.precursor_concentration * np.prod(self._column_size) * weights
+        self._weights *= tddb.precursor_concentration * np.prod(self._column_size)
         self.rates = np.bincount(self._cell_of, self._weights, minlength=len(cells))
 
     def _cell_index(self, cells: GenerationCells, n_layers: int) -> np.ndarray:
@@ -872,13 +878,12 @@ class ElectrodeCaptureGeneration:
         keep = hi > lo
         return column[keep], lo[keep], hi[keep]
 
-    def _excluded(self, n_layers: int, n_columns: int) -> Tuple[np.ndarray, np.ndarray]:
-        """每段 (z 区间, 列) 里被挡住部分的积分与它占该段的长度比例，形状展平成 (层 × 列,)。"""
-        excluded = np.zeros(n_layers * n_columns)
-        covered = np.zeros(n_layers * n_columns)
+    def _excluded(self, n_layers: int, n_columns: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """禁区球挡住的段：(段的展平编号 层 × 列数 + 列, 各段被挡住部分的积分, 被挡住的长度占该段的比例)。
+        只列出被挡住的段，同一段的几个区间按出现顺序累加。"""
         column, lo, hi = self._blocked_column, self._blocked_lo, self._blocked_hi
         if column.size == 0:
-            return excluded, covered
+            return np.zeros(0, dtype=int), np.zeros(0), np.zeros(0)
         z0 = self._levels[0]
         k0 = np.clip(np.floor((lo - z0) / self._dz).astype(int), 0, n_layers - 1)
         k1 = np.clip(np.floor((hi - z0) / self._dz).astype(int), 0, n_layers - 1)
@@ -898,10 +903,12 @@ class ElectrodeCaptureGeneration:
             t1,
             self._dz,
         )
-        flat = layer * n_columns + c
-        np.add.at(excluded, flat, cut)
-        np.add.at(covered, flat, t1 - t0)
-        return excluded, covered
+        segment, which = np.unique(layer * n_columns + c, return_inverse=True)
+        excluded = np.zeros(segment.size)
+        covered = np.zeros(segment.size)
+        np.add.at(excluded, which, cut)
+        np.add.at(covered, which, t1 - t0)
+        return segment, excluded, covered
 
     def _value(self, layer: int, column: int, t: np.ndarray) -> np.ndarray:
         """第 `layer` 段、第 `column` 列里分数位置 t 处的被积函数（与求积同一个插值模型）。"""
@@ -1243,6 +1250,8 @@ def run_tddb(
             end_time, stop_reason = time, "max_generated"
             break
         event = _draw_generation(rates, full, table, rng)
+        # 抽完事件这张表就不再用：先释放，下一步建新表时不与它同时占内存（ADR-050）
+        del table
         if event is None:
             end_time, stop_reason = tddb.stop_time, "no_generation"
             break

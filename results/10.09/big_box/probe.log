@@ -1,0 +1,4 @@
+20 nm: N=10 (expected 10) solver 0.0 s, sim 0.6 s, mf 0.0 s, J=0.0236 A/cm2, ws 59/110 MB
+20 nm: N=10 (expected 10) solver 0.0 s, sim 0.6 s, mf 0.0 s, J=0.0866 A/cm2, ws 59/111 MB
+50 nm: N=60 (expected 60) solver 0.0 s, sim 18.5 s, mf 0.0 s, J=0.541 A/cm2, ws 80/405 MB
+50 nm: N=60 (expected 60) solver 0.0 s, sim 18.2 s, mf 0.0 s, J=0.732 A/cm2, ws 80/405 MB

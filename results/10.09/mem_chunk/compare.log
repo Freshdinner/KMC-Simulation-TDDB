@@ -1,0 +1,47 @@
+tables   L20_s1_cell_rates            (17920,)     identical
+tables   L20_s1_weights               (4375000,)   identical
+tables   L20_s1_trap_rates            (10,)        identical
+tables   L20_s1_cell_samples          (60, 3)      identical
+tables   L20_s1_draws                 (20, 4)      identical
+tables   L20_s2_cell_rates            (17920,)     identical
+tables   L20_s2_weights               (4375000,)   identical
+tables   L20_s2_trap_rates            (10,)        identical
+tables   L20_s2_cell_samples          (60, 3)      identical
+tables   L20_s2_draws                 (20, 4)      identical
+tables   L20_s3_cell_rates            (17920,)     identical
+tables   L20_s3_weights               (4375000,)   identical
+tables   L20_s3_trap_rates            (10,)        identical
+tables   L20_s3_cell_samples          (60, 3)      identical
+tables   L20_s3_draws                 (20, 4)      identical
+tables   L20_s4_cell_rates            (17920,)     identical
+tables   L20_s4_weights               (4375000,)   identical
+tables   L20_s4_trap_rates            (10,)        identical
+tables   L20_s4_cell_samples          (60, 3)      identical
+tables   L20_s4_draws                 (20, 4)      identical
+tables   snap_s1_n25_cell_rates       (17920,)     identical
+tables   snap_s1_n25_weights          (4375000,)   identical
+tables   snap_s1_n25_trap_rates       (35,)        identical
+tables   snap_s1_n25_cell_samples     (60, 3)      identical
+tables   snap_s1_n25_draws            (20, 4)      identical
+tables   L30_s1_cell_rates            (40320,)     identical
+tables   L30_s1_weights               (9843750,)   identical
+tables   L30_s1_trap_rates            (22,)        identical
+tables   L30_s1_cell_samples          (60, 3)      identical
+tables   L30_s1_draws                 (20, 4)      identical
+traj_s1  positions                    (20, 3)      identical
+traj_s1  ED                           (20,)        identical
+traj_s1  birth_time                   (20,)        identical
+traj_s1  occupancy                    (20,)        identical
+traj_s1  time                         (11,)        identical
+traj_s1  current                      (11,)        identical
+traj_s1  generation_rate              (11,)        identical
+traj_s2  positions                    (20, 3)      identical
+traj_s2  ED                           (20,)        identical
+traj_s2  birth_time                   (20,)        identical
+traj_s2  occupancy                    (20,)        identical
+traj_s2  time                         (11,)        identical
+traj_s2  current                      (11,)        identical
+traj_s2  generation_rate              (11,)        identical
+traj_s1.csv identical
+traj_s2.csv identical
+all identical

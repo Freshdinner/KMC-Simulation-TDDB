@@ -1,0 +1,8 @@
+L20_s1: ΣG_cells 4.005368e+02  ΣG_traps 1.492542e-01  blocked columns 1230
+L20_s2: ΣG_cells 4.027677e+02  ΣG_traps 4.393696e+00  blocked columns 1226
+L20_s3: ΣG_cells 3.909890e+02  ΣG_traps 7.670410e-03  blocked columns 1229
+L20_s4: ΣG_cells 3.708373e+02  ΣG_traps 6.143574e+00  blocked columns 1227
+snap_s1_n25: ΣG_cells 2.783541e+02  ΣG_traps 8.434109e+01  blocked columns 4099
+L30_s1: ΣG_cells 8.495506e+02  ΣG_traps 4.958565e-02  blocked columns 2693
+trajectory seed 1: 11 records, stop max_generated
+trajectory seed 2: 11 records, stop max_generated
