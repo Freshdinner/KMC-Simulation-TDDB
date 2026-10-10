@@ -383,7 +383,7 @@ def test_example_configs_load():
 
 def test_tddb_example_matches_leakage_reference_preset():
     """zro2_tddb.yaml 的材料、缺陷、电极与默认盒子 single_run.yaml 逐项相同（材料名之外），
-    只把侧向尺寸改成 20×20 nm 小盒子；横向网格按团簇库仑能收敛取 hx = hy = 0.25 nm、hz 不变
+    盒子同为 50×50 nm（ADR-051）；横向网格按团簇库仑能收敛取 hx = hy = 0.25 nm、hz 不变
     （ADR-032）；前驱的 E_t1 与 O 空位预设相同（ADR-028）；E_rel1 与材料的 huang_rhys 各自取值
     （ADR-030）；生成单元在 z 方向与泊松网格同步长（ADR-033）；E_A = 0.95 eV、p₀ = 1 eÅ、
     N_T = 3×10¹⁸ cm⁻³（ADR-035），k_TH = 2 W/(m·K)（ADR-040），击穿电流密度 10 A/cm²（ADR-047）。"""
@@ -402,16 +402,16 @@ def test_tddb_example_matches_leakage_reference_preset():
     assert tddb.device.Lz == ref.device.Lz
     assert len(tddb.device.stack.layers) == 1
 
-    assert tddb.device.Lx == pytest.approx(20e-9)
-    assert tddb.device.Ly == pytest.approx(20e-9)
-    assert defect_count(tddb.device, tddb.defects) == 10
+    assert tddb.device.Lx == pytest.approx(50e-9)
+    assert tddb.device.Ly == pytest.approx(50e-9)
+    assert defect_count(tddb.device, tddb.defects) == 60
     grid, ref_grid = tddb.simulation.grid, ref.simulation.grid
     assert tddb.device.Lx / grid.nx == pytest.approx(0.25e-9)
     assert tddb.device.Ly / grid.ny == pytest.approx(0.25e-9)
     assert grid.nz == ref_grid.nz
     assert tddb.simulation.n_events == ref.simulation.n_events
 
-    assert len(tddb.seeds) == 30  # 小盒子的系综个数（ADR-026）
+    assert len(tddb.seeds) == 30  # 系综个数（ADR-026、ADR-051）
     assert tddb.tddb.activation_energy == pytest.approx(0.95 * EV)
     assert tddb.tddb.precursor_ionization_energy == pytest.approx(tddb.defects.level.ED)
     assert tddb.tddb.precursor_relaxation_energy == pytest.approx(1.0 * EV)

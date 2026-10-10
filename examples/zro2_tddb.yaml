@@ -5,9 +5,8 @@
 # generate_defects 按下面的 defects 段生成；应力生成的 O 空位与初始缺陷是同一物种，
 # 共用这一段（能级分布、S、m_di、施主型 charge_state_Z），不另设物种参数（第 1 节、6.7）。
 #
-# 与默认盒子（single_run.yaml，50×50×8 nm、60 个缺陷）的差别只在侧向尺寸及随之
-# 配套的网格与系综个数：TDDB 在 20×20 nm 小盒子里跑（6.3），
-# 20×20×8 nm、3×10^18 cm^-3 → 10 个初始缺陷（ADR-025/026）。
+# 盒子与默认盒子（single_run.yaml）相同：50×50×8 nm、3×10^18 cm^-3 → 60 个初始缺陷（6.3、ADR-051）；
+# 差别只在横向网格步长与系综个数。
 #
 # 初始缺陷集合下的稳态本底用 run / sweep / plot；TDDB 瞬态轨迹用
 # python -m kmc_leakage tddb --config examples/zro2_tddb.yaml --seed 1 --out it.csv --plot it.png
@@ -45,8 +44,8 @@ layers:
         decay_length_nm: 1.0
 
 device:
-  Lx_nm: 20.0
-  Ly_nm: 20.0
+  Lx_nm: 50.0
+  Ly_nm: 50.0
   barrier_height_eV: 1.74
 
 electrodes:
@@ -66,9 +65,9 @@ simulation:
   seed: 12345        # 只在没有 ensemble 段时生效，否则由 ensemble 随机抽取的种子逐个覆盖
   grid:
     # 横向 hx = hy = 0.25 nm、hz = 0.1 nm（ADR-032）：0.5–0.9 nm 间距空位对的库仑能与
-    # nx = 100 相差 ≤ 4%；原先跟默认盒子的 1.54 nm 步长只给出收敛值的 40–60%（6.5）
-    nx: 80
-    ny: 80
+    # hx = 0.2 nm 相差 ≤ 4%；原先跟默认盒子的 1.54 nm 步长只给出收敛值的 40–60%（6.5）
+    nx: 200
+    ny: 200
     nz: 80
 
 # 初始缺陷集合下的稳态本底，覆盖应力电压附近与高温两档。Phase 0 与默认盒子的对比
@@ -83,9 +82,8 @@ sweep:
     stop: 125.0
     step: 100.0
 
-# 小盒子里单个实现的电流散布大得多：实测 σ(log₁₀J) ≈ 0.9–1.4（默认盒子 0.28–0.58），
-# 一次实现不能代表器件。M = 30 在 3 V / 25 °C 给出约 27% 的相对标准误，精度与默认
-# 盒子 M = 5（约 34%）相当（ADR-026）
+# M = 30 原按 20×20 nm 小盒子的散布定（σ(log₁₀J) ≈ 0.9–1.4，ADR-026）；盒子改为 50×50 nm 后
+# 3.6 V 下 σ(log₁₀J) = 0.35（ADR-050），M = 30 保留给 I-t 系综平均与 t_BD 的 Weibull 拟合（ADR-051）
 ensemble:
   count: 30
 
@@ -107,11 +105,11 @@ tddb:
   # N_T：前驱位点浓度，体积生成率 N_T·R_1e·P_bb 的前置因子（6.1 模型 C）。与初始缺陷浓度相同
   # （ADR-035）；只改变时间标尺，不改变 I-t 的形状
   precursor_concentration_cm3: 3.0e18
-  # 生成单元网格：铺满 20×20 nm × z ∈ [0.5, 7.5] nm 的可采样窗口，外层 Gillespie 在单元表上
-  # 抽生成事件（6.1，ADR-033）
+  # 生成单元网格：铺满 50×50 nm × z ∈ [0.5, 7.5] nm 的可采样窗口（单元 1.25×1.25×0.1 nm），外层
+  # Gillespie 在单元表上抽生成事件（6.1，ADR-033）
   generation_grid:
-    nx: 16
-    ny: 16
+    nx: 40
+    ny: 40
     nz: 70
   # 击穿判据（6.3，ADR-047）：电流密度超过它即判击穿，这一刻就是 t_BD
   breakdown_current_density_A_cm2: 10.0

@@ -213,11 +213,14 @@ def _whatif_state():
     """ADR-046 what-if（O_i⁻ 与空位重合，seed 1、3.0 V，`zro2_tddb.yaml`）第 29 个空位出生后交给平均场的状态：
     39 个缺陷（10 个初始、29 个生成空位带 q_fix = −e）与热启动占据（`tests/data/whatif_s1_n29.npz`，按 ADR-048 的
     代码重放 what-if 轨迹得到，前 29 个出生位置与 what-if 相同）。what-if 的能级按当时的高斯分布抽样，数据里存了全部
-    缺陷的位置与能级，这里直接用，与 `zro2_tddb.yaml` 现在的能级设置（ADR-049 起取定值）无关。"""
+    缺陷的位置与能级，这里直接用。what-if 跑在 20×20 nm 盒子上，盒子与泊松网格固定为当时的 20×20 nm、nx = ny = 80，
+    与 `zro2_tddb.yaml` 现在的盒子（ADR-051 起 50×50 nm）无关。"""
     data = np.load(os.path.join(os.path.dirname(__file__), "data", "whatif_s1_n29.npz"))
     config = load_config(os.path.join(os.path.dirname(__file__), "..", "examples", "zro2_tddb.yaml"))
-    config = replace(config, simulation=replace(
-        config.simulation, voltage=3.0, seed=1, temperature=float(data["temperature"])))
+    config = replace(
+        config, device=replace(config.device, Lx=20e-9, Ly=20e-9),
+        simulation=replace(config.simulation, voltage=3.0, seed=1, temperature=float(data["temperature"]),
+                           grid=replace(config.simulation.grid, nx=80, ny=80)))
     n_initial = int(data["n_initial"])
     defects = layer_bulk_defects(config.device, 0, data["positions"], np.random.default_rng(1))
     defects = replace(

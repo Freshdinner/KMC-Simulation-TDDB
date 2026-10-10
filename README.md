@@ -58,7 +58,7 @@ python -m kmc_leakage plot --config examples/single_run.yaml --kind bands   --ou
 python -m kmc_leakage sweep --config examples/stack_t2_2nm.yaml --out t2_2nm.csv
 python -m kmc_leakage plot  --config examples/stack_t2_2nm.yaml --kind bands --out t2_2nm_bands.png
 
-# TDDB：ZrO₂ 单层、20×20×8 nm 小盒子（规格见 PROJECT_CONTEXT_TDDB.md）。run / sweep 给初始
+# TDDB：ZrO₂ 单层、50×50×8 nm 盒子（规格见 PROJECT_CONTEXT_TDDB.md）。run / sweep 给初始
 # 缺陷集合下的稳态本底；tddb 跑一条恒压应力下的 I-t 轨迹（热反馈 + 电流击穿判据，一个缺陷实现，
 # --seed 换实现），落轨迹 CSV 与 I-t（双对数）/ 温度演化图
 python -m kmc_leakage run   --config examples/zro2_tddb.yaml
@@ -503,14 +503,16 @@ ensemble:
 ### TDDB 配置 `examples/zro2_tddb.yaml`
 
 TDDB 阶段（规格见 `PROJECT_CONTEXT_TDDB.md`，决策记录见 `docs/adr/tddb-decisions.md`）的
-配置。材料（名为 `ZrO2`）、缺陷段、电极、接触势垒、层厚与 `single_run.yaml` 逐项相同，
-t=0 的初始缺陷按这份缺陷段生成，应力生成的 O 空位也用它。与默认盒子不同的只有三处：
+配置。材料（名为 `ZrO2`）、缺陷段、电极、接触势垒、层厚、侧向尺寸（50 × 50 nm，60 个初始缺陷）与
+`single_run.yaml` 逐项相同，t=0 的初始缺陷按这份缺陷段生成，应力生成的 O 空位也用它。与默认盒子不同的只有两处：
 
 | 项 | 取值 | 原因 |
 |---|---|---|
-| 侧向尺寸 | 20 × 20 nm（10 个初始缺陷） | 击穿需要的空位数随面积增长，TDDB 在小盒子里跑 |
-| `grid` | 80/80/80（hx = hy = 0.25 nm，hz = 0.1 nm） | 0.5–0.9 nm 间距空位对的库仑能与 nx = 100 相差 ≤ 3.6%，默认盒子的 1.56 nm 步长算低 30–57%；t=0 本底的系综均值变化 < 1%（ADR-032） |
-| `ensemble.count` | 30 | 小盒子单个实现的散布大得多（σ(log₁₀J) ≈ 0.9–1.4），M=30 的精度与默认盒子 M=5 相当（ADR-026） |
+| `grid` | 200/200/80（hx = hy = 0.25 nm，hz = 0.1 nm） | 0.5–0.9 nm 间距空位对的库仑能与 hx = 0.2 nm 相差 ≤ 3.6%，默认盒子的 1.56 nm 步长算低 30–57%；t=0 本底的系综均值变化 < 1%（ADR-032） |
+| `ensemble.count` | 30 | I-t 系综平均与 t_BD 的 Weibull 拟合用（Phase 5）；原按 20 × 20 nm 小盒子的散布定（ADR-026） |
+
+侧向尺寸原为 20 × 20 nm 小盒子（10 个初始缺陷）。小盒子里 t=0 电流几乎由一个贴阴极的缺陷承载，3.6 V 下
+σ(log₁₀J) = 1.18，50 × 50 nm 下 0.35（ADR-050），默认盒子因此改为 50 × 50 nm（ADR-051）。
 
 顶层 `tddb` 段放 TDDB 缺陷生成、热反馈与击穿判据参数，由 `io.py` 读成 `Config.tddb`（SI 单位），
 整段省略即纯漏电流仿真（`Config.tddb = None`）。字段在用到它的阶段逐个加入，现在有十一个，除 k_TH
@@ -524,7 +526,7 @@ tddb:
   dipole_moment_eA: 1.0                  # p₀：前驱有效偶极矩均值 [e·Å]（必须 ≥ 0，取 0 即关掉场加速）
   field_averaging_width_nm: 0.5          # P_bb 宏观场的 Gaussian 平均窗口 σ（必须 ≥ 0，取 0 即局域场，ADR-043）
   precursor_concentration_cm3: 3.0e18    # N_T：前驱浓度，体积生成率的前置因子（必须 ≥ 0，取 0 即关掉生成）
-  generation_grid: {nx: 16, ny: 16, nz: 70}  # 生成单元数，铺满 z ∈ [standoff, Lz−standoff]（正整数）
+  generation_grid: {nx: 40, ny: 40, nz: 70}  # 生成单元数，铺满 z ∈ [standoff, Lz−standoff]（正整数）
   breakdown_current_density_A_cm2: 10.0  # 击穿电流密度：电流密度超过它即判击穿（必须为正，ADR-047）
   thermal_conductivity_W_mK: 2.0         # k_TH：热导率（式 T14，必须为正）；省略即等温
   max_generated_vacancies: 3000          # 未击穿时生成空位数达到此值即停（机时上限）
@@ -580,7 +582,7 @@ again = solve_mean_field(sim, occupancy=result.occupancy)  # 热启动：外层�
 不动点在 ln p 上用 Anderson 混合求解，收敛判据是占据的相对残差 ≤ 1e-10（占据只有 1e-10 量级、
 经快跃迁供给邻居的陷阱也要收敛到位）；50 次内没收敛就改用牛顿法（有限差分 Jacobian + Broyden 更新 + 回溯线搜索，
 `result.newton_steps` 记步数，ADR-048）。膜体内致密的空位网络里 Anderson 会在不动点附近游走，牛顿法收敛，代价是每个
-Jacobian 求 N 次 F（N = 160 时约 1–2 min）。本配置（N=10）下 5–7 次迭代、约 0.01 s 收敛，同一实现
+Jacobian 求 N 次 F（N = 160 时约 1–2 min）。20 × 20 nm 盒子（N=10）下 5–7 次迭代、约 0.01 s 收敛，同一实现
 20000 事件的 KMC 要 30–50 s；与开快陷阱的长窗口 KMC 在 2–4 V、25/125 °C 六个工作点上系综均值一致
 到 5×10⁻⁵。浓度提高到 3×10¹⁹ cm⁻³（N=96）时 10–11 次、约 0.3 s，与长窗口 KMC 之比 0.997，在统计误差
 以内（对拍见 ADR-031，逐实现数据在 `results/9.29/tddb_phase2_mf_vs_kmc.csv`）。
@@ -619,13 +621,13 @@ fit, times = fit_transient(result)         # 按 log t 等间距取样后做双�
 ```
 
 N_T 取 0 即关掉生成，这时电流逐位等于同一实现的稳态平均场结果、保持到 `stop_time_s`（开热反馈也成立）。
-单进程每步约 9 s（缺陷少时）到 30–40 s（约 400 个缺陷），一条 400 个空位的轨迹约 2.2–2.8 h；峰值工作集约 0.25 GB，与横向面积
-成正比，50×50 nm 约 1.2 GB（ADR-050）。热反馈每步多约 10%。
+单进程峰值工作集约 1.2 GB、t = 0 附近每步约 41 s（ADR-050）。工作集与横向面积成正比：20 × 20 nm 盒子约 0.25 GB，每步约 9 s
+（缺陷少时）到 30–40 s（约 400 个缺陷），一条 400 个空位的轨迹约 2.2–2.8 h。热反馈每步多约 10%。
 
 **当前模型与参数下 I-t 不是双对数直线**（ADR-034、ADR-037、ADR-041、ADR-045–048）。ADR-048 之前生成反应每次丢掉一个 −e
 （O 间隙离子不带电）：阴极侧空态空位积累净正电荷，经 p₀·(2+κ)/3 放大后让生成在阴极侧自加速，3 V 下 ΣG 一直升到 10⁴–10⁵ s⁻¹，
 I-t 是"台阶 → 陡升"，击穿落在陡升段、84–99% 是阴极侧空位层的 PF 发射（ADR-046）。ADR-048 按电荷守恒处理（O_i⁻ 固定电荷）之后，
-默认工况 3.6 V / 25 °C 的 seed 1–4（`results/10.09/accept/`）：ΣG 不再自加速（全程 362–442 s⁻¹），平均场每条记录收敛，击穿时电流
+20 × 20 nm 盒子 3.6 V / 25 °C 的 seed 1–4（`results/10.09/accept/`）：ΣG 不再自加速（全程 362–442 s⁻¹），平均场每条记录收敛，击穿时电流
 全部是 TAT；但新空位仍在阴极侧（z 中位数 1.1–1.2 nm），第 21–34 个空位、t_BD = 0.040–0.083 s 即击穿（实验约 1000 s），单条 I-t
 仍是台阶状，从第一次生成起双对数拟合 n = 0.27–0.96、R² = 0.40–0.94。击穿前生成次数太少，t = 0 的 J 在种子之间就差 5 个数量级，
 单条轨迹看不出幂律；t_BD 的标定（N_T 只改时间标尺）与系综平均（Phase 5）待定。热反馈仍可忽略（升温 ≤ 2×10⁻³ K）。
@@ -633,10 +635,10 @@ Phase 3 的 15 条轨迹在 `results/9.30/tddb_phase3_*.csv`，ADR-037 的轨迹
 CSV / npz 在 `results/9.30/phase4_rerun/`，ADR-045 的逐步 CSV、快照、抽查与汇总图在 `results/10.03/rerun/`，ADR-046 的在
 `results/10.03/ext1000/`，ADR-048 的在 `results/10.09/`。
 
-这份配置的稳态本底与默认盒子一致：2–4 V、25/125 °C 六个工作点上，小盒子（M=128）与
+Phase 0 的 20 × 20 nm 小盒子与默认盒子的稳态本底一致：2–4 V、25/125 °C 六个工作点上，小盒子（M=128）与
 默认盒子（M=32）的系综均值都在合成标准误的 2 倍以内；3–4 V 下 TAT 占总电流 92% 以上。
-小盒子的单条轨迹之间可差 5–6 个数量级，结论只能看系综（完整对比表见 ADR-026，逐种子
-原始数据在 `results/9.29/tddb_phase0_box{20,50}nm.csv`）。
+小盒子的单条轨迹之间可差 5–6 个数量级（完整对比表见 ADR-026，逐种子原始数据在
+`results/9.29/tddb_phase0_box{20,50}nm.csv`）。
 
 ### 几个约定
 
@@ -875,7 +877,7 @@ src/kmc_leakage/
   visualization.py     缺陷分布、能带结构、I-V / I-T 曲线、TDDB 的 I-t 与温度演化（只返回 Figure）
   __main__.py          命令行入口
 tests/                 286 个测试
-examples/              single_run.yaml、iv_sweep.yaml、stack_t2_{0,2,4}nm.yaml（t₂ 结构对照）、stack_t2_2nm_custom.yaml（不对称自定义算例）、zro2_tddb.yaml（TDDB 起点，20×20×8 nm 小盒子）
+examples/              single_run.yaml、iv_sweep.yaml、stack_t2_{0,2,4}nm.yaml（t₂ 结构对照）、stack_t2_2nm_custom.yaml（不对称自定义算例）、zro2_tddb.yaml（TDDB 起点，50×50×8 nm 盒子）
 docs/                  物理规格（改 rates/ 或 electrostatics.py 前先读）
 ```
 
