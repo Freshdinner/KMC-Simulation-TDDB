@@ -1,0 +1,37 @@
+######## ADR-052 (discrete precursors)
+== seed 1: stop_time at t_end = 1e+07 s, 399 vacancies; J0 0.541, J_end 9.847 A/cm2; G first 10.4, last 2.57e-06 1/s
+  mean field converged 400/400, newton records 0; median step wall 6.0 s; generated z median 1.32 nm, top 4.09 nm
+  consumed precursors: E_A mean 1.280 eV (min 0.949, max 1.497); birth z median 1.32 nm; precursors left 1337 of 1747
+  I-t fit first birth         : n = 0.16, R² = 0.945; first half n = 0.21, second half n = 0.08
+  I-t fit [t_end/1e3, t_end]  : n = 0.07, R² = 0.977; first half n = 0.08, second half n = 0.06
+  I-t fit [1 s, t_end]        : n = 0.15, R² = 0.931; first half n = 0.23, second half n = 0.08
+  N(t) ∝ t^0.21 (R² = 0.898) from first birth
+  first 176 records identical to the 1e4 s run: True
+== seed 2: breakdown at t_end = 3.18e+04 s, 216 vacancies; J0 0.732, J_end 10.033 A/cm2; G first 61.1, last 0.00108 1/s
+  mean field converged 217/217, newton records 0; median step wall 5.0 s; generated z median 1.21 nm, top 3.36 nm
+  consumed precursors: E_A mean 1.246 eV (min 0.991, max 1.425); birth z median 1.21 nm; precursors left 1520 of 1747
+  I-t fit first birth         : n = 0.17, R² = 0.920; first half n = 0.08, second half n = 0.27
+  I-t fit [t_end/1e3, t_end]  : n = 0.27, R² = 0.979; first half n = 0.21, second half n = 0.32
+  I-t fit [1 s, t_end]        : n = 0.22, R² = 0.956; first half n = 0.14, second half n = 0.31
+  N(t) ∝ t^0.30 (R² = 0.974) from first birth
+  t_BD = 3.18e+04 s -> E_A mean for t_BD = 1000 s: 1.211 eV
+  first 174 records identical to the 1e4 s run: True
+== seed 3: breakdown at t_end = 4.874e+06 s, 379 vacancies; J0 0.462, J_end 10.202 A/cm2; G first 87.5, last 5.34e-06 1/s
+  mean field converged 380/380, newton records 0; median step wall 6.0 s; generated z median 1.27 nm, top 7.48 nm
+  consumed precursors: E_A mean 1.273 eV (min 1.001, max 1.536); birth z median 1.27 nm; precursors left 1359 of 1747
+  I-t fit first birth         : n = 0.19, R² = 0.959; first half n = 0.21, second half n = 0.13
+  I-t fit [t_end/1e3, t_end]  : n = 0.10, R² = 0.808; first half n = 0.19, second half n = 0.05
+  I-t fit [1 s, t_end]        : n = 0.18, R² = 0.938; first half n = 0.27, second half n = 0.12
+  N(t) ∝ t^0.21 (R² = 0.911) from first birth
+  t_BD = 4.874e+06 s -> E_A mean for t_BD = 1000 s: 1.082 eV
+  first 180 records identical to the 1e4 s run: True
+== seed 4: breakdown at t_end = 8.604e+05 s, 373 vacancies; J0 0.301, J_end 10.215 A/cm2; G first 28.9, last 3.56e-05 1/s
+  mean field converged 374/374, newton records 0; median step wall 5.0 s; generated z median 1.28 nm, top 3.35 nm
+  consumed precursors: E_A mean 1.273 eV (min 1.002, max 1.480); birth z median 1.28 nm; precursors left 1367 of 1749
+  I-t fit first birth         : n = 0.24, R² = 0.963; first half n = 0.27, second half n = 0.16
+  I-t fit [t_end/1e3, t_end]  : n = 0.14, R² = 0.926; first half n = 0.23, second half n = 0.08
+  I-t fit [1 s, t_end]        : n = 0.25, R² = 0.941; first half n = 0.36, second half n = 0.14
+  N(t) ∝ t^0.26 (R² = 0.923) from first birth
+  t_BD = 8.604e+05 s -> E_A mean for t_BD = 1000 s: 1.126 eV
+  first 202 records identical to the 1e4 s run: True
+wrote it_discrete_long.png

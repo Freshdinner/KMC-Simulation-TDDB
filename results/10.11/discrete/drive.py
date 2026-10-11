@@ -1,7 +1,10 @@
 """ADR-052 验证：离散前驱位点（N_T = 10²⁰ cm⁻³、E_A = 1.30 ± 0.10 eV）下 examples/zro2_tddb.yaml 默认工况
 （50×50 nm、3.6 V / 25 °C、开热反馈、击穿判据 J > 10 A/cm²）跑一条轨迹，边跑边写结果。
 
-usage: drive.py SEED
+usage: drive.py SEED [STOP_TIME_S OUTDIR]
+
+STOP_TIME_S 覆盖 `tddb.stop_time_s`，结果写到本目录下的 OUTDIR 子目录（缺省写在本目录）。P_bb 未饱和时 E_A 整体平移
+只把时刻乘 exp(ΔE/k_BT)，所以加长应力时间上限跑出来的击穿时刻可以直接换算成 t_BD = 1000 s 需要的 E_A 均值。
 
 由 `results/10.09/accept50/drive.py` 改写：生成事件换成前驱位点。不改 `tddb.run_tddb`，在 tddb 模块的命名空间里包一层
 它每步调用的函数，在 `progress` 回调里追加一行 CSV：
@@ -37,6 +40,10 @@ per_cm2 = constants.centi ** 2  # A/m² -> A/cm²
 seed = int(sys.argv[1])
 config = load_config(os.path.join(ROOT, "examples", "zro2_tddb.yaml"))
 config = replace(config, simulation=replace(config.simulation, seed=seed))
+if len(sys.argv) > 2:
+    config = replace(config, tddb=replace(config.tddb, stop_time=float(sys.argv[2])))
+    HERE = os.path.join(HERE, sys.argv[3])
+    os.makedirs(HERE, exist_ok=True)
 tddb = config.tddb
 ambient = config.simulation.temperature
 
