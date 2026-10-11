@@ -339,13 +339,16 @@ def _report_tddb(result: TDDBResult) -> None:
         "breakdown": "击穿（电流密度超过击穿电流密度），t_end 即 t_BD",
         "max_generated": "生成空位数达到上限",
         "stop_time": "应力时间达到上限",
-        "no_generation": "总生成率为 0（G = 0），电流保持初始值",
+        "no_generation": "总生成率为 0（前驱用完或 N_T = 0），电流保持最后一条记录的值",
     }
     typer.echo(
         "终止：{}，t_end = {:.4e} s，生成 {} 个空位（初始缺陷 {} 个）".format(
             reasons[result.stop_reason], result.end_time,
             int(result.n_generated[-1]), result.n_initial,
         )
+    )
+    typer.echo(
+        "  前驱位点：t = 0 有 {} 个，终态剩 {} 个".format(int(result.n_precursors[0]), int(result.n_precursors[-1]))
     )
     typer.echo("  J(t=0) = {:.4e} A/cm²   J(t_end) = {:.4e} A/cm²".format(density[0], density[-1]))
     dense_time = result.dense_cluster_time

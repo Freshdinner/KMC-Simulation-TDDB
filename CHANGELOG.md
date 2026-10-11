@@ -9,6 +9,20 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。实测数据与方案对�
 
 #### TDDB 阶段
 
+- **生成改为离散前驱位点：断键一次即用掉，E_A 在前驱之间按高斯分布**（ADR-052，§6.1，式 T1/T2/T4/T5）。t = 0 在可采样窗口里
+  均匀撒 round(N_T·V) 个前驱位点（`tddb.place_precursors`），每个位点抽 E_A,i = E_A + σ_A·ξ_i；每个位点一条事件
+  G_i = [两侧电极 R2 + R4 + Σ_j p_j·R7(j → i)]·P_bb(E_A,i)，在位点上直接求值（`tddb.generation_rates`）；抽中的位点原地变成新空位，
+  它与离新空位不到 min_separation 的位点删去。删去模型 C 的单元积分（`ElectrodeCaptureGeneration`，ADR-044/050）、源陷阱积分
+  （`TrapCaptureGeneration`，ADR-042）与配置项 `tddb.generation_grid`；新增配置项 `activation_energy_sigma_eV`，轨迹与 CSV 记录剩余
+  前驱位点数 `n_precursors`；`bond_break_probability` 等接受逐前驱的 E_A。`zro2_tddb.yaml` 改为 N_T = 10²⁰ cm⁻³、E_A = 1.30 ± 0.10 eV
+  （按 t = 0 生成速率谱粗估、让约 100 个空位落在 1000 s 的初值）。
+  **为什么**：实验 3.6 V 下 t_BD 约 1000 s、击穿前 I-t 双对数近似直线；模型 C 不计前驱消耗，ΣG 全程不变（N ∝ t），ADR-051 击穿时阴极侧
+  空位密度已是 N_T 的 6–11 倍。粗估（`results/10.11/dispersive/`）：计消耗与 E_A 分布后 N ∝ t^0.5→0.35，[1, 1000] s 上 n = 0.31–0.45、
+  R² = 0.69–0.92（只平移 E_A：0.21–0.39、0.50–0.74）。剩下的弯曲来自 J₀（`results/10.11/j0_mask/`）。
+  **验证**（`results/10.11/discrete/verify.log`）：电极项与引擎探针的 R2 + R4 相差 ≤ 6×10⁻¹⁴，陷阱项与直接求和相差 ≤ 2×10⁻¹⁰；
+  50 nm 盒子生成率一步 2.1 s。测试：删去模型 C 的积分、落点与生成网格测试（15 个），新增撒点、消耗、电极项与陷阱项对拍、局域温度、
+  E_A 平移只改时间标尺、Gillespie 抽样测试。`pytest tests/ -v` 302 passed。
+
 - **50×50 nm 盒子 3.6 V / 25 °C 验收（seed 1–4，跑到击穿）**（ADR-051，`results/10.09/accept50/`，代码 34ebeeb）。与 ADR-048 的
   20 nm 验收用同一驱动与汇总脚本：t = 0 的 J 0.30–0.73 A/cm²（20 nm 差 4.4×10⁴ 倍，这里差 2.4 倍），单个空位最多把 J 抬高 2.8 倍
   （20 nm 最多 3000 倍），4 条 I-t 几乎重合；双对数仍向上弯，从第一次生成起拟合 n = 0.37–0.57、R² = 0.56–0.85，从第 25 个空位起

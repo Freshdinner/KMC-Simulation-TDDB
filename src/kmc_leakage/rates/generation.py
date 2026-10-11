@@ -17,10 +17,11 @@ docs/rate_equations.md 的 R1–R8 不对应::
   - **近旁已占据的陷阱**（初始缺陷与生成的空位，同一物种）：复用引擎的陷阱间通道，R6 的
     几何因子 × R7 的 MA 能量因子，按源陷阱的占据 p 加权（`trap_precursor_capture_rate`，
     ADR-039）。前驱的局域化半径由 E_t1 算，能量差取前驱与源陷阱的平均场能级之差，与内层
-    平均场处理陷阱对的口径相同（ADR-038）。这一项沿距离每 r_D/2 衰减 e 倍，调用方逐个源陷阱
-    对它做体积分（`tddb.TrapCaptureGeneration`，ADR-042），不与电极项在同一个点上相加。
+    平均场处理陷阱对的口径相同（ADR-038）。调用方对每个离散前驱位点把它与近旁全部已占据陷阱
+    的这一项求和，与电极项相加得到该前驱的 R_1e（`tddb.generation_rates`，ADR-052）。
 - G 里的 k 是相对介电常数，取介质的静态 κ（Lorentz 局域场修正，与镜像力无关），
   ε_opt 不进这里。p₀ 是前驱有效偶极矩（T3：p₀ = ½·n·Valence·e·d），配置直接给均值。
+  E_A 在前驱之间有分布，可以逐前驱传入（ADR-052）。
 - G 的俘获速率作为参数传入：后期换成双电子俘获 R_2e（T4′）时只改调用方。
 
 全部量为 SI 单位。
@@ -99,7 +100,7 @@ def single_electron_capture_rate(
     """R_1e 的电极项：前驱从两侧电极单步俘获一个电子的速率 [1/s]（式 T4，T5–T11）。
 
     R_1e = Σ_电极 [R2 + R4] + Σ_陷阱 p·R7，这里给前一项：两侧电极的弹性俘获 R2 与多声子俘获 R4。
-    陷阱项逐对由 `trap_precursor_capture_rate` 给出，调用方按源陷阱积分（ADR-042）。
+    陷阱项逐对由 `trap_precursor_capture_rate` 给出，调用方对近旁陷阱求和（ADR-052）。
 
     `conduction_band` 是前驱处的导带底 E_C = B − e·φ，前驱能级 E = E_C − E_t1；
     `field` 是前驱处局域电场大小，进 R4 的 c_MP。`ionization_energy` = E_t1（能级
@@ -141,8 +142,7 @@ def single_electron_capture_parts(
     """R_1e 电极项按场依赖拆开的两部分 (Σ R2 [1/s], Σ R4/F² [1/(s·(V/m)²)])（式 T4，T5–T11）。
 
     R_1e,电极 = Σ R2 + F²·(Σ R4/F²)：R4 的 c_MP ∝ F²（`multiphonon_coupling`），其余因子与场无关。
-    参数含义同 `single_electron_capture_rate`。生成率在大量求值点上要用同一组 (能级, 温度) 下的
-    R_1e，按这两部分建表后对任意局域场都可直接组合。
+    参数含义同 `single_electron_capture_rate`。
     """
     energy = np.asarray(conduction_band, dtype=float) - ionization_energy
     temperature = np.asarray(temperature, dtype=float)
@@ -175,19 +175,20 @@ def single_electron_capture_parts(
 
 
 def effective_activation_energy(
-    activation_energy: float, dipole_moment: float, kappa: float, field: np.ndarray
+    activation_energy: Union[float, np.ndarray], dipole_moment: float, kappa: float, field: np.ndarray
 ) -> np.ndarray:
     """场加速后的断键有效势垒 E_A − p₀·(2+k)/3·E [J]（式 T2 指数里的那一项）。
 
     `kappa` 是静态相对介电常数（Lorentz 局域场因子 (2+k)/3），`field` 是局域
-    电场大小 [V/m]，`dipole_moment` = p₀ [C·m]。
+    电场大小 [V/m]，`dipole_moment` = p₀ [C·m]。`activation_energy` 可以是与 `field`
+    等长的逐前驱 E_A,i（ADR-052）。
     """
     lorentz = (2.0 + kappa) / 3.0
-    return activation_energy - dipole_moment * lorentz * np.asarray(field, dtype=float)
+    return np.asarray(activation_energy, dtype=float) - dipole_moment * lorentz * np.asarray(field, dtype=float)
 
 
 def bond_break_probability(
-    activation_energy: float,
+    activation_energy: Union[float, np.ndarray],
     dipole_moment: float,
     kappa: float,
     field: np.ndarray,
@@ -196,8 +197,8 @@ def bond_break_probability(
     """断键概率 P_bb = exp[−(E_A − p₀·(2+k)/3·E)/k_BT]（式 T2）。
 
     有效势垒降到 0 以下时断键不再需要热激活，P_bb 饱和为 1，生成率只剩俘获
-    速率限制（PROJECT_CONTEXT_TDDB.md §8.1）。`temperature` 可以是与 `field` 等长的
-    逐前驱温度。
+    速率限制（PROJECT_CONTEXT_TDDB.md §8.1）。`activation_energy` 与 `temperature`
+    都可以是与 `field` 等长的逐前驱值。
     """
     barrier = effective_activation_energy(activation_energy, dipole_moment, kappa, field)
     return np.exp(-np.clip(barrier, 0.0, None) / (constants.Boltzmann * temperature))
@@ -205,7 +206,7 @@ def bond_break_probability(
 
 def bond_break_generation_rate(
     capture_rate: np.ndarray,
-    activation_energy: float,
+    activation_energy: Union[float, np.ndarray],
     dipole_moment: float,
     kappa: float,
     field: np.ndarray,
@@ -214,8 +215,7 @@ def bond_break_generation_rate(
     """单个前驱的 O 空位生成速率 G = R_1e·P_bb [1/s]（式 T1）。
 
     `capture_rate` 是前驱俘获电子的速率：单步注入机制传 R_1e
-    （`single_electron_capture_rate`），后期双电子机制传 R_2e。体积生成率
-    N_T·G 由调用方乘前驱浓度得到（§6.1 模型 C）。
+    （`single_electron_capture_rate`），后期双电子机制传 R_2e。
     """
     return np.asarray(capture_rate, dtype=float) * bond_break_probability(
         activation_energy, dipole_moment, kappa, field, temperature

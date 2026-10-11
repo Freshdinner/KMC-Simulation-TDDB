@@ -89,9 +89,13 @@ ensemble:
 
 # TDDB 缺陷生成、热反馈与击穿判据参数（第 3 节参数表，ADR-024/035/036）。由 io.py 读入并换算到 SI。
 tddb:
-  # E_A：无场下形成 Frenkel 对的激活能（式 T2；双电子机制下即 E_A,2e）。与 p₀ 成套选：
-  # p₀ = 1 eÅ 时 3 V / 8 nm 下场加速项压低 0.5 eV，有效势垒 0.45 eV（ADR-035）
-  activation_energy_eV: 0.95
+  # E_A：无场下形成 Frenkel 对的激活能在前驱之间的均值（式 T2；双电子机制下即 E_A,2e）。p₀ = 1 eÅ 时
+  # 3.6 V / 8 nm 下场加速项压低 0.6 eV，有效势垒均值 0.70 eV。1.30 eV 是按 t = 0 生成速率谱粗估、让 50×50 nm
+  # 盒子里约 100 个空位落在 1000 s 的初值（ADR-052），有效势垒对电压的斜率只由 p₀ 定，与 E_A 无关
+  activation_energy_eV: 1.30
+  # σ_A：E_A 在前驱之间的高斯分布标准差，每个前驱位点各抽一个 E_A,i（ADR-052）。势垒低的前驱先断键、
+  # 先用完，生成随时间变慢
+  activation_energy_sigma_eV: 0.10
   # 前驱单步俘获参数（式 T4/T9/T10）
   precursor_ionization_energy_eV: 1.15   # E_t1，取与 O 空位预设相同的值（= defects.level.ED_eV，ADR-028）
   # E_rel1：第一次电子俘获导致 O-Zr-O 键断裂、O 空位形成的弛豫能（论文 SiO₂ 里对应 Si-O 键，
@@ -102,15 +106,10 @@ tddb:
   # P_bb 用宏观场：泊松解的场在 Gaussian 窗口（标准差 σ，半高全宽 2.355σ ≈ 1.2 nm，约两个 ZrO₂ 晶格常数）
   # 上取空间平均，去掉带电空位亚纳米近旁的点电荷场，保留空位层与团簇尖端的 ≳1 nm 场结构（ADR-043）。0 = 局域场
   field_averaging_width_nm: 0.5
-  # N_T：前驱位点浓度，体积生成率 N_T·R_1e·P_bb 的前置因子（6.1 模型 C）。与初始缺陷浓度相同
-  # （ADR-035）；只改变时间标尺，不改变 I-t 的形状
-  precursor_concentration_cm3: 3.0e18
-  # 生成单元网格：铺满 50×50 nm × z ∈ [0.5, 7.5] nm 的可采样窗口（单元 1.25×1.25×0.1 nm），外层
-  # Gillespie 在单元表上抽生成事件（6.1，ADR-033）
-  generation_grid:
-    nx: 40
-    ny: 40
-    nz: 70
+  # N_T：前驱位点浓度。t = 0 在 z ∈ [0.5, 7.5] nm 的可采样窗口里均匀撒 round(N_T·V) 个离散前驱位点
+  # （50×50 nm 盒子约 1750 个），每个位点断键一次就用掉（6.1，ADR-052）。阴极侧 1–2 nm 内的前驱先用完，
+  # 生成随之变慢，所以 N_T 同时影响时间标尺与 I-t 的形状
+  precursor_concentration_cm3: 1.0e20
   # 击穿判据（6.3，ADR-047）：电流密度超过它即判击穿，这一刻就是 t_BD
   breakdown_current_density_A_cm2: 10.0
   # k_TH：ZrO₂ 热导率（式 T14，ADR-040）。删掉这一项即等温运行

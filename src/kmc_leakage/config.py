@@ -403,14 +403,17 @@ class EnsembleConfig:
 
 @dataclass(frozen=True)
 class TDDBConfig:
-    """TDDB 缺陷生成参数（PROJECT_CONTEXT_TDDB.md 第 3 节参数表，ADR-024/028/035/036/047）。
+    """TDDB 缺陷生成参数（PROJECT_CONTEXT_TDDB.md 第 3 节参数表，ADR-024/028/035/036/047/052）。
 
     只收已定取值的参数，每个字段在用到它的 Phase 加入。G 场加速项里的相对介电常数 k 取
     介质材料的静态 κ，前驱俘获线型用的声子能量 ℏω₀ 取宿主介质的值，应力电压与环境温度
     取 simulation 段的工作点，都不在这里另设。
     """
 
-    activation_energy: float  # E_A：无场下形成 Frenkel 对的激活能 [J]（式 T2；双电子机制下即 E_A,2e）
+    # E_A：无场下形成 Frenkel 对的激活能在前驱之间的均值 [J]（式 T2；双电子机制下即 E_A,2e）
+    activation_energy: float
+    # σ_A：E_A 在前驱之间的高斯分布标准差 [J]，每个前驱位点各抽一个 E_A,i（§6.1，ADR-052）。0 = 全部取均值
+    activation_energy_sigma: float
     precursor_ionization_energy: float  # E_t1：前驱能级相对局部导带底的深度 [J]（式 T4/T9）
     # E_rel1：第一次电子俘获导致 O-Zr-O 键断裂、O 空位形成的弛豫能 [J]。只进 R_1e 的多声子
     # 线型（E_rel1/ℏω₀ 作为式 T10 的参数），与输运用的材料 Huang-Rhys 因子 huang_rhys 无关（ADR-030）
@@ -420,11 +423,9 @@ class TDDBConfig:
     # Lorentz 局域场因子 (2+k)/3 针对宏观场，窗口取 Lorentz 球的尺度；0 = 直接用泊松网格上的局域场
     field_averaging_width: float
     # --- 瞬态驱动（Phase 3，ADR-033）---
-    # N_T：前驱位点浓度 [1/m^3]，体积生成率 N_T·R_1e·P_bb 的前置因子（§6.1 模型 C）。0 = 关掉生成
+    # N_T：前驱位点浓度 [1/m^3]。t = 0 在可采样窗口里撒 round(N_T·V_窗口) 个离散前驱位点，每个位点断键一次
+    # 就用掉（§6.1，ADR-052）。0 = 关掉生成
     precursor_concentration: float
-    # 生成单元网格 (nx, ny, nz)：单元铺满 [0,Lx)×[0,Ly)×[standoff, Lz−standoff]，外层 Gillespie
-    # 在单元表上抽生成事件（§6.1）。与泊松网格分开配置
-    generation_grid: Tuple[int, int, int]
     max_generated_vacancies: int  # 生成的空位数达到此值即停（机时上限）
     stop_time: float  # 应力时间上限 [s]
     # --- 击穿判据与热反馈（Phase 4，ADR-036/047）---

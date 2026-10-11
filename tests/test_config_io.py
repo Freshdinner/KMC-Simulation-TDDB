@@ -101,21 +101,21 @@ def test_fast_trap_rate_is_optional_and_positive():
 
 
 def test_tddb_section_is_optional_and_converted():
-    """tddb 段缺省为 None（纯漏电流仿真）；三个能量从 eV 换算成 J、必须为正，p₀ 从 e·Å
-    换算成 C·m、必须 ≥ 0，P_bb 宏观场的平均窗口从 nm 换算成 m、必须 ≥ 0（ADR-043），
-    N_T 从 cm⁻³ 换算成 m⁻³、必须 ≥ 0，生成网格与空位数上限是正整数，
+    """tddb 段缺省为 None（纯漏电流仿真）；三个能量从 eV 换算成 J、必须为正，E_A 的标准差 σ_A
+    从 eV 换算成 J、必须 ≥ 0（ADR-052），p₀ 从 e·Å 换算成 C·m、必须 ≥ 0，P_bb 宏观场的平均窗口从
+    nm 换算成 m、必须 ≥ 0（ADR-043），N_T 从 cm⁻³ 换算成 m⁻³、必须 ≥ 0，空位数上限是正整数，
     应力时间上限必须为正，击穿电流密度从 A/cm² 换算成 A/m²、必须为正，以上各项都必须给出；
-    k_TH 可省略（等温），给出时必须为正（ADR-024/028/033/036/047）。"""
+    k_TH 可省略（等温），给出时必须为正（ADR-024/028/033/036/047/052）。"""
     raw = _base_dict()
     assert config_from_dict(raw).tddb is None
     section = {
         "activation_energy_eV": 4.0,
+        "activation_energy_sigma_eV": 0.1,
         "precursor_ionization_energy_eV": 1.15,
         "precursor_relaxation_energy_eV": 0.04,
         "dipole_moment_eA": 7.1,
         "field_averaging_width_nm": 0.5,
         "precursor_concentration_cm3": 4.0e19,
-        "generation_grid": {"nx": 16, "ny": 12, "nz": 70},
         "max_generated_vacancies": 300,
         "stop_time_s": 1.0e4,
         "breakdown_current_density_A_cm2": 10.0,
@@ -123,12 +123,12 @@ def test_tddb_section_is_optional_and_converted():
     raw["tddb"] = dict(section)
     tddb = config_from_dict(raw).tddb
     assert tddb.activation_energy == pytest.approx(4.0 * EV)
+    assert tddb.activation_energy_sigma == pytest.approx(0.1 * EV)
     assert tddb.precursor_ionization_energy == pytest.approx(1.15 * EV)
     assert tddb.precursor_relaxation_energy == pytest.approx(0.04 * EV)
     assert tddb.dipole_moment == pytest.approx(7.1 * constants.elementary_charge * 1e-10)
     assert tddb.field_averaging_width == pytest.approx(0.5e-9)
     assert tddb.precursor_concentration == pytest.approx(4.0e25)
-    assert tddb.generation_grid == (16, 12, 70)
     assert tddb.max_generated_vacancies == 300
     assert tddb.stop_time == pytest.approx(1.0e4)
     assert tddb.breakdown_current_density == pytest.approx(1.0e5)
@@ -143,6 +143,8 @@ def test_tddb_section_is_optional_and_converted():
         raw["tddb"] = dict(section, **{key: 0.0})
         with pytest.raises(ValueError, match=key):
             config_from_dict(raw)
+    raw["tddb"] = dict(section, activation_energy_sigma_eV=0.0)
+    assert config_from_dict(raw).tddb.activation_energy_sigma == 0.0  # σ_A = 0：E_A 全取均值
     raw["tddb"] = dict(section, dipole_moment_eA=0.0)
     assert config_from_dict(raw).tddb.dipole_moment == 0.0  # p₀ = 0：关掉场加速
     raw["tddb"] = dict(section, field_averaging_width_nm=0.0)
@@ -150,6 +152,7 @@ def test_tddb_section_is_optional_and_converted():
     raw["tddb"] = dict(section, precursor_concentration_cm3=0.0)
     assert config_from_dict(raw).tddb.precursor_concentration == 0.0  # N_T = 0：关掉生成
     for key, bad in (
+        ("activation_energy_sigma_eV", -0.1),
         ("dipole_moment_eA", -1.0),
         ("field_averaging_width_nm", -0.1),
         ("precursor_concentration_cm3", -1.0),
@@ -162,13 +165,6 @@ def test_tddb_section_is_optional_and_converted():
         raw["tddb"] = dict(section, **{key: bad})
         with pytest.raises(ValueError, match=key):
             config_from_dict(raw)
-    for bad in (0, True, 4.0):
-        raw["tddb"] = dict(section, generation_grid={"nx": 16, "ny": bad, "nz": 70})
-        with pytest.raises(ValueError, match="generation_grid.ny"):
-            config_from_dict(raw)
-    raw["tddb"] = dict(section, generation_grid={"nx": 16, "ny": 12})
-    with pytest.raises(KeyError, match="nz"):
-        config_from_dict(raw)
     for key in section:
         raw["tddb"] = {k: v for k, v in section.items() if k != key}
         with pytest.raises(KeyError, match=key):
@@ -385,8 +381,8 @@ def test_tddb_example_matches_leakage_reference_preset():
     """zro2_tddb.yaml 的材料、缺陷、电极与默认盒子 single_run.yaml 逐项相同（材料名之外），
     盒子同为 50×50 nm（ADR-051）；横向网格按团簇库仑能收敛取 hx = hy = 0.25 nm、hz 不变
     （ADR-032）；前驱的 E_t1 与 O 空位预设相同（ADR-028）；E_rel1 与材料的 huang_rhys 各自取值
-    （ADR-030）；生成单元在 z 方向与泊松网格同步长（ADR-033）；E_A = 0.95 eV、p₀ = 1 eÅ、
-    N_T = 3×10¹⁸ cm⁻³（ADR-035），k_TH = 2 W/(m·K)（ADR-040），击穿电流密度 10 A/cm²（ADR-047）。"""
+    （ADR-030）；p₀ = 1 eÅ（ADR-035），E_A 均值 1.30 eV、σ_A = 0.10 eV、N_T = 10²⁰ cm⁻³（ADR-052），
+    k_TH = 2 W/(m·K)（ADR-040），击穿电流密度 10 A/cm²（ADR-047）。"""
     root = pathlib.Path(__file__).resolve().parents[1]
     tddb = load_config(str(root / "examples" / "zro2_tddb.yaml"))
     ref = load_config(str(root / "examples" / "single_run.yaml"))
@@ -412,17 +408,14 @@ def test_tddb_example_matches_leakage_reference_preset():
     assert tddb.simulation.n_events == ref.simulation.n_events
 
     assert len(tddb.seeds) == 30  # 系综个数（ADR-026、ADR-051）
-    assert tddb.tddb.activation_energy == pytest.approx(0.95 * EV)
+    assert tddb.tddb.activation_energy == pytest.approx(1.30 * EV)
+    assert tddb.tddb.activation_energy_sigma == pytest.approx(0.10 * EV)
     assert tddb.tddb.precursor_ionization_energy == pytest.approx(tddb.defects.level.ED)
     assert tddb.tddb.precursor_relaxation_energy == pytest.approx(1.0 * EV)
     assert tddb.tddb.dipole_moment == pytest.approx(1.0 * constants.elementary_charge * 1e-10)
     assert tddb.tddb.field_averaging_width == pytest.approx(0.5e-9)  # ADR-043
-    assert tddb.tddb.precursor_concentration == pytest.approx(tddb.defects.concentration)
-    assert tddb.tddb.precursor_concentration == pytest.approx(3.0e18 * constants.centi ** -3)
+    assert tddb.tddb.precursor_concentration == pytest.approx(1.0e20 * constants.centi ** -3)
     assert tddb.tddb.thermal_conductivity == pytest.approx(2.0)
     assert tddb.tddb.breakdown_current_density == pytest.approx(10.0 * constants.centi ** -2)  # 10 A/cm²（ADR-047）
-    hz = tddb.device.Lz / grid.nz
-    window = tddb.device.Lz - 2.0 * tddb.defects.min_separation
-    assert window / tddb.tddb.generation_grid[2] == pytest.approx(hz)
     assert tddb.tddb.max_generated_vacancies >= 1 and tddb.tddb.stop_time > 0.0
     assert ref.tddb is None

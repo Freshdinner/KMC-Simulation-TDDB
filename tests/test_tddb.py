@@ -1,4 +1,4 @@
-"""TDDB 瞬态驱动（Phase 3/4，ADR-032–036，PROJECT_CONTEXT_TDDB.md §5、§6、§9）。
+"""TDDB 瞬态驱动（Phase 3/4，ADR-032–036、ADR-052，PROJECT_CONTEXT_TDDB.md §5、§6、§9）。
 
 - 增量静电耦合（§6.4）：逐个追加缺陷后的耦合矩阵与对全体缺陷从头计算的一致；
 - 新空位出生（§6.7、ADR-048）：出生时被一个电子占据、与初始缺陷同一物种，带着与它重合的 O_i⁻
@@ -7,12 +7,12 @@
 - G = 0 时 I(t) 恒定，且逐位等于同一初始实现下的稳态结果（等温与开热反馈都成立）；
 - 每步的强耦合簇与对当前缺陷集合新建 `KMCSimulation` 的分簇相同，终态电流与对终态缺陷
   从头求解的稳态一致；
-- 单元生成率就是模型 C 的电极项：N_T·V_cell·R_1e,电极·P_bb，R_1e,电极 与引擎在单元中心放一个前驱参数
-  陷阱时的两侧 R2 + R4 之和一致（含空间电荷）；按单元局域温度求值时逐单元等于该温度下的生成率；
-- 陷阱项按源陷阱积分（ADR-042）：孤立源陷阱等于 scipy 自适应积分的精确值（含上坡的 MA 折点与窗口
-  截断），有近旁缺陷挡住一部分区域时是单元中心求和在单元加密下的极限，与生成网格无关，源陷阱
-  全空时为 0；落点按被积函数分布、都在可放置区域内；
-- N_T 只改变时间标尺；放不下新空位的单元被跳过；
+- 离散前驱位点（§6.1，ADR-052）：t = 0 在可采样窗口里均匀撒 round(N_T·V) 个，E_A,i = E_A + σ_A·ξ_i，离初始缺陷
+  不到 min_separation 的删去；新空位落在某个位点上，这个位点与离新空位不到 min_separation 的位点删去；
+- 每个位点的生成速率 G_i = R_1e,i·P_bb,i：电极项等于引擎在该点放一个前驱参数陷阱时的两侧 R2 + R4（含空间电荷），
+  陷阱项等于对全部已占据陷阱的直接求和（截断误差 ≤ `_TRAP_TERM_FLOOR`），P_bb 取位点自己的 E_A,i 与 Gaussian
+  平均场；三项都按位点处的局域温度求值；
+- P_bb 未饱和时 E_A 整体平移只改时间标尺；Gillespie 按速率选位点；
 - 热反馈（§6.6、§8.4）：每步的输运温度是上一步功率给出的缺陷处加权温度，生成率取同一步的温度场；
 - 击穿判据（§6.3，ADR-047）：轨迹停在电流密度第一次超过击穿电流密度的记录上，之前的记录与不停的
   轨迹逐位相同；
@@ -25,7 +25,7 @@ from dataclasses import fields, replace
 
 import numpy as np
 import pytest
-from scipy import constants, integrate
+from scipy import constants
 
 from conftest import make_config, make_defect_config, make_device
 from kmc_leakage import tddb as tddb_module
@@ -40,15 +40,17 @@ from kmc_leakage.defects import (
 from kmc_leakage.electrostatics import PoissonSolver
 from kmc_leakage.kmc import _B_R2A, _B_R2C, _B_R4A, _B_R4C, _N_PHONON, MECHANISMS, ElectrostaticCoupling, KMCSimulation
 from kmc_leakage.mean_field import solve_mean_field
-from kmc_leakage.rates import bond_break_probability, single_electron_capture_rate
+from kmc_leakage.rates import bond_break_probability, trap_precursor_capture_rate
 from kmc_leakage.tddb import (
+    GenerationRates,
     IncrementalCoupling,
+    Precursors,
     _draw_generation,
     distance_clusters,
     fit_power_law,
     fit_transient,
-    generation_cells,
     generation_rates,
+    place_precursors,
     run_tddb,
     write_tddb_csv,
 )
@@ -63,12 +65,12 @@ PER_CM3 = constants.centi ** -3
 def _tddb(**overrides) -> TDDBConfig:
     params = dict(
         activation_energy=4.0 * EV,
+        activation_energy_sigma=0.05 * EV,
         precursor_ionization_energy=1.15 * EV,
         precursor_relaxation_energy=1.0 * EV,
         dipole_moment=7.1 * E_ANGSTROM,
         field_averaging_width=0.5e-9,
         precursor_concentration=4.0e19 * PER_CM3,
-        generation_grid=(2, 2, 14),
         max_generated_vacancies=4,
         stop_time=1.0e4,
         breakdown_current_density=1.0e8,  # 1e4 A/cm²，远高于这些小体系的电流
@@ -78,7 +80,7 @@ def _tddb(**overrides) -> TDDBConfig:
 
 
 def _config(seed=3, concentration_cm3=3.0e18, **overrides):
-    """20×20×8 nm、网格 8/8/16、3 V / 25 °C，生成单元 2×2×14；3×10¹⁸ cm⁻³ 即 10 个初始缺陷。"""
+    """20×20×8 nm、网格 8/8/16、3 V / 25 °C；3×10¹⁸ cm⁻³ 即 10 个初始缺陷，N_T = 4×10¹⁹ cm⁻³ 即约 112 个前驱位点。"""
     device = make_device(defects=make_defect_config(concentration_cm3=concentration_cm3))
     return replace(make_config(voltage=3.0, seed=seed, device=device), tddb=_tddb(**overrides))
 
@@ -89,25 +91,32 @@ def _subset(defects: DefectEnsemble, n: int) -> DefectEnsemble:
 
 @pytest.fixture(scope="module")
 def trajectory():
-    """4 次生成的短轨迹，并记下每步交给平均场的缺陷实现与初值。
+    """4 次生成的短轨迹，并记下每步交给平均场的缺陷实现与初值、交给生成率的前驱位点表与算出的速率。
 
     初始缺陷取 3×10¹⁹ cm⁻³（96 个），一开始就有多个强耦合簇，逐步对比分簇才有内容。
     """
     config = _config(seed=1, concentration_cm3=3.0e19)
-    calls = []
-    original = tddb_module.solve_mean_field
+    calls, generations = [], []
+    original_mf, original_rates = tddb_module.solve_mean_field, tddb_module.generation_rates
 
     def recording(sim, occupancy=None):
-        result = original(sim, occupancy)
+        result = original_mf(sim, occupancy)
         calls.append((sim, None if occupancy is None else occupancy.copy(), result))
         return result
 
+    def recording_rates(inner, occupancy, tddb, precursors, temperature_field=None):
+        result = original_rates(inner, occupancy, tddb, precursors, temperature_field)
+        generations.append((precursors, result))
+        return result
+
     tddb_module.solve_mean_field = recording
+    tddb_module.generation_rates = recording_rates
     try:
         result = run_tddb(config)
     finally:
-        tddb_module.solve_mean_field = original
-    return config, result, calls
+        tddb_module.solve_mean_field = original_mf
+        tddb_module.generation_rates = original_rates
+    return config, result, calls, generations
 
 
 def test_incremental_coupling_matches_full_recomputation():
@@ -151,7 +160,7 @@ def test_new_vacancy_is_born_occupied_with_its_interstitial_charge(trajectory):
     """新空位出生占据 = 1（其余缺陷从上一步不动点热启动），与初始缺陷同一物种，带着与它重合的 O_i⁻
     （q_fix = −e，ADR-048）；初始缺陷 q_fix = 0。新空位连同 O_i⁻ 出生时带 −e：其余缺陷处的电势、电场与
     横向平均剖面在出生前后的变化，就是出生位置上一个 −e 点电荷的贡献（耦合矩阵新的一行）。"""
-    config, result, calls = trajectory
+    config, result, calls, _ = trajectory
     for (_, _, previous), (sim, start, _) in zip(calls[:-1], calls[1:]):
         assert start[-1] == 1.0
         assert np.array_equal(start[:-1], previous.occupancy)
@@ -182,7 +191,7 @@ def test_generation_conserves_charge(trajectory):
     """生成反应按电荷守恒处理（ADR-048）：介质里全部电荷 Σ[q·(Z − p) + q_fix] 在每次出生时正好多一个 −e，
     就是前驱俘获的那个电子；记录的净空间电荷就是这个总和。O_i 的电荷取 0（旧的处理方式）时出生前后总电荷不变，
     那个 −e 丢掉了。"""
-    config, result, calls = trajectory
+    config, result, calls, _ = trajectory
 
     def total(defects, occupancy):
         return Q * np.sum(defects.charge_state - occupancy) + np.sum(defects.fixed_charge)
@@ -216,7 +225,7 @@ def test_zero_generation_reproduces_steady_state_bitwise(thermal_conductivity):
 
 def test_each_step_matches_a_fresh_simulation_of_the_current_defects(trajectory):
     """每步的强耦合簇与对当前缺陷集合新建的 KMCSimulation 相同；终态电流与从头求解的稳态一致。"""
-    config, result, calls = trajectory
+    config, result, calls, _ = trajectory
     assert result.stop_reason == "max_generated"
     assert any(len(sim.cluster_members) > 0 for sim, _, _ in calls)
     for sim, _, _ in calls:
@@ -232,7 +241,7 @@ def test_each_step_matches_a_fresh_simulation_of_the_current_defects(trajectory)
 def test_trajectory_bookkeeping(trajectory):
     """时间递增、出生时刻 = 对应记录的时刻、新空位落在可采样窗口里且满足 min_separation，
     分解之和 = 总电流，诊断量自洽。"""
-    config, result, _ = trajectory
+    config, result, _, _ = trajectory
     device = config.device
     n_initial = result.n_initial
     assert np.all(np.diff(result.time) > 0.0)
@@ -253,6 +262,7 @@ def test_trajectory_bookkeeping(trajectory):
     total = sum(result.by_mechanism[name] for name in MECHANISMS)
     np.testing.assert_allclose(total, result.current, rtol=1e-12)
     assert np.all(result.generation_rate > 0.0)
+    assert np.all(np.diff(result.n_precursors) <= -1)  # 每次出生至少用掉一个前驱位点
     assert np.all(result.max_cluster_size <= result.largest_component)
     final_charge = Q * np.sum(result.defects.charge_state - result.occupancy) + np.sum(result.defects.fixed_charge)
     assert result.space_charge[-1] == pytest.approx(final_charge, rel=1e-12)
@@ -269,22 +279,137 @@ def test_trajectory_bookkeeping(trajectory):
         assert size == np.bincount(distance_clusters(positions[: n_initial + k], device, 0.6e-9)).max()
 
 
-@pytest.mark.parametrize("width", [0.0, 0.5e-9])
-def test_electrode_generation_nodes_match_engine_capture_rates(monkeypatch, width):
-    """单元事件的被积函数 N_T·R_1e,电极·P_bb（ADR-044）：在求积节点上，R_1e,电极 与引擎在该点放一个前驱参数陷阱时
-    的两侧 R2 + R4 之和一致（插值表误差内）；局域电势、局域场都含当前占据下的空间电荷（§6.1）。P_bb 取泊松解的场在
-    Gaussian 窗口上的平均（ADR-043）；窗口宽度 0 时就是引擎在探针处读到的局域场。
+def test_precursors_fill_the_sampling_window():
+    """t = 0 的前驱位点（ADR-052）：可采样窗口里均匀撒 round(N_T·V) 个，随机数按 x、y、z、ξ 的顺序取，
+    E_A,i = E_A + σ_A·ξ_i；离初始缺陷不到 min_separation（xy 最小镜像）的位点删去，其余原样保留。σ_A = 0 时
+    位点相同、E_A 全取均值。"""
+    config = _config(concentration_cm3=3.0e19)
+    device = config.device
+    tddb = replace(config.tddb, precursor_concentration=2.0e21 * PER_CM3, activation_energy_sigma=0.1 * EV)
+    defects = KMCSimulation(config).defects.positions
+    standoff = _global_standoff(device)
+    n = int(round(tddb.precursor_concentration * device.Lx * device.Ly * (device.Lz - 2.0 * standoff)))
+    raw = np.random.default_rng(7)
+    positions = np.column_stack([
+        raw.uniform(0.0, device.Lx, n), raw.uniform(0.0, device.Ly, n), raw.uniform(standoff, device.Lz - standoff, n),
+    ])
+    activation = tddb.activation_energy + tddb.activation_energy_sigma * raw.standard_normal(n)
+    distance = np.linalg.norm(
+        minimum_image_delta(positions[:, None, :] - defects[None, :, :], device.Lx, device.Ly), axis=-1
+    ).min(axis=1)
+    keep = distance >= standoff
 
-    引擎的 R4 用 12 个声子项，这里把前驱的声子项数也设成 12 再逐项对拍。探针陷阱 Z = 0、
-    占据 0，不带电，不改变别的缺陷感受到的静电环境。三分之一的缺陷带与之重合的固定电荷 −e，另有一个
-    离开缺陷 0.6 nm：生成率的泊松源项（固定电荷放在各自的位置）与引擎的静电背景一致（ADR-048）。
-    """
+    precursors = place_precursors(device, tddb, defects, np.random.default_rng(7))
+    assert n == 5600 and np.count_nonzero(~keep) > 0
+    assert len(precursors) == np.count_nonzero(keep)
+    assert np.array_equal(precursors.positions, positions[keep])
+    assert np.array_equal(precursors.activation_energy, activation[keep])
+    xi = (precursors.activation_energy - tddb.activation_energy) / tddb.activation_energy_sigma
+    assert abs(xi.mean()) < 4.0 / np.sqrt(xi.size)
+    assert xi.std() == pytest.approx(1.0, abs=4.0 / np.sqrt(2.0 * xi.size))
+
+    flat = place_precursors(device, replace(tddb, activation_energy_sigma=0.0), defects, np.random.default_rng(7))
+    assert np.array_equal(flat.positions, precursors.positions)
+    assert np.all(flat.activation_energy == tddb.activation_energy)
+    assert len(place_precursors(device, replace(tddb, precursor_concentration=0.0), defects, raw)) == 0
+
+
+def test_converted_precursor_takes_out_its_blocked_neighbours():
+    """断键的位点用掉，离它不到 min_separation 的位点（xy 最小镜像）也删去，其余位点与 E_A,i 原样保留（ADR-052）。"""
+    device = make_device()  # 20×20×8 nm，min_separation 0.5 nm
+    positions = 1e-9 * np.array([
+        [0.1, 10.0, 3.0],  # 断键的位点
+        [0.4, 10.0, 3.0],  # 0.3 nm：删去
+        [19.8, 10.0, 3.0],  # 跨周期边界 0.3 nm：删去
+        [0.1, 10.0, 3.6],  # 0.6 nm：保留
+        [10.0, 10.0, 3.0],  # 远处：保留
+    ])
+    precursors = Precursors(positions, EV * np.array([1.0, 1.1, 1.2, 1.3, 1.4]))
+    left = precursors.converted(0, device)
+    assert len(left) == 2 and len(precursors) == 5
+    assert np.array_equal(left.positions, positions[[3, 4]])
+    assert np.array_equal(left.activation_energy, EV * np.array([1.3, 1.4]))
+
+
+def test_each_birth_converts_one_precursor_site(trajectory):
+    """新空位就落在上一步的某个前驱位点上（ADR-052）：这个位点用掉，离新空位不到 min_separation 的位点也删去，其余
+    位点与它们的 E_A,i 原样留到下一步；记录的 ΣG 与剩余位点数就是该步的生成速率与位点表。"""
+    config, result, _, generations = trajectory
+    device = config.device
+    standoff = _global_standoff(device)
+    assert len(generations) == result.time.size
+    for k, (precursors, rates) in enumerate(generations):
+        assert result.n_precursors[k] == len(precursors)
+        assert result.generation_rate[k] == pytest.approx(rates.rates.sum(), rel=1e-12)
+    for k in range(result.time.size - 1):
+        before, after = generations[k][0], generations[k + 1][0]
+        vacancy = result.defects.positions[result.n_initial + k]
+        assert np.flatnonzero(np.all(before.positions == vacancy, axis=1)).size == 1
+        distance = np.linalg.norm(minimum_image_delta(before.positions - vacancy, device.Lx, device.Ly), axis=1)
+        keep = distance >= standoff
+        assert np.array_equal(after.positions, before.positions[keep])
+        assert np.array_equal(after.activation_energy, before.activation_energy[keep])
+
+
+def _admissible(device, positions, point):
+    """`point` 在可采样窗口内，且离 `positions` 里每个缺陷都 ≥ min_separation（xy 最小镜像）。"""
+    standoff = _global_standoff(device)
+    if not standoff <= point[2] <= device.Lz - standoff:
+        return False
+    distance = np.linalg.norm(minimum_image_delta(positions - point, device.Lx, device.Ly), axis=1)
+    return bool(distance.min() >= standoff)
+
+
+def _sites_near_sources(inner, occupancy, rng, n_near=40, n_uniform=40):
+    """前驱位点：前 `n_near` 个放在占据 ≥ 0.5 的缺陷旁 0.5–0.8 nm 处（陷阱项显著），其余 `n_uniform` 个在可采样窗口里
+    均匀撒；都在窗口内且离全部缺陷 ≥ min_separation。E_A,i 在 3.9–4.1 eV 之间随机取。"""
+    device = inner.device
+    positions = inner.defects.positions
+    standoff = _global_standoff(device)
+    sources = np.flatnonzero(occupancy >= 0.5)
+    assert sources.size > 0
+    points = []
+    while len(points) < n_near:
+        direction = rng.normal(size=3)
+        point = positions[rng.choice(sources)] + rng.uniform(0.5e-9, 0.8e-9) * direction / np.linalg.norm(direction)
+        point[:2] = np.mod(point[:2], [device.Lx, device.Ly])
+        if _admissible(device, positions, point):
+            points.append(point)
+    while len(points) < n_near + n_uniform:
+        point = np.array([rng.uniform(0.0, device.Lx), rng.uniform(0.0, device.Ly),
+                          rng.uniform(standoff, device.Lz - standoff)])
+        if _admissible(device, positions, point):
+            points.append(point)
+    return Precursors(np.array(points), EV * rng.uniform(3.9, 4.1, len(points)))
+
+
+def _probe(config, inner, occupancy, positions):
+    """在 `positions` 放前驱参数的探针陷阱（E_D = E_t1，线型参数 E_rel1/ℏω₀，Z = 0、占据 0，不带电，不改变别的
+    缺陷感受到的静电环境），返回 (扩展后的 KMCSimulation, 扩展后的占据, 探针编号)。"""
+    tddb = config.tddb
+    material = config.device.stack.single_material
+    probes = DefectEnsemble.uniform(
+        positions,
+        np.full(len(positions), tddb.precursor_ionization_energy),
+        replace(material, huang_rhys=tddb.precursor_relaxation_energy / material.phonon_energy),
+        band_reference=float(config.device.layer_band_references()[0]),
+        charge_state=0.0,
+    )
+    extended = KMCSimulation(config, defects=append_defects(inner.defects, probes))
+    return extended, np.concatenate([occupancy, np.zeros(len(positions))]), np.arange(inner.n_defects, extended.n_defects)
+
+
+@pytest.mark.parametrize("width", [0.0, 0.5e-9])
+def test_electrode_term_and_bond_breaking_match_engine_probe(monkeypatch, width):
+    """电极项（式 T4）：每个前驱位点的 R_1e,电极 等于引擎在该点放一个前驱参数陷阱时的两侧 R2 + R4；局域电势、局域场
+    都含当前占据下的空间电荷。引擎的 R4 用 12 个声子项，这里把前驱的声子项数也设成 12 再逐项对拍。三分之一的缺陷带
+    与之重合的固定电荷 −e，另有一个离开缺陷 0.6 nm：生成率的泊松源项（固定电荷放在各自的位置）与引擎的静电背景一致
+    （ADR-048）。P_bb 用各位点自己的 E_A,i（ADR-052），场取泊松解在 Gaussian 窗口上的平均（ADR-043），窗口宽度 0 时
+    就是引擎在探针处读到的局域场。"""
     monkeypatch.setattr(tddb_module, "_PRECURSOR_N_PHONON", _N_PHONON)
     config = _config(concentration_cm3=3.0e19, field_averaging_width=width)
     tddb = config.tddb
     material = config.device.stack.single_material
-    band_reference = float(config.device.layer_band_references()[0])
-    cells = generation_cells(config.device, tddb.generation_grid)
     defects = KMCSimulation(config).defects
     fixed = np.where(np.arange(len(defects)) % 3 == 0, -Q, 0.0)
     offset = np.zeros((len(defects), 3))
@@ -292,24 +417,21 @@ def test_electrode_generation_nodes_match_engine_capture_rates(monkeypatch, widt
     offset[1, 2] = 0.6e-9 if defects.positions[1, 2] < 0.5 * config.device.Lz else -0.6e-9
     inner = KMCSimulation(config, defects=replace(defects, fixed_charge=fixed, fixed_charge_offset=offset))
     occupancy = solve_mean_field(inner).occupancy
-    electrode = generation_rates(inner, occupancy, tddb, cells).cells
-
-    levels = np.array([0, 3, electrode._levels.size // 2, electrode._levels.size - 1])
-    columns = np.array([0, 777, electrode._columns.shape[0] // 2, electrode._columns.shape[0] - 1])
-    positions = np.column_stack([electrode._columns[columns], electrode._levels[levels]])
-    probes = DefectEnsemble.uniform(
-        positions,
-        np.full(levels.size, tddb.precursor_ionization_energy),
-        replace(material, huang_rhys=tddb.precursor_relaxation_energy / material.phonon_energy),
-        band_reference=band_reference,
-        charge_state=0.0,
+    precursors = place_precursors(
+        config.device,
+        replace(tddb, precursor_concentration=1.0e20 * PER_CM3, activation_energy_sigma=0.1 * EV),
+        inner.defects.positions,
+        np.random.default_rng(5),
     )
-    extended = KMCSimulation(config, defects=append_defects(inner.defects, probes))
-    occ = np.concatenate([occupancy, np.zeros(levels.size)])
+    rates = generation_rates(inner, occupancy, tddb, precursors)
+
+    extended, occ, probe = _probe(config, inner, occupancy, precursors.positions)
     energy, field, barrier_c, barrier_a = extended._trap_state(occ)
     blocks = extended._electrode_blocks(energy, field, barrier_c, barrier_a)
-    probe = np.arange(inner.n_defects, extended.n_defects)
     capture = (blocks[_B_R2C] + blocks[_B_R2A] + blocks[_B_R4C] + blocks[_B_R4A])[probe]
+    assert len(precursors) > 200 and np.all(capture > 0.0)
+    np.testing.assert_allclose(rates.electrode, capture, rtol=1e-8)
+
     bond_field = field[probe]
     if width > 0.0:
         solver = inner.solver
@@ -319,294 +441,97 @@ def test_electrode_generation_nodes_match_engine_capture_rates(monkeypatch, widt
             tddb_module.top_boundary_potential(config.device, config.simulation.voltage),
         )
         mean = solver.gaussian_average(np.stack(solver.electric_field(phi), axis=-1), width)
-        bond_field = np.linalg.norm(solver.interpolate(mean, positions), axis=-1)
-        assert not np.array_equal(bond_field, field[probe])
+        bond_field = np.linalg.norm(solver.interpolate(mean, precursors.positions), axis=-1)
+        assert not np.allclose(bond_field, field[probe])
     p_bb = bond_break_probability(
-        tddb.activation_energy, tddb.dipole_moment, material.kappa, bond_field, config.simulation.temperature
+        precursors.activation_energy, tddb.dipole_moment, material.kappa, bond_field, config.simulation.temperature
     )
-    expected = tddb.precursor_concentration * capture * p_bb
-    actual = tddb.precursor_concentration * np.exp(
-        electrode._log_rate[levels, columns] - np.maximum(0.0, electrode._barrier[levels, columns])
-    )
-    assert np.all(expected > 0.0)
-    np.testing.assert_allclose(actual, expected, rtol=2e-3)
+    assert np.unique(precursors.activation_energy).size == len(precursors)
+    np.testing.assert_allclose(rates.bond_breaking, p_bb, rtol=1e-9)
 
 
-def _uniform_field_density(config, inner, z):
-    """均匀外场里（缺陷都不带电）单元事件的被积函数 N_T·R_1e,电极·P_bb，只依赖高度 z，直接求值。"""
-    device, tddb = config.device, config.tddb
-    material = device.stack.single_material
-    voltage, temperature = config.simulation.voltage, config.simulation.temperature
-    solver = inner.solver
-    phi = solver.solve(np.zeros(solver.grid.shape), tddb_module.top_boundary_potential(device, voltage))
-    F = abs(tddb_module.top_boundary_potential(device, voltage)) / device.Lz
-    z = np.atleast_1d(z)
-    conduction = device.band_reference_profile(z) - Q * F * z
-    rate = single_electron_capture_rate(
-        conduction,
-        np.full(z.size, F),
-        tddb_module._capture_electrodes(device, solver, phi, voltage, z),
-        tddb.precursor_ionization_energy,
-        tddb.precursor_relaxation_energy,
-        material.phonon_energy,
-        material.band_gap,
-        material.m_di,
-        temperature,
-        tddb_module._PRECURSOR_N_PHONON,
-    )
-    p_bb = bond_break_probability(tddb.activation_energy, tddb.dipole_moment, material.kappa, F, temperature)
-    return tddb.precursor_concentration * rate * p_bb
-
-
-def test_electrode_generation_is_the_admissible_volume_integral(monkeypatch):
-    """单元事件是可放置区域上的体积分（ADR-044）。均匀外场里被积函数 f 只依赖 z，与被积函数的直接求值对照：
-    (1) 远离阴极的中性缺陷挡住的部分可以忽略时，ΣG_单元 = Lx·Ly·∫_窗口 f dz。误差来自 z 向对数线性插值（ln f 在阴极
-        附近有弯曲），随节点间距二阶下降：默认 0.1 nm 时实测 −0.78%（判据 1%），0.05 nm 时 −0.20%（判据 0.3%）；
-    (2) 同一个中性缺陷放在 z₀ = 1 nm 与贴近阳极处，ΣG_单元 之差就是禁区球挡住的 ∫ f(z)·π·(s² − (z−z₀)²) dz。
-        禁区圆盘的横截面由列中点给出，默认列间距 0.08 nm 下实测 −0.25%（判据 2%）。"""
-    config = _config()
-    device = config.device
-    standoff = _global_standoff(device)
-    cells = generation_cells(device, config.tddb.generation_grid)
-    z_far, z_near = 7.4e-9, 1.0e-9
-
-    def total(z_defect):
-        inner = KMCSimulation(config, defects=_neutral_sources(config, [10.03e-9, 9.97e-9, z_defect], 1.15))
-        return generation_rates(inner, np.ones(1), config.tddb, cells).cells.rates.sum(), inner
-
-    far, inner = total(z_far)
-    window = device.Lx * device.Ly * integrate.quad(
-        lambda z: float(_uniform_field_density(config, inner, z)[0]),
-        standoff, device.Lz - standoff, epsabs=0.0, epsrel=1e-10, limit=400,
-    )[0]
-    assert far == pytest.approx(window, rel=1e-2)
-    blocked = integrate.quad(
-        lambda z: float(_uniform_field_density(config, inner, z)[0]) * np.pi * (standoff ** 2 - (z - z_near) ** 2),
-        z_near - standoff, z_near + standoff, epsabs=0.0, epsrel=1e-10,
-    )[0]
-    assert far - total(z_near)[0] == pytest.approx(blocked, rel=2e-2)
-    monkeypatch.setattr(tddb_module, "_LEVEL_STEP", tddb_module._LEVEL_STEP / 2.0)
-    assert total(z_far)[0] == pytest.approx(window, rel=3e-3)
-
-
-def test_electrode_generation_is_independent_of_generation_grid():
-    """单元事件的求积与生成网格无关（ADR-044）：生成单元只是事件分组，ΣG 在几种网格下相同；细网格单元按
-    粗网格分组求和后逐个等于粗网格单元的速率（空间分布也相同）。"""
+def test_trap_term_is_the_direct_sum_over_occupied_traps():
+    """陷阱项（式 T5 的陷阱来源，ADR-039）：每个前驱位点的 R_1e,陷阱 等于对全部已占据陷阱的直接求和 Σ_j p_j·R7(j → i)
+    （xy 最小镜像、不截断），截断误差不超过 `_TRAP_TERM_FLOOR`。前驱能级取引擎在该点放一个前驱参数探针时的陷阱能级，
+    源陷阱能级取平均场能级（ADR-038）。源陷阱全空时陷阱项为 0。"""
     config = _config(concentration_cm3=3.0e19)
+    tddb, device = config.tddb, config.device
     inner = KMCSimulation(config)
     occupancy = solve_mean_field(inner).occupancy
-    coarse = generation_rates(inner, occupancy, config.tddb, generation_cells(config.device, (2, 2, 14))).cells.rates
-    fine = generation_rates(inner, occupancy, config.tddb, generation_cells(config.device, (4, 4, 28))).cells.rates
-    other = generation_rates(inner, occupancy, config.tddb, generation_cells(config.device, (3, 5, 7))).cells.rates
-    assert np.all(coarse > 0.0)
-    assert fine.sum() == pytest.approx(coarse.sum(), rel=1e-12)
-    assert other.sum() == pytest.approx(coarse.sum(), rel=1e-12)
-    grouped = fine.reshape(2, 2, 2, 2, 14, 2).sum(axis=(1, 3, 5)).ravel()
-    np.testing.assert_allclose(grouped, coarse, rtol=1e-12)
+    precursors = _sites_near_sources(inner, occupancy, np.random.default_rng(9))
+    rates = generation_rates(inner, occupancy, tddb, precursors)
 
-
-def test_electrode_generation_samples_follow_the_integrand():
-    """单元事件的落点（ADR-044）：都在可放置区域里，沿 z 的分布与被积函数一致——均匀外场里一个中性缺陷挡住单元的
-    一部分，3000 个落点的 ⟨z⟩ 等于 ∫ z·f(z)·A(z) dz / ∫ f(z)·A(z) dz（A 是该高度上单元的可放置面积）。"""
-    config = _config()
-    device = config.device
-    standoff = _global_standoff(device)
-    center = np.array([5.03e-9, 4.97e-9, 1.0e-9])
-    inner = KMCSimulation(config, defects=_neutral_sources(config, center, 1.15))
-    cells = generation_cells(device, (2, 2, 14))  # 单元 10×10×0.5 nm，z 第 1 层是 [1.0, 1.5] nm
-    electrode = generation_rates(inner, np.ones(1), config.tddb, cells).cells
-    cell = 1
-    lower, upper = cells.lower[cell, 2], cells.lower[cell, 2] + cells.size[2]
-    rng = np.random.default_rng(3)
-    samples = np.array([electrode.sample(cell, rng) for _ in range(3000)])
-    distance = np.linalg.norm(minimum_image_delta(samples - center, device.Lx, device.Ly), axis=-1)
-    assert np.all(distance >= standoff)
-    assert np.all((samples[:, 2] >= lower) & (samples[:, 2] <= upper))
-
-    def weight(z, moment):
-        area = cells.size[0] * cells.size[1] - np.pi * max(0.0, standoff ** 2 - (z - center[2]) ** 2)
-        return z ** moment * float(_uniform_field_density(config, inner, z)[0]) * area
-
-    norm = integrate.quad(weight, lower, upper, args=(0,), points=[center[2] + standoff], epsrel=1e-10)[0]
-    mean = integrate.quad(weight, lower, upper, args=(1,), points=[center[2] + standoff], epsrel=1e-10)[0] / norm
-    z = samples[:, 2]
-    assert z.mean() == pytest.approx(mean, abs=4.0 * z.std() / np.sqrt(z.size))
-
-
-def _neutral_sources(config, positions, ED_eV):
-    """中性源陷阱（Z = +1、占据 1 时净电荷 0）。"""
-    material = config.device.stack.single_material
-    return DefectEnsemble.uniform(
-        np.atleast_2d(positions),
-        np.atleast_1d(ED_eV) * EV,
-        material,
-        band_reference=float(config.device.layer_band_references()[0]),
-    )
-
-
-def _isolated_source_reference(config, inner, moment=None):
-    """孤立中性源陷阱（p = 1）在均匀外场里的 N_T·∫_A R7·P_bb·w d³x，scipy 自适应积分到 1e-10。
-
-    电势就是外加偏压的线性解，被积函数只依赖 (r, u = cosθ)：Θ = exp(−max(0, ΔE₀ − e·F·r·u)/k_BT)，P_bb 是
-    常数，A 是 r ≥ min_separation 且 z ∈ [standoff, Lz − standoff]。权重 w 取 1（`moment` 为 None）、r（"r"）或 u（"u"）。
-    """
-    device, tddb = config.device, config.tddb
-    material = device.stack.single_material
-    temperature = config.simulation.temperature
-    standoff = _global_standoff(device)
-    z_i = float(inner.defects.positions[0, 2])
-    F = tddb_module.top_boundary_potential(device, config.simulation.voltage) / device.Lz
-    E_C_i = float(device.band_reference_profile(np.array([z_i]))[0]) - Q * F * z_i
-    delta0 = E_C_i - tddb.precursor_ionization_energy - inner._trap_state(np.ones(1))[0][0]
-    alpha = 1.0 / inner.defects.r_D[0] + 1.0 / localization_radius(tddb.precursor_ionization_energy, material.m_di)
-    kT = constants.Boltzmann * temperature
-    p_bb = float(bond_break_probability(tddb.activation_energy, tddb.dipole_moment, material.kappa, F, temperature))
-
-    def radial(u):
-        hi = 4e-9
-        if u < 0.0:
-            hi = min(hi, (z_i - standoff) / -u)
-        elif u > 0.0:
-            hi = min(hi, (device.Lz - standoff - z_i) / u)
-        if hi <= standoff:
-            return 0.0
-
-        def f(r):
-            weight = r if moment == "r" else (u if moment == "u" else 1.0)
-            return weight * r * r * np.exp(-alpha * r - max(0.0, delta0 - Q * F * r * u) / kT)
-
-        kink = delta0 / (Q * F * u) if u > 0.0 and delta0 > 0.0 else None
-        points = [kink] if kink is not None and standoff < kink < hi else None
-        return integrate.quad(f, standoff, hi, points=points, epsabs=0.0, epsrel=1e-12, limit=200)[0]
-
-    breaks = [b for b in ((standoff - z_i) / standoff, 0.0) if -1.0 < b < 1.0]
-    value = integrate.quad(radial, -1.0, 1.0, points=breaks, epsabs=0.0, epsrel=1e-10, limit=400)[0]
-    return tddb.precursor_concentration * 2.0 * np.pi * inner.defects.attempt_frequency[0] * p_bb * value
-
-
-@pytest.mark.parametrize(
-    "z_nm, ED_eV, rtol",
-    [
-        (4.0, 1.15, 2e-3),  # 能级与前驱相当，被积函数集中在 min_separation 那一圈
-        (4.0, 1.45, 6e-3),  # 深能级：近处上坡，峰值落在下游 MA 因子刚到 1 的折点上
-        (0.62, 0.90, 2e-3),  # 贴着可采样窗口下沿：球的下半部分被窗口平面截掉
-    ],
-)
-def test_trap_generation_matches_adaptive_reference_for_isolated_source(z_nm, ED_eV, rtol):
-    """陷阱项（ADR-042）：一个中性源陷阱（p = 1）在均匀外场里的事件速率等于 N_T·∫_A R7·P_bb d³x 的
-    自适应积分精确值。误差来自径向步长，随步长二阶下降（ADR-042 的收敛性表）。"""
-    config = _config()
-    inner = KMCSimulation(config, defects=_neutral_sources(config, [10e-9, 10e-9, z_nm * 1e-9], ED_eV))
-    cells = generation_cells(config.device, config.tddb.generation_grid)
-    traps = generation_rates(inner, np.ones(1), config.tddb, cells).traps
-    assert traps.rates[0] == pytest.approx(_isolated_source_reference(config, inner), rel=rtol)
-
-
-def test_trap_generation_is_the_fine_cell_limit_of_the_cell_center_sum(monkeypatch):
-    """有近旁缺陷挡住一部分区域（一个中性、一个空着带 +e）时，源陷阱积分就是 ADR-039 的单元中心求和
-    Σ_单元 N_T·V_cell·p·R7·P_bb 在单元加密下的极限：两种独立的求积——Cartesian 单元中心求和（0.025 nm）与加密一级的
-    源陷阱积分（0.02 nm / 48 / 48）——相差 ≤ 1%；默认求积参数与加密一级相差 ≤ 2%（ADR-042 的收敛性表）。"""
-    config = _config()
-    device = config.device
-    standoff = _global_standoff(device)
-    center = np.array([10e-9, 10e-9, 3e-9])
-    positions = np.array([center, center + [0.6e-9, 0.0, 0.1e-9], center + [-0.2e-9, 0.7e-9, -0.3e-9]])
-    inner = KMCSimulation(config, defects=_neutral_sources(config, positions, [1.15, 1.15, 1.15]))
-    occupancy = np.array([1.0, 1.0, 0.0])  # 第三个空着、带 +e，不是源陷阱
-    cells = generation_cells(device, config.tddb.generation_grid)
-    default = generation_rates(inner, occupancy, config.tddb, cells).traps
-    assert default.rates[2] == 0.0 and default.rates[0] > 0.0
-    monkeypatch.setattr(tddb_module, "_TRAP_RADIAL_STEP", 0.02e-9)
-    monkeypatch.setattr(tddb_module, "_TRAP_POLAR_BINS", 48)
-    monkeypatch.setattr(tddb_module, "_TRAP_AZIMUTH_BINS", 48)
-    fine = generation_rates(inner, occupancy, config.tddb, cells).traps
-
-    h, reach = 0.025e-9, 1.6e-9  # 被积函数在 min_separation 外每 0.083 nm 衰减 e 倍，1.6 nm 处已低于 1e-5
-    axis = np.arange(-reach + 0.5 * h, reach, h)
-    offsets = np.stack(np.meshgrid(axis, axis, axis, indexing="ij"), axis=-1).reshape(-1, 3)
-    distance = np.linalg.norm(offsets, axis=-1)
-    outside = distance >= standoff
-    points, distance = center + offsets[outside], distance[outside]
-    keep, _ = fine._admissible(points, np.zeros(points.shape[0], dtype=int))
-    values, _, _ = fine._integrand(np.zeros(int(keep.sum()), dtype=int), points[keep], distance[keep])
-    cell_sum = config.tddb.precursor_concentration * h ** 3 * np.sum(values / distance[keep] ** 2)
-    assert cell_sum == pytest.approx(fine.rates[0], rel=1e-2)
-    assert default.rates[0] == pytest.approx(fine.rates[0], rel=2e-2)
-
-
-def test_trap_generation_is_independent_of_generation_grid_and_vanishes_for_empty_sources():
-    """陷阱项不经过生成单元：两种生成网格下逐位相同；源陷阱全空（p = 0）时全部为 0。"""
-    config = _config(concentration_cm3=3.0e19)
-    inner = KMCSimulation(config)
-    occupancy = solve_mean_field(inner).occupancy
-    coarse = generation_rates(inner, occupancy, config.tddb, generation_cells(config.device, (2, 2, 14)))
-    fine = generation_rates(inner, occupancy, config.tddb, generation_cells(config.device, (4, 4, 20)))
-    assert np.any(coarse.traps.rates > 0.0)
-    assert np.array_equal(coarse.traps.rates, fine.traps.rates)
-    cells = generation_cells(config.device, (2, 2, 14))
-    empty = generation_rates(inner, np.zeros(inner.n_defects), config.tddb, cells)
-    assert np.all(empty.traps.rates == 0.0)
-
-
-def test_trap_generation_samples_follow_the_integrand():
-    """源陷阱事件的落点（ADR-042）：都在可放置区域里；深能级源陷阱（近处上坡）的落点偏向下游，⟨r⟩、⟨u⟩
-    与自适应积分给出的被积函数一阶矩一致（3000 个样本的统计误差内）。"""
-    config = _config()
-    device = config.device
-    inner = KMCSimulation(config, defects=_neutral_sources(config, [10e-9, 10e-9, 4e-9], 1.40))
-    cells = generation_cells(device, config.tddb.generation_grid)
-    traps = generation_rates(inner, np.ones(1), config.tddb, cells).traps
-    rng = np.random.default_rng(3)
-    samples = np.array([traps.sample(0, rng) for _ in range(3000)])
-    delta = minimum_image_delta(samples - inner.defects.positions[0], device.Lx, device.Ly)
-    r = np.linalg.norm(delta, axis=-1)
-    u = delta[:, 2] / r
-    standoff = _global_standoff(device)
-    assert np.all(r >= standoff)
-    assert np.all((samples[:, 2] >= standoff) & (samples[:, 2] <= device.Lz - standoff))
-
-    norm = _isolated_source_reference(config, inner)
-    mean_r = _isolated_source_reference(config, inner, moment="r") / norm
-    mean_u = _isolated_source_reference(config, inner, moment="u") / norm
-    assert mean_u > 0.3  # 下游（阳极方向）占优
-    assert r.mean() == pytest.approx(mean_r, abs=4.0 * r.std() / np.sqrt(r.size) + 2e-12)
-    assert u.mean() == pytest.approx(mean_u, abs=4.0 * u.std() / np.sqrt(u.size) + 0.01)
-
-
-def test_precursor_concentration_only_rescales_time():
-    """N_T 只是生成率的前置因子：同一种子下 N_T 翻 10 倍，事件序列与电流逐位相同、时刻缩为 1/10。"""
-    base = run_tddb(_config(max_generated_vacancies=3))
-    scaled = run_tddb(_config(max_generated_vacancies=3, precursor_concentration=4.0e20 * PER_CM3))
-    assert np.array_equal(scaled.current, base.current)
-    assert np.array_equal(scaled.defects.positions, base.defects.positions)
-    np.testing.assert_allclose(scaled.time * 10.0, base.time, rtol=1e-12)
-    np.testing.assert_allclose(scaled.generation_rate, 10.0 * base.generation_rate, rtol=1e-12)
+    extended, occ, probe = _probe(config, inner, occupancy, precursors.positions)
+    precursor_energy = extended._trap_state(occ)[0][probe]
+    trap_energy = inner._trap_state(occupancy)[0]
+    defects = inner.defects
+    delta = minimum_image_delta(precursors.positions[:, None, :] - defects.positions[None, :, :], device.Lx, device.Ly)
+    expected = trap_precursor_capture_rate(
+        defects.attempt_frequency[None, :],
+        np.linalg.norm(delta, axis=-1),
+        defects.r_D[None, :],
+        localization_radius(tddb.precursor_ionization_energy, device.stack.single_material.m_di),
+        trap_energy[None, :],
+        precursor_energy[:, None],
+        occupancy[None, :],
+        config.simulation.temperature,
+    ).sum(axis=1)
+    assert np.all(expected[:40] > 1.0)
+    np.testing.assert_allclose(rates.trap, expected, rtol=1e-9, atol=tddb_module._TRAP_TERM_FLOOR)
+    assert np.all(generation_rates(inner, np.zeros(inner.n_defects), tddb, precursors).trap == 0.0)
 
 
 def test_generation_rates_follow_local_temperature():
-    """局域温度（§6.6）：温度场处处取环境温度时单元事件与源陷阱事件都退回缺省（按工作点温度求值）；温度场不均匀时
-    单元事件的每个求积节点按该节点的温度求值，等于整张温度场取这个节点温度时同一节点的值（插值表误差内）。"""
-    config = _config()
+    """局域温度（§6.6）：温度场处处取环境温度时三个分量都等于缺省（按工作点温度求值）；温度场不均匀时每个位点按它
+    所在处的温度求值，等于整张温度场取这个温度时同一位点的值。"""
+    config = _config(concentration_cm3=3.0e19)
+    tddb = config.tddb
     inner = KMCSimulation(config)
     occupancy = solve_mean_field(inner).occupancy
-    cells = generation_cells(config.device, config.tddb.generation_grid)
+    precursors = _sites_near_sources(inner, occupancy, np.random.default_rng(4))
     ambient = config.simulation.temperature
     shape = inner.solver.grid.shape
-    base = generation_rates(inner, occupancy, config.tddb, cells)
-    flat = generation_rates(inner, occupancy, config.tddb, cells, np.full(shape, ambient))
-    assert np.any(base.traps.rates > 0.0)
-    np.testing.assert_allclose(flat.cells.rates, base.cells.rates, rtol=1e-12)
-    np.testing.assert_allclose(flat.traps.rates, base.traps.rates, rtol=1e-12)
+    base = generation_rates(inner, occupancy, tddb, precursors)
+    flat = generation_rates(inner, occupancy, tddb, precursors, np.full(shape, ambient))
+    assert np.all(base.trap[:40] > 0.0)
+    for name in GenerationRates._fields:
+        np.testing.assert_allclose(getattr(flat, name), getattr(base, name), rtol=1e-12)
 
     field = ambient + np.random.default_rng(4).uniform(0.0, 80.0, shape)
-    local = generation_rates(inner, occupancy, config.tddb, cells, field).cells
-    assert not np.allclose(local.rates, base.cells.rates)
-    for level, column in ((2, 0), (20, 9000), (60, 25000)):
-        point = np.append(local._columns[column], local._levels[level])
-        node_temperature = float(inner.solver.interpolate(field, point)[0])
-        uniform = generation_rates(inner, occupancy, config.tddb, cells, np.full(shape, node_temperature)).cells
-        assert local._log_rate[level, column] == pytest.approx(uniform._log_rate[level, column], abs=1e-3)
-        assert local._barrier[level, column] == pytest.approx(uniform._barrier[level, column], rel=1e-12)
+    local = generation_rates(inner, occupancy, tddb, precursors, field)
+    temperature = inner.solver.interpolate(field, precursors.positions)
+    assert not np.allclose(local.rates, base.rates)
+    for i in (0, 17, 39, 40, len(precursors) - 1):
+        single = Precursors(precursors.positions[i:i + 1], precursors.activation_energy[i:i + 1])
+        uniform = generation_rates(inner, occupancy, tddb, single, np.full(shape, temperature[i]))
+        for name in GenerationRates._fields:
+            assert getattr(local, name)[i] == pytest.approx(getattr(uniform, name)[0], rel=1e-10), name
+
+
+def test_activation_energy_shift_only_rescales_time(monkeypatch):
+    """P_bb 未饱和时，E_A 整体平移 ΔE 只把每个位点的生成速率乘 exp(−ΔE/k_BT)（ADR-052）：同一种子下前驱位点、
+    事件序列与电流逐位相同，时刻放大 exp(ΔE/k_BT) 倍。随机数的消耗与 E_A 无关。"""
+    saturated = []
+    original = tddb_module.generation_rates
+
+    def recording(inner, occupancy, tddb, precursors, temperature_field=None):
+        result = original(inner, occupancy, tddb, precursors, temperature_field)
+        saturated.append(bool(np.any(result.bond_breaking >= 1.0)))
+        return result
+
+    monkeypatch.setattr(tddb_module, "generation_rates", recording)
+    shift = 0.1 * EV
+    config = _config(max_generated_vacancies=3, activation_energy=4.3 * EV, stop_time=1.0e30)
+    base = run_tddb(config)
+    shifted = run_tddb(replace(config, tddb=replace(config.tddb, activation_energy=4.3 * EV + shift)))
+    assert len(saturated) == 8 and not any(saturated)
+    factor = np.exp(shift / (constants.Boltzmann * config.simulation.temperature))
+    assert base.stop_reason == shifted.stop_reason == "max_generated"
+    assert np.array_equal(shifted.defects.positions, base.defects.positions)
+    assert np.array_equal(shifted.current, base.current)
+    assert np.array_equal(shifted.n_precursors, base.n_precursors)
+    np.testing.assert_allclose(shifted.time, factor * base.time, rtol=1e-9)
+    np.testing.assert_allclose(shifted.generation_rate, base.generation_rate / factor, rtol=1e-9)
 
 
 def test_thermal_feedback_feeds_previous_power_into_transport_and_generation(monkeypatch):
@@ -623,9 +548,9 @@ def test_thermal_feedback_feeds_previous_power_into_transport_and_generation(mon
         calls.append((sim, result))
         return result
 
-    def recording_rates(inner, occupancy, tddb, cells, temperature_field=None):
+    def recording_rates(inner, occupancy, tddb, precursors, temperature_field=None):
         temperature_fields.append(temperature_field)
-        return original_rates(inner, occupancy, tddb, cells, temperature_field)
+        return original_rates(inner, occupancy, tddb, precursors, temperature_field)
 
     monkeypatch.setattr(tddb_module, "solve_mean_field", recording_mf)
     monkeypatch.setattr(tddb_module, "generation_rates", recording_rates)
@@ -667,7 +592,7 @@ def test_distance_clusters_link_defects_closer_than_the_cutoff():
 def test_trajectory_breaks_down_when_current_density_exceeds_the_threshold(trajectory):
     """击穿判据（ADR-047）：轨迹停在电流密度第一次超过击穿电流密度的记录上，t_BD 就是这条记录的
     时刻，之前的记录与不停的轨迹逐位相同；J(0) 就超过时停在 t = 0；等于阈值不算超过。"""
-    config, reference, _ = trajectory
+    config, reference, _, _ = trajectory
     density = reference.current_density
     threshold = 0.5 * (density[1] + density[2])
     assert np.all(density[:2] < threshold) and density[2] > threshold
@@ -686,78 +611,19 @@ def test_trajectory_breaks_down_when_current_density_exceeds_the_threshold(traje
     assert np.array_equal(at_peak.current, reference.current)
 
 
-class _StubEvents:
-    """只有速率与落点的事件源：`places[i]` 为 None 表示第 i 个事件放不下新空位。"""
-
-    def __init__(self, places):
-        self.rates = np.ones(len(places))
-        self._places = places
-
-    def sample(self, index, rng):
-        return self._places[index]
-
-
-def test_full_event_is_skipped():
-    """选中的事件放不下新空位：记为已满，改从其余事件抽；全部已满或总速率为 0 时返回 None。"""
-    point = np.array([2e-9, 2e-9, 2e-9])
-    table = tddb_module.GenerationTable(_StubEvents([None, point]), _StubEvents([]))
-    full = np.zeros(2, dtype=bool)
+def test_draw_generation_picks_sites_by_rate():
+    """Gillespie 抽事件（ADR-052）：Δt = −ln(r)/ΣG，按速率选位点，速率为 0 的位点不会被选中；总速率为 0 或没有
+    位点时返回 None。"""
     rng = np.random.default_rng(0)
-    dt, position = _draw_generation(np.array([1e12, 1.0]), full, table, rng)
-    assert full.tolist() == [True, False]
-    assert np.array_equal(position, point)
-    assert dt > 0.0
-    assert _draw_generation(np.zeros(2), full, table, rng) is None
-
-
-def test_source_event_places_by_its_sampler_and_is_marked_full_when_it_cannot():
-    """事件表 = 单元事件 + 源陷阱事件（ADR-042）：选中源陷阱时落点由它的抽样给出（在它周围、满足
-    min_separation）；源陷阱放不下新空位时记为已满，剩下没有事件时返回 None。"""
-    config = _config()
-    device = config.device
-    inner = KMCSimulation(config, defects=_neutral_sources(config, [10e-9, 10e-9, 4e-9], 1.15))
-    cells = generation_cells(device, config.tddb.generation_grid)
-    table = generation_rates(inner, np.ones(1), config.tddb, cells)
-    traps = table.traps
-    standoff = _global_standoff(device)
-    rates = np.concatenate([np.zeros(len(cells)), traps.rates])
-    full = np.zeros(rates.size, dtype=bool)
-    rng = np.random.default_rng(0)
-    dt, position = _draw_generation(rates, full, table, rng)
-    assert dt > 0.0 and not full.any()
-    assert standoff <= np.linalg.norm(position - inner.defects.positions[0]) < 2e-9
-
-    traps.sample = lambda source, rng: None  # 源陷阱周围放不下
-    assert _draw_generation(rates, full, table, rng) is None
-    assert full.tolist() == [False] * len(cells) + [True]
-
-
-def test_trajectory_driven_by_source_events_keeps_bookkeeping(monkeypatch):
-    """只留源陷阱事件（单元事件置零）跑轨迹：每个新空位都落在某个已有缺陷的近旁、满足 min_separation 与
-    可采样窗口，记录的 ΣG 就是源陷阱事件之和；事件表随缺陷数增长（每个新空位多一条源陷阱事件）。"""
-    original = tddb_module.generation_rates
-    tables = []
-
-    def traps_only(inner, occupancy, tddb, cells, temperature_field=None):
-        table = original(inner, occupancy, tddb, cells, temperature_field)
-        tables.append(table)
-        table.cells.rates = np.zeros_like(table.cells.rates)
-        return table
-
-    monkeypatch.setattr(tddb_module, "generation_rates", traps_only)
-    config = _config(seed=1, concentration_cm3=3.0e19, max_generated_vacancies=3)
-    result = run_tddb(config)
-    device = config.device
-    assert result.stop_reason == "max_generated"
-    standoff = _global_standoff(device)
-    positions = result.defects.positions
-    for k in range(3):
-        n = result.n_initial + k
-        distance = np.linalg.norm(minimum_image_delta(positions[:n] - positions[n], device.Lx, device.Ly), axis=1)
-        assert standoff <= distance.min() < 2e-9
-        assert standoff <= positions[n, 2] <= device.Lz - standoff
-        assert tables[k].traps.rates.size == n
-        assert result.generation_rate[k] == pytest.approx(tables[k].traps.rates.sum(), rel=1e-12)
+    rates = np.array([0.0, 1.0, 0.0, 3.0])
+    draws = [_draw_generation(rates, rng) for _ in range(4000)]
+    dt = np.array([d[0] for d in draws])
+    picks = np.array([d[1] for d in draws])
+    assert set(picks.tolist()) == {1, 3}
+    assert np.mean(picks == 3) == pytest.approx(0.75, abs=4.0 * np.sqrt(0.75 * 0.25 / picks.size))
+    assert np.all(dt > 0.0) and dt.mean() == pytest.approx(0.25, abs=4.0 * 0.25 / np.sqrt(dt.size))
+    assert _draw_generation(np.zeros(3), rng) is None
+    assert _draw_generation(np.zeros(0), rng) is None
 
 
 def test_fit_power_law_recovers_exponent_and_rates_noise():
@@ -778,7 +644,7 @@ def test_fit_power_law_recovers_exponent_and_rates_noise():
 
 
 def test_fit_transient_samples_log_time_between_first_event_and_end(trajectory):
-    _, result, _ = trajectory
+    _, result, _, _ = trajectory
     fit, times = fit_transient(result, points_per_decade=10)
     assert times[0] == pytest.approx(result.time[1], rel=1e-12)
     assert times[-1] == pytest.approx(result.end_time, rel=1e-12)
@@ -788,7 +654,7 @@ def test_fit_transient_samples_log_time_between_first_event_and_end(trajectory):
 
 
 def test_write_tddb_csv(tmp_path, trajectory):
-    _, result, _ = trajectory
+    _, result, _, _ = trajectory
     path = tmp_path / "it.csv"
     write_tddb_csv(result, str(path))
     with open(path, newline="", encoding="utf-8") as handle:
@@ -804,6 +670,7 @@ def test_write_tddb_csv(tmp_path, trajectory):
         assert float(row["T_effective_K"]) == pytest.approx(result.effective_temperature[k], abs=1e-6)
         assert int(row["dense_cluster_size"]) == result.dense_cluster_size[k]
         assert int(row["mf_newton_steps"]) == result.newton_steps[k]
+        assert int(row["n_precursors"]) == result.n_precursors[k]
 
 
 def test_cli_tddb_writes_csv_and_figure(tmp_path, capsys):
@@ -824,10 +691,9 @@ def test_cli_tddb_writes_csv_and_figure(tmp_path, capsys):
         "electrodes": {"cathode": {"work_function_eV": 4.6}, "anode": {"work_function_eV": 4.6}},
         "simulation": {"voltage_V": 3.0, "temperature_C": 25.0, "seed": 3, "grid": {"nx": 8, "ny": 8, "nz": 16}},
         "tddb": {
-            "activation_energy_eV": 4.0, "precursor_ionization_energy_eV": 1.15,
+            "activation_energy_eV": 4.0, "activation_energy_sigma_eV": 0.05, "precursor_ionization_energy_eV": 1.15,
             "precursor_relaxation_energy_eV": 1.0, "dipole_moment_eA": 7.1, "field_averaging_width_nm": 0.5,
-            "precursor_concentration_cm3": 4.0e19, "generation_grid": {"nx": 2, "ny": 2, "nz": 14},
-            "max_generated_vacancies": 2, "stop_time_s": 1.0e4,
+            "precursor_concentration_cm3": 4.0e19, "max_generated_vacancies": 2, "stop_time_s": 1.0e4,
             "breakdown_current_density_A_cm2": 1.0e4,
             "thermal_conductivity_W_mK": 1.0,
         },
@@ -838,4 +704,5 @@ def test_cli_tddb_writes_csv_and_figure(tmp_path, capsys):
     assert (tmp_path / "it.png").stat().st_size > 0
     with open(tmp_path / "it.csv", newline="", encoding="utf-8") as handle:
         assert len(list(csv.DictReader(handle))) == 3
-    assert "n = " in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "n = " in output and "前驱位点" in output
