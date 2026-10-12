@@ -90,8 +90,9 @@ ensemble:
 # TDDB 缺陷生成、热反馈与击穿判据参数（第 3 节参数表，ADR-024/035/036）。由 io.py 读入并换算到 SI。
 tddb:
   # E_A：无场下形成 Frenkel 对的激活能，全部前驱位点取同一个值（式 T2；双电子机制下即 E_A,2e；ADR-053）。p₀ = 1 eÅ 时
-  # 3.6 V / 8 nm 下场加速项压低 0.6 eV，有效势垒 0.70 eV。1.30 eV 沿用 ADR-052 的初值，标定待定；P_bb 未饱和时 E_A 只改
-  # 时间标尺。有效势垒对电压的斜率只由 p₀ 定，与 E_A 无关
+  # 3.6 V / 8 nm 下场加速项压低 0.6 eV，有效势垒 0.70 eV。1.30 eV 是初值：验收中 seed 1/2/4 的 t_BD = 0.69–1.85×10⁴ s，
+  # t_BD = 1000 s 对应 1.225–1.250 eV，seed 3 到 1.1×10⁷ s 未击穿，标定待定（ADR-053）；P_bb 未饱和时 E_A 只改时间标尺。
+  # 有效势垒对电压的斜率只由 p₀ 定，与 E_A 无关
   activation_energy_eV: 1.30
   # 前驱单步俘获参数（式 T4/T9/T10）
   precursor_ionization_energy_eV: 1.15   # E_t1，取与 O 空位预设相同的值（= defects.level.ED_eV，ADR-028）

@@ -9,6 +9,14 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。实测数据与方案对�
 
 #### TDDB 阶段
 
+- **E_A 统一取值后的 3.6 V / 25 °C 验收（50×50 nm，seed 1–4）**（ADR-053，`results/10.12/fixed_ea/`，代码 329c000）。与 ADR-052 长轨迹
+  同一初始缺陷与前驱位置，不设应力时间上限。t = 0 的 ΣG 为 0.086–0.11 s⁻¹（ADR-052 为 10–87 s⁻¹），约 10³ s 之后两组 ΣG(t) 重合；
+  新空位更贴阴极（z 中位数 1.10–1.12 nm）。seed 1 / 2 / 4 在 1.37×10⁴ / 1.85×10⁴ / 6.9×10³ s 击穿（相差 2.7 倍），t_BD = 1000 s 对应
+  E_A = 1.225–1.250 eV；seed 3 的 J 在阴极层前驱用完后停在 6.95 A/cm²，到 1.1×10⁷ s 未击穿（手动停）。I-t 双对数重新向上弯：从第一次
+  生成起 n = 0.35–0.56、R² = 0.87–0.96，前半段 n = 0.06–0.33、后半段 0.56–0.84。平均场每条记录收敛，每步 6 s，升温 ≤ 1.3×10⁻³ K。
+  **为什么**：ADR-053 的验收。只跑数据与改文档（ADR-053 验收段、PROJECT_CONTEXT_TDDB.md §1/§10、README、`zro2_tddb.yaml` 注释），
+  未改 `src/`。
+
 - **E_A 改为全部前驱位点取同一个值，去掉高斯分布**（ADR-053，§6.1，式 T2）。删去配置项 `activation_energy_sigma_eV` 与
   `Precursors.activation_energy`，`place_precursors` 只撒位置（同一种子的前驱位置与 ADR-052 相同），P_bb 取配置的 E_A；
   `bond_break_probability` 等的 E_A 改回标量。`zro2_tddb.yaml` 删去 σ_A，E_A 暂留 1.30 eV。
