@@ -403,17 +403,15 @@ class EnsembleConfig:
 
 @dataclass(frozen=True)
 class TDDBConfig:
-    """TDDB 缺陷生成参数（PROJECT_CONTEXT_TDDB.md 第 3 节参数表，ADR-024/028/035/036/047/052）。
+    """TDDB 缺陷生成参数（PROJECT_CONTEXT_TDDB.md 第 3 节参数表，ADR-024/028/035/036/047/052/053）。
 
     只收已定取值的参数，每个字段在用到它的 Phase 加入。G 场加速项里的相对介电常数 k 取
     介质材料的静态 κ，前驱俘获线型用的声子能量 ℏω₀ 取宿主介质的值，应力电压与环境温度
     取 simulation 段的工作点，都不在这里另设。
     """
 
-    # E_A：无场下形成 Frenkel 对的激活能在前驱之间的均值 [J]（式 T2；双电子机制下即 E_A,2e）
+    # E_A：无场下形成 Frenkel 对的激活能 [J]，全部前驱位点取同一个值（式 T2；双电子机制下即 E_A,2e；ADR-053）
     activation_energy: float
-    # σ_A：E_A 在前驱之间的高斯分布标准差 [J]，每个前驱位点各抽一个 E_A,i（§6.1，ADR-052）。0 = 全部取均值
-    activation_energy_sigma: float
     precursor_ionization_energy: float  # E_t1：前驱能级相对局部导带底的深度 [J]（式 T4/T9）
     # E_rel1：第一次电子俘获导致 O-Zr-O 键断裂、O 空位形成的弛豫能 [J]。只进 R_1e 的多声子
     # 线型（E_rel1/ℏω₀ 作为式 T10 的参数），与输运用的材料 Huang-Rhys 因子 huang_rhys 无关（ADR-030）

@@ -515,13 +515,12 @@ TDDB 阶段（规格见 `PROJECT_CONTEXT_TDDB.md`，决策记录见 `docs/adr/td
 σ(log₁₀J) = 1.18，50 × 50 nm 下 0.35（ADR-050），默认盒子因此改为 50 × 50 nm（ADR-051）。
 
 顶层 `tddb` 段放 TDDB 缺陷生成、热反馈与击穿判据参数，由 `io.py` 读成 `Config.tddb`（SI 单位），
-整段省略即纯漏电流仿真（`Config.tddb = None`）。字段在用到它的阶段逐个加入，现在有十一个，除 k_TH
+整段省略即纯漏电流仿真（`Config.tddb = None`）。字段在用到它的阶段逐个加入，现在有十个，除 k_TH
 外都必须给出：
 
 ```yaml
 tddb:
-  activation_energy_eV: 1.30             # E_A：无场下形成 Frenkel 对的激活能在前驱之间的均值（式 T2，必须为正）
-  activation_energy_sigma_eV: 0.10       # σ_A：E_A 在前驱之间的高斯分布标准差（必须 ≥ 0，取 0 即全取均值，ADR-052）
+  activation_energy_eV: 1.30             # E_A：无场下形成 Frenkel 对的激活能，全部前驱位点相同（式 T2，必须为正，ADR-053）
   precursor_ionization_energy_eV: 1.15   # E_t1：前驱能级相对局部导带底的深度（必须为正）
   precursor_relaxation_energy_eV: 1.0    # E_rel1：第一次电子俘获导致键断裂、O 空位形成的弛豫能（必须为正）
   dipole_moment_eA: 1.0                  # p₀：前驱有效偶极矩均值 [e·Å]（必须 ≥ 0，取 0 即关掉场加速）
@@ -587,7 +586,7 @@ Jacobian 求 N 次 F（N = 160 时约 1–2 min）。20 × 20 nm 盒子（N=10�
 以内（对拍见 ADR-031，逐实现数据在 `results/9.29/tddb_phase2_mf_vs_kmc.csv`）。
 
 **TDDB 瞬态运行**（`tddb.py`，ADR-033/036/052）：`run_tddb(config)` 跑一条恒压应力下的轨迹。t = 0 在可采样窗口里均匀撒
-round(N_T·V) 个离散前驱位点，每个位点抽自己的 E_A,i（`place_precursors`），离初始缺陷不到 min_separation 的删去。外层在前驱位点上
+round(N_T·V) 个离散前驱位点（`place_precursors`，E_A 全部相同，ADR-053），离初始缺陷不到 min_separation 的删去。外层在前驱位点上
 做 Gillespie：各缺陷净电荷 q·(Z − p) + q_fix 与外加偏压解一次泊松方程，在每个位点上求 G_i = R_1e·P_bb（`generation_rates`）：
 R_1e = 两侧电极 R2 + R4 + 近旁已占据陷阱的 Σ p·R7，取法同引擎处理真实陷阱。抽中的位点原地变成新空位，它与离新空位不到
 min_separation 的位点删去，所以生成随前驱用完而变慢。新空位与初始缺陷同一物种、出生时被一个电子占据、带着重合的 O_i⁻。内层每步按当前缺陷集合重建 `KMCSimulation`、从上一步占据热启动求平均场

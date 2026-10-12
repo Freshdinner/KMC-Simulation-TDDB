@@ -21,7 +21,7 @@ docs/rate_equations.md 的 R1–R8 不对应::
     的这一项求和，与电极项相加得到该前驱的 R_1e（`tddb.generation_rates`，ADR-052）。
 - G 里的 k 是相对介电常数，取介质的静态 κ（Lorentz 局域场修正，与镜像力无关），
   ε_opt 不进这里。p₀ 是前驱有效偶极矩（T3：p₀ = ½·n·Valence·e·d），配置直接给均值。
-  E_A 在前驱之间有分布，可以逐前驱传入（ADR-052）。
+  E_A 全部前驱取同一个值（ADR-053）。
 - G 的俘获速率作为参数传入：后期换成双电子俘获 R_2e（T4′）时只改调用方。
 
 全部量为 SI 单位。
@@ -175,20 +175,19 @@ def single_electron_capture_parts(
 
 
 def effective_activation_energy(
-    activation_energy: Union[float, np.ndarray], dipole_moment: float, kappa: float, field: np.ndarray
+    activation_energy: float, dipole_moment: float, kappa: float, field: np.ndarray
 ) -> np.ndarray:
     """场加速后的断键有效势垒 E_A − p₀·(2+k)/3·E [J]（式 T2 指数里的那一项）。
 
     `kappa` 是静态相对介电常数（Lorentz 局域场因子 (2+k)/3），`field` 是局域
-    电场大小 [V/m]，`dipole_moment` = p₀ [C·m]。`activation_energy` 可以是与 `field`
-    等长的逐前驱 E_A,i（ADR-052）。
+    电场大小 [V/m]，`dipole_moment` = p₀ [C·m]。
     """
     lorentz = (2.0 + kappa) / 3.0
-    return np.asarray(activation_energy, dtype=float) - dipole_moment * lorentz * np.asarray(field, dtype=float)
+    return activation_energy - dipole_moment * lorentz * np.asarray(field, dtype=float)
 
 
 def bond_break_probability(
-    activation_energy: Union[float, np.ndarray],
+    activation_energy: float,
     dipole_moment: float,
     kappa: float,
     field: np.ndarray,
@@ -197,8 +196,8 @@ def bond_break_probability(
     """断键概率 P_bb = exp[−(E_A − p₀·(2+k)/3·E)/k_BT]（式 T2）。
 
     有效势垒降到 0 以下时断键不再需要热激活，P_bb 饱和为 1，生成率只剩俘获
-    速率限制（PROJECT_CONTEXT_TDDB.md §8.1）。`activation_energy` 与 `temperature`
-    都可以是与 `field` 等长的逐前驱值。
+    速率限制（PROJECT_CONTEXT_TDDB.md §8.1）。`temperature` 可以是与 `field` 等长的
+    逐前驱温度。
     """
     barrier = effective_activation_energy(activation_energy, dipole_moment, kappa, field)
     return np.exp(-np.clip(barrier, 0.0, None) / (constants.Boltzmann * temperature))
@@ -206,7 +205,7 @@ def bond_break_probability(
 
 def bond_break_generation_rate(
     capture_rate: np.ndarray,
-    activation_energy: Union[float, np.ndarray],
+    activation_energy: float,
     dipole_moment: float,
     kappa: float,
     field: np.ndarray,

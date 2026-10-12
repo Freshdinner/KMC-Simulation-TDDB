@@ -5,7 +5,7 @@
 2. 场加速项线性压低势垒，log G 对 E 成线性（有效势垒降到 0 以下时 P_bb 饱和为 1）；
 3. R_1e 的电极项等于同一前驱参数下两侧电极的 R2 + R4 之和，与输运引擎口径一致；
 另加 R_1e 的陷阱项（ADR-039）：每个来源是 p·R7(陷阱 → 前驱)，源陷阱空着时为 0；逐前驱位点对近旁陷阱的求和见
-test_tddb.py（ADR-052）。P_bb 接受逐前驱的 E_A,i（ADR-052）。
+test_tddb.py（ADR-052）。
 """
 
 import numpy as np
@@ -62,18 +62,6 @@ def test_bond_break_probability_saturates_when_barrier_vanishes():
     assert bond_break_probability(E_A, 9.0 * E_ANGSTROM, KAPPA, field, T) == pytest.approx(1.0)
     G = bond_break_generation_rate(np.array([4.2e6]), E_A, 9.0 * E_ANGSTROM, KAPPA, field, T)
     assert G == pytest.approx([4.2e6], rel=1e-15)
-
-
-def test_bond_break_probability_takes_per_precursor_activation_energy():
-    """逐前驱的 E_A,i（ADR-052）：数组输入逐元素等于各自取标量时的 P_bb，饱和照常按各自的有效势垒判断。"""
-    p0 = 7.1 * E_ANGSTROM
-    activation = np.array([3.0, 3.6, 4.0, 4.4]) * EV
-    field = np.full(activation.size, 3.0 / 8e-9)
-    temperature = np.array([298.15, 310.0, 330.0, 298.15])
-    p_bb = bond_break_probability(activation, p0, KAPPA, field, temperature)
-    expected = [bond_break_probability(a, p0, KAPPA, f, t) for a, f, t in zip(activation, field, temperature)]
-    np.testing.assert_allclose(p_bb, expected, rtol=1e-15)
-    assert p_bb[0] == 1.0 and np.all(p_bb[1:] < 1.0)  # 3.0 eV 的有效势垒为负，饱和
 
 
 def test_field_lowering_uses_static_kappa_lorentz_factor():

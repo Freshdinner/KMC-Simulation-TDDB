@@ -5,8 +5,8 @@
 
 电子输运事件的时间尺度（~10⁻¹³…10⁻⁶ s）比缺陷生成（秒以上）短十几个数量级，所以输运相对
 生成瞬间达到稳态（§5）。t = 0 在初始缺陷之外撒离散前驱位点（§6.1，ADR-052）：可采样窗口里均匀放
-round(N_T·V_窗口) 个，每个位点按均值 E_A、标准差 σ_A 的高斯分布抽自己的断键激活能 E_A,i。外层是缺陷
-生成的 Gillespie 循环，每步：
+round(N_T·V_窗口) 个，全部位点的无场断键激活能取同一个 E_A（ADR-053）。外层是缺陷生成的 Gillespie 循环，
+每步：
 
 1. **内层稳态**：按当前缺陷集合与输运温度重建 `KMCSimulation`（静电耦合用
    `IncrementalCoupling` 逐个追加的那份），从上一步的占据热启动，求簇级平均场不动点
@@ -23,7 +23,7 @@ round(N_T·V_窗口) 个，每个位点按均值 E_A、标准差 σ_A 的高斯�
    - R_1e,i = 两侧电极 R2 + R4（电极项，式 T4）+ Σ_j p_j·R7(j → i)（陷阱项：近旁已占据陷阱经陷阱间通道
      送来的电子，ADR-039）。前驱能级、R4 的局域场与温度取位点处含空间电荷的局域值，取法同引擎处理
      真实陷阱；
-   - P_bb,i 用位点自己的 E_A,i，场取泊松解在 Gaussian 窗口上的平均（宏观场，ADR-043）。
+   - P_bb,i 的场取泊松解在 Gaussian 窗口上的平均（宏观场，ADR-043）。
 4. **击穿判据**（§6.3，ADR-047）：电流密度超过击穿电流密度即击穿，这一刻就是 t_BD。论文的
    "25 个空位、间距 ≤ 6 Å"团簇只作标志记录，不作判据。
 5. **抽事件**：Δt = −ln(r)/ΣG，按 G_i 选一个前驱位点断键，新空位就落在这个位点上。这个前驱用掉，
@@ -189,11 +189,10 @@ class Precursors:
     """还没断键、还能放下新空位的离散前驱位点（§6.1，ADR-052）。
 
     前驱是 O-Zr-O 键上的一个位置，俘获一个电子后可能断键、原地变成 O 空位（式 T1），断一次就用掉。
-    位点位置连续随机（§6.8）；每个位点有自己的无场断键激活能 E_A,i，体现非晶里键环境的差别。
+    位点位置连续随机（§6.8）；无场断键激活能全部取 `tddb.activation_energy`（ADR-053）。
     """
 
     positions: np.ndarray  # (M, 3) 位点坐标 [m]
-    activation_energy: np.ndarray  # (M,) 各位点的无场断键激活能 E_A,i [J]
 
     def __len__(self) -> int:
         return int(self.positions.shape[0])
@@ -203,7 +202,7 @@ class Precursors:
         位点也删去（缺陷只增不减，它们以后放不下新空位）。"""
         keep = _clear_of(self.positions, self.positions[index][None, :], device)
         keep[index] = False
-        return Precursors(self.positions[keep], self.activation_energy[keep])
+        return Precursors(self.positions[keep])
 
 
 def _clear_of(points: np.ndarray, defects: np.ndarray, device: DeviceConfig) -> np.ndarray:
@@ -222,9 +221,8 @@ def place_precursors(
     """t = 0 的前驱位点（§6.1，ADR-052）。
 
     在可采样窗口 [0,Lx)×[0,Ly)×[standoff, Lz−standoff]（与 `generate_defects` 的电极避让相同）里均匀撒
-    round(N_T·V_窗口) 个位点，再按 E_A,i = E_A + σ_A·ξ_i（ξ_i 标准正态）给每个位点抽激活能；离初始缺陷
-    `defects`（坐标 (N, 3)）不到 min_separation 的位点放不下新空位，删去。随机数的消耗只取决于位点个数，
-    与 E_A、σ_A 的取值无关。
+    round(N_T·V_窗口) 个位点；离初始缺陷 `defects`（坐标 (N, 3)）不到 min_separation 的位点放不下新空位，
+    删去。随机数的消耗只取决于位点个数。
     """
     standoff = _global_standoff(device)
     window = device.Lz - 2.0 * standoff
@@ -234,9 +232,8 @@ def place_precursors(
     positions = np.column_stack(
         [rng.uniform(0.0, device.Lx, n), rng.uniform(0.0, device.Ly, n), rng.uniform(standoff, device.Lz - standoff, n)]
     )
-    activation_energy = tddb.activation_energy + tddb.activation_energy_sigma * rng.standard_normal(n)
     keep = _clear_of(positions, defects, device)
-    return Precursors(positions[keep], activation_energy[keep])
+    return Precursors(positions[keep])
 
 
 def _capture_electrodes(
@@ -296,8 +293,8 @@ def generation_rates(
     - **电极项**（`_electrode_capture`）：两侧电极 R2 + R4；
     - **陷阱项**（`_trap_capture`）：近旁已占据陷阱经陷阱间通道 p·R7 送给前驱的电子（式 T5 的陷阱来源，
       ADR-039）；
-    - **P_bb**：用位点自己的 E_A,i；场是泊松解的场在标准差 `tddb.field_averaging_width` 的 Gaussian 窗口上的
-      平均（宏观场，ADR-043）。Lorentz 关系 (2+k)/3 针对在 Lorentz 球上近似均匀的宏观场，带电缺陷亚纳米
+    - **P_bb**：E_A 全部位点相同（ADR-053）；场是泊松解的场在标准差 `tddb.field_averaging_width` 的 Gaussian
+      窗口上的平均（宏观场，ADR-043）。Lorentz 关系 (2+k)/3 针对在 Lorentz 球上近似均匀的宏观场，带电缺陷亚纳米
       近旁的点电荷场不满足这个前提。
 
     `temperature_field` 是泊松网格上的温度场（热反馈时取 T14 的解，§6.6）：R_1e 的声子线型、电极费米分布、
@@ -330,7 +327,7 @@ def generation_rates(
     )
     trap = _trap_capture(inner, occupancy, tddb, points, conduction - tddb.precursor_ionization_energy, temperature)
     p_bb = bond_break_probability(
-        precursors.activation_energy, tddb.dipole_moment, material.kappa, np.linalg.norm(local[:, 4:7], axis=1),
+        tddb.activation_energy, tddb.dipole_moment, material.kappa, np.linalg.norm(local[:, 4:7], axis=1),
         temperature,
     )
     return GenerationRates(electrode, trap, p_bb)
