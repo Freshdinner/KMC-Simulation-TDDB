@@ -1,0 +1,28 @@
+== seed 1: stopped by hand at t_end = 5.498 s, 412 vacancies; J0 0.438 A/cm2; precursor sites 797205 (4.263e+22 cm-3), placed in 284 s
+  conductor gap: t = 0 8.00 nm, last before end 7.74 nm; gap <= 3 / 2 / 1 nm first at: - / - / -
+  cathode conductor: members 0 -> 1, front 0.00 -> 0.26 nm
+  sum G first 48.2, last 118 1/s (trap share last 0.81); births: z median 1.41 nm, 90% 3.97 nm, max 6.88 nm; joined cathode conductor 0%
+  mean field converged 407/413 (Newton used in 110 records); median step wall 31.0 s (rates 13.3 s); max dT 7.9e-02 K; peak working set 1473 MB
+  I-t fit (transport current, first birth to t_end): n = 0.83, R² = 0.856; first half n = 0.47, second half n = 1.60
+  N(t) ∝ t^0.98 (R² = 0.974)
+  not converged: records [299, 314, 317, 339, 341, 410] (residual 3.4e-04, 1.3e-08, 4.2e-09, 2.6e-08, 8.2e-08, 1.6e-09)
+  J reaches 1 A/cm2 at t = 0.0676 s (n = 9), 10 A/cm2 at t = 1.84 s (n = 112)
+  last snapshot (400 vacancies): spanning needs r_c >= 1.40 nm; cathode conductor front [nm] for r_c [nm] = 0.3: 0.26, 0.4: 0.37, 0.5: 0.50, 0.6: 0.88, 0.8: 0.88
+== seed 2: stopped by hand at t_end = 6.196 s, 416 vacancies; J0 0.283 A/cm2; precursor sites 797132 (4.263e+22 cm-3), placed in 261 s
+  conductor gap: t = 0 7.71 nm, last before end 7.71 nm; gap <= 3 / 2 / 1 nm first at: - / - / -
+  cathode conductor: members 1 -> 5, front 0.29 -> 0.29 nm
+  sum G first 43.3, last 104 1/s (trap share last 0.80); births: z median 1.48 nm, 90% 3.82 nm, max 6.21 nm; joined cathode conductor 1%
+  mean field converged 417/417 (Newton used in 43 records); median step wall 32.0 s (rates 14.2 s); max dT 3.5e-02 K; peak working set 1474 MB
+  I-t fit (transport current, first birth to t_end): n = 0.65, R² = 0.725; first half n = 0.07, second half n = 1.46
+  N(t) ∝ t^1.01 (R² = 0.967)
+  J reaches 1 A/cm2 at t = 0.476 s (n = 25), 10 A/cm2 at t = 1.52 s (n = 79)
+  last snapshot (400 vacancies): spanning needs r_c >= 1.89 nm; cathode conductor front [nm] for r_c [nm] = 0.3: 0.29, 0.4: 0.40, 0.5: 0.48, 0.6: 0.61, 0.8: 1.52
+== seed 3: stopped by hand at t_end = 5.696 s, 429 vacancies; J0 0.904 A/cm2; precursor sites 796925 (4.262e+22 cm-3), placed in 285 s
+  conductor gap: t = 0 7.74 nm, last before end 7.74 nm; gap <= 3 / 2 / 1 nm first at: - / - / -
+  cathode conductor: members 1 -> 1, front 0.26 -> 0.26 nm
+  sum G first 49.3, last 91.7 1/s (trap share last 0.76); births: z median 1.61 nm, 90% 4.55 nm, max 6.75 nm; joined cathode conductor 0%
+  mean field converged 430/430 (Newton used in 26 records); median step wall 24.0 s (rates 10.2 s); max dT 4.8e-02 K; peak working set 1474 MB
+  I-t fit (transport current, first birth to t_end): n = 1.34, R² = 0.891; first half n = 0.32, second half n = 1.40
+  N(t) ∝ t^1.17 (R² = 0.995)
+  J reaches 1 A/cm2 at t = 0.115 s (n = 5), 10 A/cm2 at t = 0.83 s (n = 48)
+  last snapshot (425 vacancies): spanning needs r_c >= 1.25 nm; cathode conductor front [nm] for r_c [nm] = 0.3: 0.26, 0.4: 0.35, 0.5: 0.48, 0.6: 0.60, 0.8: 0.79
