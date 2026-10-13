@@ -336,7 +336,7 @@ def _report_tddb(result: TDDBResult) -> None:
     """打印一条 TDDB 瞬态轨迹的摘要。"""
     density = result.current_density * _PER_CM2
     reasons = {
-        "breakdown": "击穿（电流密度超过击穿电流密度），t_end 即 t_BD",
+        "breakdown": "击穿（阴极侧与阳极侧导电簇连通，形成贯穿通路），t_end 即 t_BD",
         "max_generated": "生成空位数达到上限",
         "stop_time": "应力时间达到上限",
         "no_generation": "总生成率为 0（前驱用完或 N_T = 0），电流保持最后一条记录的值",
@@ -351,6 +351,18 @@ def _report_tddb(result: TDDBResult) -> None:
         "  前驱位点：t = 0 有 {} 个，终态剩 {} 个".format(int(result.n_precursors[0]), int(result.n_precursors[-1]))
     )
     typer.echo("  J(t=0) = {:.4e} A/cm²   J(t_end) = {:.4e} A/cm²".format(density[0], density[-1]))
+    nano = constants.nano
+    typer.echo(
+        "  导电簇：阴极侧与阳极侧导体的最短距离 t = 0 为 {:.2f} nm，终态 {:.2f} nm".format(
+            result.conductor_gap[0] / nano, result.conductor_gap[-1] / nano
+        )
+    )
+    if result.stop_reason == "breakdown":
+        typer.echo(
+            "  击穿前内层输运电流 {:.4e} A，细丝电流 G₀·V = {:.4e} A".format(
+                result.transport_current[-1], result.filament_current[-1]
+            )
+        )
     dense_time = result.dense_cluster_time
     typer.echo(
         "  致密团簇（间距 < 6 Å）最大 {} 个，{}".format(
@@ -395,7 +407,7 @@ def tddb(
     out: Optional[str] = typer.Option(None, "--out", help="轨迹 CSV 输出路径"),
     plot: Optional[str] = typer.Option(None, "--plot", help="I-t（双对数）与温度演化图输出路径"),
 ) -> None:
-    """TDDB 瞬态运行（恒压应力，热反馈与电流击穿判据）：一个缺陷实现的 I-t 轨迹。"""
+    """TDDB 瞬态运行（恒压应力，热反馈与贯穿通路击穿判据）：一个缺陷实现的 I-t 轨迹。"""
     from dataclasses import replace
 
     cfg = load_config(config)

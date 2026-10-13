@@ -104,8 +104,8 @@ def test_tddb_section_is_optional_and_converted():
     """tddb 段缺省为 None（纯漏电流仿真）；三个能量从 eV 换算成 J、必须为正，p₀ 从 e·Å
     换算成 C·m、必须 ≥ 0，P_bb 宏观场的平均窗口从 nm 换算成 m、必须 ≥ 0（ADR-043），
     N_T 从 cm⁻³ 换算成 m⁻³、必须 ≥ 0，空位数上限是正整数，
-    应力时间上限必须为正，击穿电流密度从 A/cm² 换算成 A/m²、必须为正，以上各项都必须给出；
-    k_TH 可省略（等温），给出时必须为正（ADR-024/028/033/036/047）。"""
+    应力时间上限必须为正，导电通路的连通距离 r_c 从 nm 换算成 m、必须为正，以上各项都必须给出；
+    k_TH 可省略（等温），给出时必须为正（ADR-024/028/033/036/054）。"""
     raw = _base_dict()
     assert config_from_dict(raw).tddb is None
     section = {
@@ -117,7 +117,7 @@ def test_tddb_section_is_optional_and_converted():
         "precursor_concentration_cm3": 4.0e19,
         "max_generated_vacancies": 300,
         "stop_time_s": 1.0e4,
-        "breakdown_current_density_A_cm2": 10.0,
+        "percolation_distance_nm": 1.0,
     }
     raw["tddb"] = dict(section)
     tddb = config_from_dict(raw).tddb
@@ -129,7 +129,7 @@ def test_tddb_section_is_optional_and_converted():
     assert tddb.precursor_concentration == pytest.approx(4.0e25)
     assert tddb.max_generated_vacancies == 300
     assert tddb.stop_time == pytest.approx(1.0e4)
-    assert tddb.breakdown_current_density == pytest.approx(1.0e5)
+    assert tddb.percolation_distance == pytest.approx(1.0e-9)
     assert tddb.thermal_conductivity is None  # 省略 k_TH：等温
     raw["tddb"] = dict(section, thermal_conductivity_W_mK=1.5)
     assert config_from_dict(raw).tddb.thermal_conductivity == 1.5
@@ -154,8 +154,8 @@ def test_tddb_section_is_optional_and_converted():
         ("max_generated_vacancies", 0),
         ("max_generated_vacancies", 2.5),
         ("stop_time_s", 0.0),
-        ("breakdown_current_density_A_cm2", 0.0),
-        ("breakdown_current_density_A_cm2", -1.0),
+        ("percolation_distance_nm", 0.0),
+        ("percolation_distance_nm", -1.0),
     ):
         raw["tddb"] = dict(section, **{key: bad})
         with pytest.raises(ValueError, match=key):
@@ -410,6 +410,6 @@ def test_tddb_example_matches_leakage_reference_preset():
     assert tddb.tddb.field_averaging_width == pytest.approx(0.5e-9)  # ADR-043
     assert tddb.tddb.precursor_concentration == pytest.approx(1.0e20 * constants.centi ** -3)
     assert tddb.tddb.thermal_conductivity == pytest.approx(2.0)
-    assert tddb.tddb.breakdown_current_density == pytest.approx(10.0 * constants.centi ** -2)  # 10 A/cm²（ADR-047）
+    assert tddb.tddb.percolation_distance == pytest.approx(1.0e-9)  # r_c（ADR-054）
     assert tddb.tddb.max_generated_vacancies >= 1 and tddb.tddb.stop_time > 0.0
     assert ref.tddb is None

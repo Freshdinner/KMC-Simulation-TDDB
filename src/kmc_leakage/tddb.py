@@ -1,6 +1,6 @@
 """TDDB 瞬态驱动：准静态双层循环，含热反馈与击穿判据。
 
-规格见 PROJECT_CONTEXT_TDDB.md §5、§6，决策记录见 ADR-032–052。公式编号 T1–T14 是 TDDB 的
+规格见 PROJECT_CONTEXT_TDDB.md §5、§6，决策记录见 ADR-032–054。公式编号 T1–T14 是 TDDB 的
 编号（PROJECT_CONTEXT_TDDB.md 第 3 节），与 docs/rate_equations.md 的 R1–R8 不对应。
 
 电子输运事件的时间尺度（~10⁻¹³…10⁻⁶ s）比缺陷生成（秒以上）短十几个数量级，所以输运相对
@@ -18,14 +18,17 @@ round(N_T·V_窗口) 个，全部位点的无场断键激活能取同一个 E_A�
    输运与热不迭代自洽，每步只走一遍"输运 → 功率 → 温度"（§8.4），所以第 k 条记录的电流是在
    第 k−1 条记录的功率给出的温度下求的；温度随生成一步步爬升，这一步的滞后可以忽略。没有 k_TH
    时温度固定为环境值（Phase 3 的等温口径）。
-3. **生成率**（§6.1，`generation_rates`）：各缺陷净电荷 q·(Z − p) + q_fix 与外加偏压一起解一次泊松方程，
-   在每个前驱位点上求式 T1 的 G_i = R_1e,i·P_bb,i：
+3. **导电簇与击穿判据**（§6.3，ADR-054）：O 空位间距 < r_c 连成导电簇，离电极平面 < r_c 的空位接到该
+   电极（`conducting_clusters`）。阴极侧与阳极侧导电簇连通、形成贯穿通路即击穿，这一刻就是 t_BD；击穿
+   记录的电流加上细丝按一个量子电导 G₀ = 2e²/h 导通的 G₀·V。论文的"25 个空位、间距 ≤ 6 Å"团簇只作标志
+   记录，不作判据。
+4. **生成率**（§6.1，`generation_rates`）：各缺陷净电荷 q·(Z − p) + q_fix 与外加偏压一起解泊松方程，接电极的
+   导电簇与该电极等电位（ADR-054）；在每个前驱位点上求式 T1 的 G_i = R_1e,i·P_bb,i：
    - R_1e,i = 两侧电极 R2 + R4（电极项，式 T4）+ Σ_j p_j·R7(j → i)（陷阱项：近旁已占据陷阱经陷阱间通道
-     送来的电子，ADR-039）。前驱能级、R4 的局域场与温度取位点处含空间电荷的局域值，取法同引擎处理
-     真实陷阱；
-   - P_bb,i 的场取泊松解在 Gaussian 窗口上的平均（宏观场，ADR-043）。
-4. **击穿判据**（§6.3，ADR-047）：电流密度超过击穿电流密度即击穿，这一刻就是 t_BD。论文的
-   "25 个空位、间距 ≤ 6 Å"团簇只作标志记录，不作判据。
+     送来的电子，ADR-039；导电簇的空位按所接电极费米能级处占满的电子源计入）。前驱能级、R4 的局域场与
+     温度取位点处含空间电荷的局域值，取法同引擎处理真实陷阱；
+   - P_bb,i 的场取泊松解在 Gaussian 窗口上的平均（宏观场，ADR-043）。导电簇尖端前方的场被抬高，生成
+     向尖端集中，导电簇越长尖端场越强，这是贯穿通路最后一段迅速形成的机制。
 5. **抽事件**：Δt = −ln(r)/ΣG，按 G_i 选一个前驱位点断键，新空位就落在这个位点上。这个前驱用掉，
    离新空位不到 min_separation 的前驱也删去：缺陷只增不减，它们以后放不下新空位（§6.8）。
 6. **出生**：新空位与初始缺陷同一物种（能级按缺陷预设的分布抽样，S、m_di 取预设），出生占据 1，
@@ -38,6 +41,8 @@ round(N_T·V_窗口) 个，全部位点的无场断键激活能取同一个 E_A�
 
 **出生时的电子**：新空位出生时带的那个电子来自前驱俘获，不计入输运电流（§6.7）；它的电荷随新空位与
 O_i⁻ 一起留在介质里。平均场没有时间推进，每条记录的电流就是该缺陷集合下的稳态电流。
+
+**导电簇只进生成率**（ADR-054）：内层输运仍把导电簇的空位当作 TAT 陷阱，击穿前的电流是 TAT 电流。
 """
 
 import csv
@@ -96,6 +101,8 @@ _INTERSTITIAL_CHARGE = -constants.elementary_charge
 # 不作击穿判据（那是针对 ~2.7 nm 膜定的）
 _DENSE_CLUSTER_DISTANCE = 0.6 * constants.nano
 _DENSE_CLUSTER_SIZE = 25
+# 贯穿通路形成后细丝的电导：一个量子电导 G₀ = 2e²/h（量子点接触，ADR-054）
+_QUANTUM_CONDUCTANCE = 2.0 * constants.elementary_charge ** 2 / constants.h
 # 分块求 R_1e 电极项：每块的前驱位点数，块内 (位点, 声子数, 路径点) 的数组约 1.7 MB
 _SITE_CHUNK = 32
 # 陷阱项的近邻截断（`_trap_capture`）：截断外每个前驱被丢掉的陷阱项总速率不超过此值 [1/s]（MA 因子与
@@ -286,13 +293,15 @@ def generation_rates(
     """各前驱位点的 O 空位生成速率 G_i = R_1e,i·P_bb,i（式 T1/T2/T4，§6.1，ADR-052）。
 
     `inner` 提供当前缺陷集合、工作点与泊松求解器，`occupancy` 是各缺陷的平均场占据 p。
-    每个缺陷随占据变的电荷 q·(Z − p)（放在缺陷处）与固定电荷 q_fix（放在固定电荷处）和外加偏压
-    一起解一次泊松方程（与引擎用耦合矩阵线性叠加的结果相同），各位点在这份电势上求值，取法同引擎处理
+    电势由 `_conductor_potential` 给出：每个缺陷随占据变的电荷 q·(Z − p)（放在缺陷处）与固定电荷 q_fix
+    （放在固定电荷处）和外加偏压一起解泊松方程；接电极的导电簇（`conducting_clusters`，r_c 取
+    `tddb.percolation_distance`）与该电极等电位（ADR-054）。各位点在这份电势上求值，取法同引擎处理
     真实陷阱：前驱能级 E = B − e·φ(x) − E_t1，R4 的 c_MP 用局域场。
 
     - **电极项**（`_electrode_capture`）：两侧电极 R2 + R4；
     - **陷阱项**（`_trap_capture`）：近旁已占据陷阱经陷阱间通道 p·R7 送给前驱的电子（式 T5 的陷阱来源，
-      ADR-039）；
+      ADR-039）。导电簇的空位是所接电极的延伸，按电极费米能级处占满（p = 1）的电子源计入；其余陷阱的能级
+      取同一份电势（引擎的平均场能级加上导电簇电荷带来的电势改变）；
     - **P_bb**：E_A 全部位点相同（ADR-053）；场是泊松解的场在标准差 `tddb.field_averaging_width` 的 Gaussian
       窗口上的平均（宏观场，ADR-043）。Lorentz 关系 (2+k)/3 针对在 Lorentz 球上近似均匀的宏观场，带电缺陷亚纳米
       近旁的点电荷场不满足这个前提。
@@ -305,11 +314,8 @@ def generation_rates(
     n = len(precursors)
     if n == 0:
         return GenerationRates(np.zeros(0), np.zeros(0), np.zeros(0))
-    rho = solver.deposit(
-        np.concatenate([defects.positions, defects.fixed_charge_positions]),
-        np.concatenate([constants.elementary_charge * (defects.charge_state - occupancy), defects.fixed_charge]),
-    )
-    phi = solver.solve(rho, top_boundary_potential(device, inner.sim.voltage))
+    sides = conducting_clusters(defects.positions, device, tddb.percolation_distance)
+    phi, shift = _conductor_potential(inner, occupancy, sides)
     field = np.stack(solver.electric_field(phi), axis=-1)
     bond_field = solver.gaussian_average(field, tddb.field_averaging_width)
     # 要读的网格量叠成一个多通道数组，每个位点一次插值读回：φ、局域场三个分量、P_bb 宏观场三个分量、
@@ -325,12 +331,65 @@ def generation_rates(
     electrode = _electrode_capture(
         inner, tddb, phi, conduction, np.linalg.norm(local[:, 1:4], axis=1), points[:, 2], temperature
     )
-    trap = _trap_capture(inner, occupancy, tddb, points, conduction - tddb.precursor_ionization_energy, temperature)
+    member = sides >= 0
+    fermi = np.array([0.0, anode_fermi_level(inner.sim.voltage)])  # 阴极、阳极费米能级
+    source_energy = np.where(
+        member, fermi[np.clip(sides, 0, 1)], inner._trap_state(occupancy)[0] - constants.elementary_charge * shift
+    )
+    trap = _trap_capture(
+        inner, tddb, points, conduction - tddb.precursor_ionization_energy, source_energy,
+        np.where(member, 1.0, occupancy), temperature,
+    )
     p_bb = bond_break_probability(
         tddb.activation_energy, tddb.dipole_moment, material.kappa, np.linalg.norm(local[:, 4:7], axis=1),
         temperature,
     )
     return GenerationRates(electrode, trap, p_bb)
+
+
+def _conductor_potential(
+    inner: KMCSimulation, occupancy: np.ndarray, sides: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
+    """生成率用的电势 φ（泊松网格节点，[V]）与导电簇带来的各缺陷处电势改变 (N,) [V]（ADR-054）。
+
+    不在导电簇里的缺陷带 q·(Z − p) + q_fix，固定电荷放在各自的位置。接电极的导电簇（`sides` 取 0 或 1）与所接
+    电极等电位：成员的电荷不再由占据决定，取让每个成员处的电势等于该电极边界值（阴极 0、阳极
+    `top_boundary_potential`）的那一组电荷。成员处的电势对这组电荷是线性的，系数就是耦合矩阵 `phi_matrix`（同一套
+    沉积、求解与插值），在成员上解一次线性方程即得；离开成员位置的固定电荷照常放置。
+
+    第二项是成员电荷从 q·(Z − p) + q_fix,重合 换成导体电荷之后各缺陷处电势的改变：引擎的平均场能级减去
+    e·(这一项) 就是同一份电势下的陷阱能级。没有导电簇时电势与只放缺陷电荷的解相同，第二项全为 0。
+    """
+    defects, solver = inner.defects, inner.solver
+    q = constants.elementary_charge
+    top = top_boundary_potential(inner.device, inner.sim.voltage)
+    if np.any(sides == 2):
+        raise ValueError("贯穿通路两端接在两个电极上，不能与单个电极等电位；击穿状态不求生成率")
+    charge = q * (defects.charge_state - occupancy)
+    members = np.flatnonzero(sides >= 0)
+    if members.size == 0:
+        rho = solver.deposit(
+            np.concatenate([defects.positions, defects.fixed_charge_positions]),
+            np.concatenate([charge, defects.fixed_charge]),
+        )
+        return solver.solve(rho, top), np.zeros(len(defects))
+    free = sides < 0
+    # 成员自己的电荷（随占据变的部分与重合的固定电荷）由导体电荷代替；离开成员的固定电荷是另一个点电荷，保留
+    colocated = defects.colocated_fixed_charge
+    rho = solver.deposit(
+        np.concatenate([defects.positions[free], defects.fixed_charge_positions]),
+        np.concatenate([charge[free], np.where(free, defects.fixed_charge, defects.fixed_charge - colocated)]),
+    )
+    phi = solver.solve(rho, top)
+    green = inner.coupling.phi_matrix  # 一个电子（−q）在 j 处产生的电势在 i 处的值，对称
+    target = np.where(sides[members] == 0, 0.0, top)
+    electrons = np.linalg.solve(
+        green[np.ix_(members, members)], target - solver.interpolate(phi, defects.positions[members])
+    )
+    phi = solver.solve(rho + solver.deposit(defects.positions[members], -q * electrons), top)
+    # 成员上的电子数：导体电荷减去引擎里的 (p − Z) − q_fix,重合/q
+    replaced = electrons + (charge + colocated)[members] / q
+    return phi, replaced @ green[members]
 
 
 def _electrode_capture(
@@ -368,17 +427,19 @@ def _electrode_capture(
 
 def _trap_capture(
     inner: KMCSimulation,
-    occupancy: np.ndarray,
     tddb: TDDBConfig,
     points: np.ndarray,
     precursor_energy: np.ndarray,
+    source_energy: np.ndarray,
+    occupancy: np.ndarray,
     temperature: np.ndarray,
 ) -> np.ndarray:
     """各前驱位点的 R_1e 陷阱项 Σ_j p_j·R7(j → i) [1/s]（式 T4/T5 的陷阱来源，ADR-039）。
 
-    R7 是引擎的陷阱间通道把目标换成前驱：ν_j·exp[−r·(1/r_D,j + 1/r_D,前驱)]·Θ，能量差取前驱能级与源陷阱
-    平均场能级之差（ADR-038），温度取前驱处的温度。只对已占据（p_j > 0）的陷阱求和，距离取 xy 最小镜像。
-    截断半径让截掉的部分（Θ 与 p 都取 1 的上界）每个前驱不超过 `_TRAP_TERM_FLOOR`，且不超过横向盒长的一半。
+    R7 是引擎的陷阱间通道把目标换成前驱：ν_j·exp[−r·(1/r_D,j + 1/r_D,前驱)]·Θ，能量差取前驱能级与源能级
+    `source_energy` 之差（ADR-038），温度取前驱处的温度。`occupancy` 是源的占据 p_j（导电簇的空位取 1）。只对
+    p_j > 0 的源求和，距离取 xy 最小镜像。截断半径让截掉的部分（Θ 与 p 都取 1 的上界）每个前驱不超过
+    `_TRAP_TERM_FLOOR`，且不超过横向盒长的一半。
     """
     device, defects = inner.device, inner.defects
     p = np.asarray(occupancy, dtype=float)
@@ -399,7 +460,7 @@ def _trap_capture(
         pairs["v"],
         defects.r_D[source],
         precursor_r_D,
-        inner._trap_state(p)[0][source],
+        source_energy[source],
         precursor_energy[site],
         p[source],
         temperature[site],
@@ -454,13 +515,47 @@ def distance_clusters(positions: np.ndarray, device: DeviceConfig, distance: flo
     return connected_components(graph, directed=False)[1]
 
 
+def conducting_clusters(positions: np.ndarray, device: DeviceConfig, distance: float) -> np.ndarray:
+    """各缺陷所在的导电簇接到哪一侧电极（§6.3，ADR-054），返回 (N,)：−1 不接电极，0 接阴极，1 接阳极，
+    2 两侧都接（贯穿通路）。
+
+    O 空位（初始缺陷与生成空位是同一物种）间距 < `distance`（连通距离 r_c）连成导电簇，xy 取最小镜像；离电极
+    平面 < r_c 的空位接到该电极，它所在的整个导电簇随之接到该电极。
+    """
+    labels = distance_clusters(positions, device, distance)
+    z = positions[:, 2]
+    cathode = np.isin(labels, labels[z < distance])
+    anode = np.isin(labels, labels[device.Lz - z < distance])
+    return np.where(cathode & anode, 2, np.where(cathode, 0, np.where(anode, 1, -1)))
+
+
+def conductor_gap(positions: np.ndarray, sides: np.ndarray, device: DeviceConfig) -> float:
+    """阴极侧导体（阴极平面与接阴极的导电簇）到阳极侧导体（阳极平面与接阳极的导电簇）的最短距离 [m]（ADR-054）。
+
+    `sides` 取 `conducting_clusters` 的结果。有贯穿通路时为 0；否则不小于连通距离 r_c，降到 r_c 以下即连通。
+    """
+    if np.any(sides == 2):
+        return 0.0
+    cathode, anode = positions[sides == 0], positions[sides == 1]
+    gap = device.Lz
+    if cathode.size:
+        gap = min(gap, device.Lz - float(cathode[:, 2].max()))
+    if anode.size:
+        gap = min(gap, float(anode[:, 2].min()))
+    if cathode.size and anode.size:
+        box = np.array([device.Lx, device.Ly, 4.0 * device.Lz])  # 同 `_clear_of`：xy 周期，z 不回绕
+        distance, _ = cKDTree(np.mod(anode, box), boxsize=box).query(np.mod(cathode, box))
+        gap = min(gap, float(distance.min()))
+    return gap
+
+
 @dataclass
 class TDDBResult:
     """一条 TDDB 瞬态轨迹（恒压应力）。
 
     第 k 条记录是第 k 次生成之后的输运稳态（k = 0 为 t = 0 的初始缺陷集合），电流在
     [time[k], time[k+1]) 上保持不变，最后一条保持到 `end_time`。电流均为净值，正号 = 电子由
-    阴极流向阳极。
+    阴极流向阳极。击穿时最后一条记录就是贯穿通路形成的状态，时刻为 t_BD，电流含细丝电流（ADR-054）。
     """
 
     voltage: float  # [V]
@@ -468,9 +563,13 @@ class TDDBResult:
     area: float  # 电极面积 [m^2]
     seed: int
     time: np.ndarray  # (K,) 各记录的时刻 [s]
-    current: np.ndarray  # (K,) [A]
-    by_mechanism: Dict[str, np.ndarray]  # 各机制 (K,) [A]，四项之和 = current
-    generation_rate: np.ndarray  # (K,) 这一状态下全部前驱位点的总生成速率 ΣG [1/s]
+    current: np.ndarray  # (K,) 总电流 = 内层输运电流 + 细丝电流 [A]
+    transport_current: np.ndarray  # (K,) 内层输运（平均场稳态）的电流 [A]
+    by_mechanism: Dict[str, np.ndarray]  # 内层输运各机制 (K,) [A]
+    filament_current: np.ndarray  # (K,) 贯穿通路的细丝电流 G₀·V [A]，击穿记录之前为 0（ADR-054）
+    conductor_gap: np.ndarray  # (K,) 阴极侧与阳极侧导体的最短距离 [m]，击穿记录为 0（`conductor_gap`）
+    # (K,) 这一状态下全部前驱位点的总生成速率 ΣG [1/s]；击穿记录不求生成率，记 NaN
+    generation_rate: np.ndarray
     n_precursors: np.ndarray  # (K,) 这一状态下剩下的前驱位点数（还没断键、离已有缺陷 ≥ min_separation）
     n_defects: np.ndarray  # (K,) 缺陷总数（初始 + 生成）
     space_charge: np.ndarray  # (K,) 全部缺陷的净电荷 Σ[q·(Z − p) + q_fix] [C]（§8.6）
@@ -491,7 +590,7 @@ class TDDBResult:
     # --- 击穿（§6.3）---
     dense_cluster_size: np.ndarray  # (K,) 最大致密团簇（间距 < 6 Å，论文的标志，只记录）的缺陷数
     end_time: float  # 轨迹终点 [s]；击穿时就是 t_BD
-    # "breakdown"（电流密度超过击穿电流密度）| "max_generated" | "stop_time" | "no_generation"
+    # "breakdown"（贯穿通路形成）| "max_generated" | "stop_time" | "no_generation"
     stop_reason: str
     n_initial: int  # 初始缺陷个数：编号 < n_initial 的是初始缺陷，其余是应力生成的空位
     birth_time: np.ndarray  # (N,) 各缺陷的出生时刻 [s]，初始缺陷记 0
@@ -506,7 +605,7 @@ class TDDBResult:
 
     @property
     def breakdown_time(self) -> Optional[float]:
-        """电流密度第一次超过击穿电流密度的时刻 t_BD [s]；没有击穿时为 None。"""
+        """贯穿通路形成的时刻 t_BD [s]；没有击穿时为 None。"""
         return self.end_time if self.stop_reason == "breakdown" else None
 
     @property
@@ -526,9 +625,13 @@ class TDDBResult:
         return np.append(self.time[1:], self.end_time)
 
     def current_at(self, times: np.ndarray) -> np.ndarray:
-        """任意时刻 t ∈ [0, end_time] 的电流 [A]（分段常数）。"""
+        """任意时刻 t ∈ [0, end_time] 的总电流 [A]（分段常数）。"""
+        return self.current[self._record_at(times)]
+
+    def _record_at(self, times: np.ndarray) -> np.ndarray:
+        """各时刻所在的记录编号。"""
         index = np.searchsorted(self.time, np.asarray(times, dtype=float), side="right") - 1
-        return self.current[np.clip(index, 0, None)]
+        return np.clip(index, 0, None)
 
 
 def run_tddb(
@@ -577,14 +680,24 @@ def run_tddb(
             )
             effective = transport_temperature(solver, temperature_field, defects.positions, heat.defect, ambient)
             peak = float(temperature_field.max())
-        rates = generation_rates(inner, occupancy, tddb, precursors, temperature_field).rates
+        # §6.3（ADR-054）：阴极侧与阳极侧导电簇连通即击穿，这一状态的电流加上细丝的 G₀·V，不再求生成率
+        sides = conducting_clusters(defects.positions, device, tddb.percolation_distance)
+        spanning = bool(np.any(sides == 2))
+        filament = _QUANTUM_CONDUCTANCE * sim.voltage if spanning else 0.0
+        rates = (
+            np.full(1, np.nan) if spanning
+            else generation_rates(inner, occupancy, tddb, precursors, temperature_field).rates
+        )
         n_clusters, max_cluster, largest, n_split = _cluster_diagnostics(inner)
         dense_labels = distance_clusters(defects.positions, device, _DENSE_CLUSTER_DISTANCE)
         records.append(
             dict(
                 time=time,
-                current=mf.current,
+                current=mf.current + filament,
+                transport_current=mf.current,
                 by_mechanism=mf.by_mechanism,
+                filament_current=filament,
+                conductor_gap=conductor_gap(defects.positions, sides, device),
                 generation_rate=float(rates.sum()),
                 n_precursors=len(precursors),
                 n_defects=len(defects),
@@ -607,9 +720,9 @@ def run_tddb(
             )
         )
         if progress is not None:
-            progress(len(defects) - n_initial, time, mf.current_density)
+            progress(len(defects) - n_initial, time, (mf.current + filament) / device.area)
 
-        if mf.current_density > tddb.breakdown_current_density:
+        if spanning:
             end_time, stop_reason = time, "breakdown"
             break
         if len(defects) - n_initial >= tddb.max_generated_vacancies:
@@ -643,9 +756,12 @@ def run_tddb(
         seed=sim.seed,
         time=column("time"),
         current=column("current"),
+        transport_current=column("transport_current"),
         by_mechanism={
             name: np.array([record["by_mechanism"][name] for record in records]) for name in MECHANISMS
         },
+        filament_current=column("filament_current"),
+        conductor_gap=column("conductor_gap"),
         generation_rate=column("generation_rate"),
         n_precursors=column("n_precursors", int),
         n_defects=column("n_defects", int),
@@ -715,6 +831,7 @@ def fit_transient(
 
     缺省窗口是第一次生成到轨迹终点。按 log t 等间距取样让每个时间十倍程的权重相同——
     生成事件在线性时间上大致均匀，直接拿事件点拟合会让最后一个十倍程占绝大多数权重。
+    拟合的是击穿前的 I-t，取内层输运电流，击穿记录的细丝电流不计入（ADR-054）。
     返回 (拟合结果, 取样时刻)；拟合的电流单位是 A/m²。
     """
     if t_start is None:
@@ -724,7 +841,7 @@ def fit_transient(
     t_stop = result.end_time if t_stop is None else t_stop
     decades = np.log10(t_stop / t_start)
     times = np.logspace(np.log10(t_start), np.log10(t_stop), max(2, int(np.ceil(decades * points_per_decade)) + 1))
-    return fit_power_law(times, result.current_at(times) / result.area), times
+    return fit_power_law(times, result.transport_current[result._record_at(times)] / result.area), times
 
 
 def write_tddb_csv(result: TDDBResult, path: str) -> None:
@@ -737,6 +854,7 @@ def write_tddb_csv(result: TDDBResult, path: str) -> None:
             ["t_start_s", "t_end_s", "n_generated", "n_defects", "J_total_A_cm2"]
             + ["J_{}_A_cm2".format(name) for name in MECHANISMS]
             + [
+                "J_filament_A_cm2", "conductor_gap_nm",
                 "generation_rate_s", "n_precursors", "space_charge_C", "empty_generated",
                 "mf_iterations", "mf_newton_steps", "mf_residual", "mf_converged",
                 "n_clusters", "max_cluster_size", "largest_component", "n_split",
@@ -750,6 +868,8 @@ def write_tddb_csv(result: TDDBResult, path: str) -> None:
                 + [str(int(result.n_generated[k])), str(int(result.n_defects[k])), "{:.6e}".format(density[k])]
                 + ["{:.6e}".format(result.by_mechanism[name][k] / result.area * per_cm2) for name in MECHANISMS]
                 + [
+                    "{:.6e}".format(result.filament_current[k] / result.area * per_cm2),
+                    "{:.6f}".format(result.conductor_gap[k] / constants.nano),
                     "{:.6e}".format(result.generation_rate[k]),
                     str(int(result.n_precursors[k])),
                     "{:.6e}".format(result.space_charge[k]),

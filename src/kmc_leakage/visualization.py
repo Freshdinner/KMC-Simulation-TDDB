@@ -453,8 +453,8 @@ def plot_stress_transient(
     ----
     time, current_density, end_time, fit : 同 `plot_current_transient`
     temperature : 各状态的温度 [K]，与 `time` 等长（`TDDBResult.effective_temperature`）
-    stop : 轨迹的终止方式（`TDDBResult.stop_reason`）；"breakdown"（电流密度超过击穿电流密度）
-        时在终点 (end_time, J) 画标记并在图例里写出时刻，其余取值不画
+    stop : 轨迹的终止方式（`TDDBResult.stop_reason`）；"breakdown"（贯穿通路形成，最后一个状态的电流含细丝
+        电流）时在终点 (end_time, J) 画标记并在图例里写出时刻，其余取值不画
 
     上图是双对数的 J(t)（与 `plot_current_transient` 相同），下图是温度（°C），横轴共用。
     """

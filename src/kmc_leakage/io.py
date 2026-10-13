@@ -296,11 +296,11 @@ def _positive_int(value: Any, where: str) -> int:
 
 
 def _tddb(raw: Optional[Dict[str, Any]]) -> Optional[TDDBConfig]:
-    """TDDB 缺陷生成参数（ADR-024/028/033/036/047/052/053）；整段省略返回 None，即纯漏电流仿真。
+    """TDDB 缺陷生成参数（ADR-024/028/033/036/052/053/054）；整段省略返回 None，即纯漏电流仿真。
 
     三个能量（E_A、E_t1、E_rel1）必须为正；p₀ 必须 ≥ 0，取 0 即关掉场加速；P_bb 宏观场的平均窗口宽度
     必须 ≥ 0，取 0 即用局域场（ADR-043）；N_T 必须 ≥ 0，取 0 即关掉生成（G = 0）。空位数上限是正整数，
-    应力时间上限、击穿电流密度必须为正。热导率 k_TH 可省略（等温），给出时必须为正。
+    应力时间上限、导电通路的连通距离 r_c 必须为正。热导率 k_TH 可省略（等温），给出时必须为正。
     """
     if raw is None:
         return None
@@ -339,7 +339,7 @@ def _tddb(raw: Optional[Dict[str, Any]]) -> Optional[TDDBConfig]:
             _require(raw, "max_generated_vacancies", "tddb"), "tddb.max_generated_vacancies"
         ),
         stop_time=positive("stop_time_s", "s"),
-        breakdown_current_density=positive("breakdown_current_density_A_cm2", "A/cm²") * PER_CM2,
+        percolation_distance=positive("percolation_distance_nm", "nm") * NM,
         thermal_conductivity=thermal_conductivity,
     )
 

@@ -9,6 +9,21 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。实测数据与方案对�
 
 #### TDDB 阶段
 
+- **击穿判据改为贯穿通路，通路形成时加细丝电流，接电极的导电簇与该电极等电位**（ADR-054，§6.3，替换 ADR-047）。
+  `tddb.conducting_clusters`：O 空位间距 < r_c 连成导电簇，离电极平面 < r_c 的接到该电极；阴极侧与阳极侧导电簇连通即击穿，
+  这条记录的电流加 G₀·V（G₀ = 2e²/h），不再求生成率。`generation_rates` 里接电极的导电簇与该电极等电位（`_conductor_potential`
+  用耦合矩阵解成员上的导体电荷），陷阱项把成员当作电极费米能级处占满的电子源；内层输运不变。配置项
+  `breakdown_current_density_A_cm2` 换成 `percolation_distance_nm`（`zro2_tddb.yaml` 取 1.0 nm）。`TDDBResult` 加
+  `filament_current`、`conductor_gap`、`transport_current`，CSV 加 `J_filament_A_cm2`、`conductor_gap_nm`；`fit_transient`
+  只拟合内层输运电流。
+  **为什么**：用户决定。电流判据下 t_BD 是 J 缓慢越线的时刻，总有种子的 J 停在判据以下，模型里没有让电流突变的机制
+  （ADR-052/053）；实验里击穿是电流突然升高几个数量级。原型（N_T = 10²¹ 快照，r_c = 1.0 nm）里开导电簇后 79% 的生成落在
+  阴极导电簇 1 nm 以内（关时 8%），最快的位点在簇尖前方 0.6 nm。全部前驱转成空位时，N_T = 10²⁰ cm⁻³ 要 r_c ≥ 1.38–1.55 nm、
+  10²¹ cm⁻³ 要 ≥ 0.77–0.79 nm 才能贯穿。
+  **测试**：新增导电簇与间隙、成员等电位与陷阱项、t = 0 即贯穿、第一条贯穿记录停下四个测试；其余测试取 r_c = 0.4 nm
+  （小于 min_separation，没有导电簇，结果与之前相同）。`pytest tests/ -v` 304 passed，2 条 RuntimeWarning 与 ADR-053 相同
+  （CLI 测试的两次生成相隔太近，I-t 拟合前置因子溢出）。
+
 - **E_A 统一取值后的 3.6 V / 25 °C 验收（50×50 nm，seed 1–4）**（ADR-053，`results/10.12/fixed_ea/`，代码 329c000）。与 ADR-052 长轨迹
   同一初始缺陷与前驱位置，不设应力时间上限。t = 0 的 ΣG 为 0.086–0.11 s⁻¹（ADR-052 为 10–87 s⁻¹），约 10³ s 之后两组 ΣG(t) 重合；
   新空位更贴阴极（z 中位数 1.10–1.12 nm）。seed 1 / 2 / 4 在 1.37×10⁴ / 1.85×10⁴ / 6.9×10³ s 击穿（相差 2.7 倍），t_BD = 1000 s 对应

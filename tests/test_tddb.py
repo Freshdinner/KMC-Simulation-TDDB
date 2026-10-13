@@ -14,8 +14,9 @@
   ADR-053）与 Gaussian 平均场；三项都按位点处的局域温度求值；
 - P_bb 未饱和时 E_A 整体平移只改时间标尺；Gillespie 按速率选位点；
 - 热反馈（§6.6、§8.4）：每步的输运温度是上一步功率给出的缺陷处加权温度，生成率取同一步的温度场；
-- 击穿判据（§6.3，ADR-047）：轨迹停在电流密度第一次超过击穿电流密度的记录上，之前的记录与不停的
-  轨迹逐位相同；
+- 导电簇与击穿判据（§6.3，ADR-054）：间距 < r_c 的空位连成导电簇，离电极 < r_c 的接到该电极；接电极的导电簇
+  在生成率的电势里与该电极等电位，并作为电极费米能级处占满的电子源进陷阱项；轨迹停在第一条出现贯穿通路的记录上，
+  这条记录的电流加上细丝的 G₀·V；
 - 致密团簇标志：间距 < 截断的缺陷连边，xy 取最小镜像；
 - I-t 幂律拟合对纯幂律精确还原 n，对带噪声的幂律给出合理的拟合优度。
 """
@@ -42,10 +43,13 @@ from kmc_leakage.kmc import _B_R2A, _B_R2C, _B_R4A, _B_R4C, _N_PHONON, MECHANISM
 from kmc_leakage.mean_field import solve_mean_field
 from kmc_leakage.rates import bond_break_probability, trap_precursor_capture_rate
 from kmc_leakage.tddb import (
+    _QUANTUM_CONDUCTANCE,
     GenerationRates,
     IncrementalCoupling,
     Precursors,
     _draw_generation,
+    conducting_clusters,
+    conductor_gap,
     distance_clusters,
     fit_power_law,
     fit_transient,
@@ -72,7 +76,8 @@ def _tddb(**overrides) -> TDDBConfig:
         precursor_concentration=4.0e19 * PER_CM3,
         max_generated_vacancies=4,
         stop_time=1.0e4,
-        breakdown_current_density=1.0e8,  # 1e4 A/cm²，远高于这些小体系的电流
+        # r_c 小于 min_separation（0.5 nm）：空位之间、空位与电极都连不上，没有导电簇，也不会击穿
+        percolation_distance=0.4e-9,
     )
     params.update(overrides)
     return TDDBConfig(**params)
@@ -260,6 +265,8 @@ def test_trajectory_bookkeeping(trajectory):
 
     total = sum(result.by_mechanism[name] for name in MECHANISMS)
     np.testing.assert_allclose(total, result.current, rtol=1e-12)
+    assert np.all(result.filament_current == 0.0) and np.array_equal(result.transport_current, result.current)
+    assert np.all(result.conductor_gap == device.Lz)  # r_c < min_separation：没有导电簇
     assert np.all(result.generation_rate > 0.0)
     assert np.all(np.diff(result.n_precursors) <= -1)  # 每次出生至少用掉一个前驱位点
     assert np.all(result.max_cluster_size <= result.largest_component)
@@ -268,7 +275,7 @@ def test_trajectory_bookkeeping(trajectory):
     assert result.empty_generated[-1] == pytest.approx(np.sum(1.0 - result.occupancy[n_initial:]), rel=1e-12)
     assert result.empty_generated[0] == 0.0
 
-    # 等温：温度全是环境值；电流远低于击穿电流密度，没有击穿
+    # 等温：温度全是环境值；没有导电簇，不会击穿
     ambient = config.simulation.temperature
     assert not result.thermal
     for name in ("transport_temperature", "effective_temperature", "peak_temperature"):
@@ -347,13 +354,13 @@ def _admissible(device, positions, point):
     return bool(distance.min() >= standoff)
 
 
-def _sites_near_sources(inner, occupancy, rng, n_near=40, n_uniform=40):
-    """前驱位点：前 `n_near` 个放在占据 ≥ 0.5 的缺陷旁 0.5–0.8 nm 处（陷阱项显著），其余 `n_uniform` 个在可采样窗口里
-    均匀撒；都在窗口内且离全部缺陷 ≥ min_separation。"""
+def _sites_near_sources(inner, occupancy, rng, n_near=40, n_uniform=40, sources=None):
+    """前驱位点：前 `n_near` 个放在 `sources`（缺省为占据 ≥ 0.5 的缺陷）旁 0.5–0.8 nm 处（陷阱项显著），其余 `n_uniform`
+    个在可采样窗口里均匀撒；都在窗口内且离全部缺陷 ≥ min_separation。"""
     device = inner.device
     positions = inner.defects.positions
     standoff = _global_standoff(device)
-    sources = np.flatnonzero(occupancy >= 0.5)
+    sources = np.flatnonzero(occupancy >= 0.5) if sources is None else sources
     assert sources.size > 0
     points = []
     while len(points) < n_near:
@@ -575,26 +582,154 @@ def test_distance_clusters_link_defects_closer_than_the_cutoff():
     assert distance_clusters(np.zeros((0, 3)), device, 0.9e-9).size == 0
 
 
-def test_trajectory_breaks_down_when_current_density_exceeds_the_threshold(trajectory):
-    """击穿判据（ADR-047）：轨迹停在电流密度第一次超过击穿电流密度的记录上，t_BD 就是这条记录的
-    时刻，之前的记录与不停的轨迹逐位相同；J(0) 就超过时停在 t = 0；等于阈值不算超过。"""
-    config, reference, _, _ = trajectory
-    density = reference.current_density
-    threshold = 0.5 * (density[1] + density[2])
-    assert np.all(density[:2] < threshold) and density[2] > threshold
-    result = run_tddb(replace(config, tddb=replace(config.tddb, breakdown_current_density=threshold)))
-    assert result.stop_reason == "breakdown"
-    assert result.breakdown_time == result.end_time == reference.time[2]
-    assert np.array_equal(result.time, reference.time[:3])
-    assert np.array_equal(result.current, reference.current[:3])
+def test_conducting_clusters_join_vacancies_and_electrodes_closer_than_r_c():
+    """导电簇（ADR-054）：间距 < r_c 的空位连边（xy 最小镜像），离电极平面 < r_c 的空位接到该电极，整个簇随之接上；两侧
+    都接即贯穿通路。导体间隙是阴极侧导体（阴极平面与接阴极的簇）到阳极侧导体的最短距离，有贯穿通路时为 0。"""
+    device = make_device()  # 20×20×8 nm
+    z = np.linspace(0.6e-9, 7.4e-9, 10)  # 相邻间距 0.756 nm，两端离电极 0.6 nm
+    x = np.where(np.arange(10) % 2 == 0, 19.9e-9, 0.1e-9)  # 横向来回跨过周期边界，最小镜像下只差 0.2 nm
+    chain = np.column_stack([x, np.full(10, 10e-9), z])
+    sides = conducting_clusters(chain, device, 0.9e-9)
+    assert np.all(sides == 2) and conductor_gap(chain, sides, device) == 0.0
 
-    at_start = run_tddb(replace(config, tddb=replace(config.tddb, breakdown_current_density=0.5 * density[0])))
-    assert at_start.stop_reason == "breakdown"
-    assert at_start.time.tolist() == [0.0] and at_start.breakdown_time == 0.0
+    broken = np.delete(chain, 5, axis=0)  # 去掉中间一个：下半段接阴极、上半段接阳极，间隙是断口两端的距离
+    sides = conducting_clusters(broken, device, 0.9e-9)
+    assert sides.tolist() == [0] * 5 + [1] * 4
+    gap = conductor_gap(broken, sides, device)
+    assert gap == pytest.approx(np.linalg.norm(broken[4] - broken[5]), rel=1e-12) and gap >= 0.9e-9
 
-    at_peak = run_tddb(replace(config, tddb=replace(config.tddb, breakdown_current_density=density.max())))
-    assert at_peak.stop_reason == "max_generated" and at_peak.breakdown_time is None
-    assert np.array_equal(at_peak.current, reference.current)
+    sides = conducting_clusters(chain, device, 0.7e-9)  # r_c 小于链上间距：只剩两端各自接电极
+    assert sides.tolist() == [0] + [-1] * 8 + [1]
+    across = np.linalg.norm(minimum_image_delta(chain[9] - chain[0], device.Lx, device.Ly))
+    assert conductor_gap(chain, sides, device) == pytest.approx(across, rel=1e-12)
+    assert conducting_clusters(chain[4:5], device, 0.9e-9).tolist() == [-1]
+    assert conductor_gap(chain[4:5], np.array([-1]), device) == device.Lz
+    assert conducting_clusters(np.zeros((0, 3)), device, 0.9e-9).size == 0
+
+
+def test_conductors_sit_at_their_electrode_potential_and_supply_electrons_at_its_fermi_level():
+    """接电极的导电簇（ADR-054）：生成率的电势里成员处的电势等于所接电极的边界值（阴极 0、阳极 U）；其余缺陷处的电势
+    扣掉自身电荷的贡献，等于引擎的电势加上导电簇电荷带来的改变。陷阱项把成员当作所接电极费米能级处占满（p = 1）的
+    电子源，其余陷阱的能级取同一份电势；P_bb 的场取这份电势的 Gaussian 平均。没有导电簇时电势就是只放缺陷电荷的解。
+    三分之一的缺陷带与之重合的固定电荷 −e，另有一个离开缺陷 0.6 nm。"""
+    config = _config(concentration_cm3=3.0e19, percolation_distance=1.2e-9)
+    tddb, device = config.tddb, config.device
+    material = device.stack.single_material
+    defects = KMCSimulation(config).defects
+    fixed = np.where(np.arange(len(defects)) % 3 == 0, -Q, 0.0)
+    offset = np.zeros((len(defects), 3))
+    fixed[1] = -Q
+    offset[1, 2] = 0.6e-9 if defects.positions[1, 2] < 0.5 * device.Lz else -0.6e-9
+    inner = KMCSimulation(config, defects=replace(defects, fixed_charge=fixed, fixed_charge_offset=offset))
+    occupancy = solve_mean_field(inner).occupancy
+    sides = conducting_clusters(inner.defects.positions, device, tddb.percolation_distance)
+    members, free = np.flatnonzero(sides >= 0), np.flatnonzero(sides < 0)
+    assert np.any(sides == 0) and np.any(sides == 1) and not np.any(sides == 2)
+    assert np.any(fixed[members] != 0.0)
+
+    solver = inner.solver
+    top = tddb_module.top_boundary_potential(device, config.simulation.voltage)
+    phi, shift = tddb_module._conductor_potential(inner, occupancy, sides)
+    at = solver.interpolate(phi, inner.defects.positions)
+    np.testing.assert_allclose(at[members], np.where(sides[members] == 0, 0.0, top), rtol=0.0, atol=1e-10)
+    electrons = occupancy - inner.defects.charge_state - inner.defects.colocated_fixed_charge / Q
+    engine = inner._electrostatics(occupancy)[0]
+    np.testing.assert_allclose(
+        (at - electrons * inner.coupling.phi_self)[free], (engine + shift)[free], rtol=1e-9, atol=1e-12
+    )
+    assert np.abs(shift[free]).max() > 1e-3
+
+    plain, zero = tddb_module._conductor_potential(inner, occupancy, np.full(len(sides), -1))
+    reference = solver.solve(
+        solver.deposit(inner.defects.positions, Q * (inner.defects.charge_state - occupancy))
+        + solver.deposit(inner.defects.fixed_charge_positions, inner.defects.fixed_charge),
+        top,
+    )
+    np.testing.assert_allclose(plain, reference, rtol=1e-12, atol=1e-14)
+    assert np.all(zero == 0.0)
+
+    precursors = _sites_near_sources(inner, occupancy, np.random.default_rng(9), sources=members)
+    rates = generation_rates(inner, occupancy, tddb, precursors)
+    points = precursors.positions
+    precursor_energy = (
+        device.band_reference_profile(points[:, 2]) - Q * solver.interpolate(phi, points) - tddb.precursor_ionization_energy
+    )
+    distance = np.linalg.norm(
+        minimum_image_delta(points[:, None, :] - inner.defects.positions[None, :, :], device.Lx, device.Ly), axis=-1
+    )
+
+    def direct_sum(source_energy, source_occupancy):
+        return trap_precursor_capture_rate(
+            inner.defects.attempt_frequency[None, :], distance, inner.defects.r_D[None, :],
+            localization_radius(tddb.precursor_ionization_energy, material.m_di),
+            source_energy[None, :], precursor_energy[:, None], source_occupancy[None, :], config.simulation.temperature,
+        ).sum(axis=1)
+
+    trap_energy = inner._trap_state(occupancy)[0] - Q * shift
+    fermi = np.where(sides == 0, 0.0, -Q * config.simulation.voltage)
+    expected = direct_sum(np.where(sides >= 0, fermi, trap_energy), np.where(sides >= 0, 1.0, occupancy))
+    np.testing.assert_allclose(rates.trap, expected, rtol=1e-9, atol=tddb_module._TRAP_TERM_FLOOR)
+    # 成员若仍按平均场能级与占据计入，紧挨成员的位点陷阱项明显不同
+    assert not np.allclose(direct_sum(trap_energy, occupancy)[:40], expected[:40], rtol=0.1)
+
+    mean = solver.gaussian_average(np.stack(solver.electric_field(phi), axis=-1), tddb.field_averaging_width)
+    p_bb = bond_break_probability(
+        tddb.activation_energy, tddb.dipole_moment, material.kappa,
+        np.linalg.norm(solver.interpolate(mean, points), axis=-1), config.simulation.temperature,
+    )
+    np.testing.assert_allclose(rates.bond_breaking, p_bb, rtol=1e-9)
+
+
+def test_breakdown_at_start_when_the_initial_defects_already_span_the_film():
+    """初始缺陷已经连成贯穿通路（r_c = 4 nm）：轨迹停在 t = 0，t_BD = 0；这条记录的电流 = 同一实现的稳态内层输运电流 +
+    细丝的 G₀·V（G₀ = 2e²/h ≈ 77.5 µS），不求生成率（NaN），导体间隙为 0（ADR-054）。"""
+    config = _config(concentration_cm3=3.0e19, percolation_distance=4.0e-9)
+    result = run_tddb(config)
+    steady = solve_mean_field(KMCSimulation(config))
+    assert result.stop_reason == "breakdown" and result.breakdown_time == 0.0 and result.time.tolist() == [0.0]
+    assert _QUANTUM_CONDUCTANCE == pytest.approx(7.748091729e-5, rel=1e-9)
+    assert result.filament_current[0] == _QUANTUM_CONDUCTANCE * config.simulation.voltage
+    assert result.current[0] == steady.current + result.filament_current[0]
+    assert result.transport_current[0] == steady.current
+    assert np.isnan(result.generation_rate[0]) and result.conductor_gap[0] == 0.0
+
+
+def test_trajectory_stops_at_the_first_spanning_path(monkeypatch):
+    """击穿判据（§6.3，ADR-054）：每条记录按当时的缺陷集合找导电簇；没有贯穿通路的记录细丝电流为 0，记录的导体间隙就是
+    `conductor_gap`、不小于 r_c；轨迹停在第一条出现贯穿通路的记录上，t_BD 就是它的时刻，电流 = 内层输运电流 + G₀·V，
+    间隙为 0、不求生成率。进度回调拿到的是总电流密度；I-t 拟合只用内层输运电流。r_c = 1.95 nm 时初始缺陷还没连通
+    （阈值 2.017 nm），第 5 次生成接通。"""
+    config = _config(seed=1, concentration_cm3=3.0e19, percolation_distance=1.95e-9, max_generated_vacancies=12)
+    device, r_c = config.device, config.tddb.percolation_distance
+    calls, reported = [], []
+    original = tddb_module.solve_mean_field
+
+    def recording(sim, occupancy=None):
+        result = original(sim, occupancy)
+        calls.append((sim, result))
+        return result
+
+    monkeypatch.setattr(tddb_module, "solve_mean_field", recording)
+    result = run_tddb(config, progress=lambda n, t, density: reported.append(density))
+
+    assert result.stop_reason == "breakdown" and result.breakdown_time == result.end_time == result.time[-1]
+    assert result.n_generated[-1] == 5 and len(calls) == len(reported) == result.time.size
+    for k, (sim, mf) in enumerate(calls):
+        sides = conducting_clusters(sim.defects.positions, device, r_c)
+        last = k == len(calls) - 1
+        assert bool(np.any(sides == 2)) == last
+        assert result.conductor_gap[k] == conductor_gap(sim.defects.positions, sides, device)
+        assert result.filament_current[k] == (_QUANTUM_CONDUCTANCE * config.simulation.voltage if last else 0.0)
+        assert result.transport_current[k] == mf.current
+        assert result.current[k] == mf.current + result.filament_current[k]
+        assert reported[k] == pytest.approx(result.current[k] / result.area, rel=1e-15)
+        if not last:
+            assert result.conductor_gap[k] >= r_c and result.generation_rate[k] > 0.0
+    assert result.conductor_gap[-1] == 0.0 and np.isnan(result.generation_rate[-1])
+    assert result.current[-1] > 1.0e3 * result.transport_current[-1]
+    fit, times = fit_transient(result)
+    index = np.searchsorted(result.time, times, side="right") - 1
+    assert fit == fit_power_law(times, result.transport_current[index] / result.area)
 
 
 def test_draw_generation_picks_sites_by_rate():
@@ -650,8 +785,9 @@ def test_write_tddb_csv(tmp_path, trajectory):
     per_cm2 = constants.centi ** 2
     for k, (row, density) in enumerate(zip(rows, result.current_density)):
         assert float(row["J_total_A_cm2"]) == pytest.approx(density * per_cm2, rel=1e-5)
-        parts = sum(float(row["J_{}_A_cm2".format(name)]) for name in MECHANISMS)
+        parts = sum(float(row["J_{}_A_cm2".format(name)]) for name in MECHANISMS) + float(row["J_filament_A_cm2"])
         assert parts == pytest.approx(float(row["J_total_A_cm2"]), rel=1e-5)
+        assert float(row["conductor_gap_nm"]) == pytest.approx(result.conductor_gap[k] / constants.nano, abs=1e-6)
         assert float(row["power_W"]) == pytest.approx(result.power[k], rel=1e-5)
         assert float(row["T_effective_K"]) == pytest.approx(result.effective_temperature[k], abs=1e-6)
         assert int(row["dense_cluster_size"]) == result.dense_cluster_size[k]
@@ -680,7 +816,7 @@ def test_cli_tddb_writes_csv_and_figure(tmp_path, capsys):
             "activation_energy_eV": 4.0, "precursor_ionization_energy_eV": 1.15,
             "precursor_relaxation_energy_eV": 1.0, "dipole_moment_eA": 7.1, "field_averaging_width_nm": 0.5,
             "precursor_concentration_cm3": 4.0e19, "max_generated_vacancies": 2, "stop_time_s": 1.0e4,
-            "breakdown_current_density_A_cm2": 1.0e4,
+            "percolation_distance_nm": 0.4,
             "thermal_conductivity_W_mK": 1.0,
         },
     }

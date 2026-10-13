@@ -403,7 +403,7 @@ class EnsembleConfig:
 
 @dataclass(frozen=True)
 class TDDBConfig:
-    """TDDB 缺陷生成参数（PROJECT_CONTEXT_TDDB.md 第 3 节参数表，ADR-024/028/035/036/047/052/053）。
+    """TDDB 缺陷生成参数（PROJECT_CONTEXT_TDDB.md 第 3 节参数表，ADR-024/028/035/036/052/053/054）。
 
     只收已定取值的参数，每个字段在用到它的 Phase 加入。G 场加速项里的相对介电常数 k 取
     介质材料的静态 κ，前驱俘获线型用的声子能量 ℏω₀ 取宿主介质的值，应力电压与环境温度
@@ -426,9 +426,10 @@ class TDDBConfig:
     precursor_concentration: float
     max_generated_vacancies: int  # 生成的空位数达到此值即停（机时上限）
     stop_time: float  # 应力时间上限 [s]
-    # --- 击穿判据与热反馈（Phase 4，ADR-036/047）---
-    # 击穿电流密度 [A/m^2]：电流密度超过它即判击穿，这一刻就是 t_BD（§6.3，ADR-047）
-    breakdown_current_density: float
+    # --- 击穿判据与热反馈（Phase 4，ADR-036/054）---
+    # r_c：导电通路的连通距离 [m]。O 空位间距 < r_c 连成导电簇，离电极平面 < r_c 的空位接到该电极，接电极的
+    # 导电簇与该电极等电位；阴极侧与阳极侧导电簇连通（贯穿通路）即击穿，这一刻就是 t_BD（§6.3，ADR-054）
+    percolation_distance: float
     # k_TH：介质热导率 [W/(m·K)]（式 T14）。None = 等温，温度固定为环境值（Phase 3 的口径）
     thermal_conductivity: Optional[float] = None
 
