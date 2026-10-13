@@ -7,11 +7,11 @@
 - G = 0 时 I(t) 恒定，且逐位等于同一初始实现下的稳态结果（等温与开热反馈都成立）；
 - 每步的强耦合簇与对当前缺陷集合新建 `KMCSimulation` 的分簇相同，终态电流与对终态缺陷
   从头求解的稳态一致；
-- 离散前驱位点（§6.1，ADR-052）：t = 0 在可采样窗口里均匀撒 round(N_T·V) 个，离初始缺陷不到 min_separation 的
-  删去；新空位落在某个位点上，这个位点与离新空位不到 min_separation 的位点删去；
-- 每个位点的生成速率 G_i = R_1e,i·P_bb,i：电极项等于引擎在该点放一个前驱参数陷阱时的两侧 R2 + R4（含空间电荷），
-  陷阱项等于对全部已占据陷阱的直接求和（截断误差 ≤ `_TRAP_TERM_FLOOR`），P_bb 取配置的 E_A（全部位点相同，
-  ADR-053）与 Gaussian 平均场；三项都按位点处的局域温度求值；
+- 离散前驱位点（§6.1，ADR-052/055）：t = 0 在可采样窗口里做最小间隔 min_separation 的最大随机堆积，位点两两之间、
+  与初始缺陷之间都 ≥ min_separation，且再也放不下一个位点；新空位落在某个位点上，只用掉这一个位点；
+- 每个位点的生成速率 G_i = R_1e,i·P_bb,i：电极项逐点求值时等于引擎在该点放一个前驱参数陷阱时的两侧 R2 + R4（含空间
+  电荷），插值表与逐点求值的差别在表的精度内（ADR-055）；陷阱项等于对全部已占据陷阱的直接求和（截断误差
+  ≤ `_TRAP_TERM_FLOOR`），P_bb 取配置的 E_A（全部位点相同，ADR-053）与 Gaussian 平均场；三项都按位点处的局域温度求值；
 - P_bb 未饱和时 E_A 整体平移只改时间标尺；Gillespie 按速率选位点；
 - 热反馈（§6.6、§8.4）：每步的输运温度是上一步功率给出的缺陷处加权温度，生成率取同一步的温度场；
 - 导电簇与击穿判据（§6.3，ADR-054）：间距 < r_c 的空位连成导电簇，离电极 < r_c 的接到该电极；接电极的导电簇
@@ -27,6 +27,7 @@ from dataclasses import fields, replace
 import numpy as np
 import pytest
 from scipy import constants
+from scipy.spatial import cKDTree
 
 from conftest import make_config, make_defect_config, make_device
 from kmc_leakage import tddb as tddb_module
@@ -63,7 +64,6 @@ from kmc_leakage.thermal import heat_release, power_map, solve_temperature, tran
 EV = constants.electron_volt
 Q = constants.elementary_charge
 E_ANGSTROM = Q * constants.angstrom
-PER_CM3 = constants.centi ** -3
 
 
 def _tddb(**overrides) -> TDDBConfig:
@@ -73,7 +73,6 @@ def _tddb(**overrides) -> TDDBConfig:
         precursor_relaxation_energy=1.0 * EV,
         dipole_moment=7.1 * E_ANGSTROM,
         field_averaging_width=0.5e-9,
-        precursor_concentration=4.0e19 * PER_CM3,
         max_generated_vacancies=4,
         stop_time=1.0e4,
         # r_c 小于 min_separation（0.5 nm）：空位之间、空位与电极都连不上，没有导电簇，也不会击穿
@@ -84,7 +83,8 @@ def _tddb(**overrides) -> TDDBConfig:
 
 
 def _config(seed=3, concentration_cm3=3.0e18, **overrides):
-    """20×20×8 nm、网格 8/8/16、3 V / 25 °C；3×10¹⁸ cm⁻³ 即 10 个初始缺陷，N_T = 4×10¹⁹ cm⁻³ 即约 112 个前驱位点。"""
+    """20×20×8 nm、网格 8/8/16、3 V / 25 °C；3×10¹⁸ cm⁻³ 即 10 个初始缺陷，前驱位点按 min_separation = 0.5 nm
+    铺满窗口，约 1.7 万个。"""
     device = make_device(defects=make_defect_config(concentration_cm3=concentration_cm3))
     return replace(make_config(voltage=3.0, seed=seed, device=device), tddb=_tddb(**overrides))
 
@@ -212,9 +212,9 @@ def test_generation_conserves_charge(trajectory):
 
 @pytest.mark.parametrize("thermal_conductivity", [None, 1.0])
 def test_zero_generation_reproduces_steady_state_bitwise(thermal_conductivity):
-    """N_T = 0（G = 0）：没有生成事件，I(t) 在 [0, stop_time] 上恒定，且逐位等于同一初始实现下的
+    """G = 0（E_A 取 10³ eV，P_bb 下溢为 0）：没有生成事件，I(t) 在 [0, stop_time] 上恒定，且逐位等于同一初始实现下的
     稳态平均场结果。开热反馈时第一条记录的输运仍取环境温度，结论不变。"""
-    config = _config(precursor_concentration=0.0, thermal_conductivity=thermal_conductivity)
+    config = _config(activation_energy=1.0e3 * EV, thermal_conductivity=thermal_conductivity)
     result = run_tddb(config)
     steady = solve_mean_field(KMCSimulation(config))
     assert result.stop_reason == "no_generation"
@@ -268,7 +268,7 @@ def test_trajectory_bookkeeping(trajectory):
     assert np.all(result.filament_current == 0.0) and np.array_equal(result.transport_current, result.current)
     assert np.all(result.conductor_gap == device.Lz)  # r_c < min_separation：没有导电簇
     assert np.all(result.generation_rate > 0.0)
-    assert np.all(np.diff(result.n_precursors) <= -1)  # 每次出生至少用掉一个前驱位点
+    assert np.all(np.diff(result.n_precursors) == -1)  # 每次出生用掉一个前驱位点
     assert np.all(result.max_cluster_size <= result.largest_component)
     final_charge = Q * np.sum(result.defects.charge_state - result.occupancy) + np.sum(result.defects.fixed_charge)
     assert result.space_charge[-1] == pytest.approx(final_charge, rel=1e-12)
@@ -286,52 +286,49 @@ def test_trajectory_bookkeeping(trajectory):
 
 
 def test_precursors_fill_the_sampling_window():
-    """t = 0 的前驱位点（ADR-052）：可采样窗口里均匀撒 round(N_T·V) 个，随机数按 x、y、z 的顺序取；离初始缺陷
-    不到 min_separation（xy 最小镜像）的位点删去，其余原样保留。"""
+    """t = 0 的前驱位点（ADR-055）：可采样窗口里最小间隔 d = min_separation 的最大随机堆积。位点都在窗口内，两两之间、
+    与初始缺陷之间都 ≥ d（xy 最小镜像）；窗口里随机取的点离某个位点或初始缺陷都 < d，即再也放不下一个位点；密度在
+    随机顺序堆积的饱和值（0.73/d³）附近。同一个随机数流给出同一组位点；min_separation = 0 时没有间隔可用，报错。"""
     config = _config(concentration_cm3=3.0e19)
     device = config.device
-    tddb = replace(config.tddb, precursor_concentration=2.0e21 * PER_CM3)
     defects = KMCSimulation(config).defects.positions
-    standoff = _global_standoff(device)
-    n = int(round(tddb.precursor_concentration * device.Lx * device.Ly * (device.Lz - 2.0 * standoff)))
-    raw = np.random.default_rng(7)
-    positions = np.column_stack([
-        raw.uniform(0.0, device.Lx, n), raw.uniform(0.0, device.Ly, n), raw.uniform(standoff, device.Lz - standoff, n),
-    ])
-    distance = np.linalg.norm(
-        minimum_image_delta(positions[:, None, :] - defects[None, :, :], device.Lx, device.Ly), axis=-1
-    ).min(axis=1)
-    keep = distance >= standoff
+    d = _global_standoff(device)
+    positions = place_precursors(device, defects, np.random.default_rng(7)).positions
+    assert np.all((positions[:, 2] >= d) & (positions[:, 2] <= device.Lz - d))
+    assert np.all((positions[:, :2] >= 0.0) & (positions[:, :2] < [device.Lx, device.Ly]))
 
-    precursors = place_precursors(device, tddb, defects, np.random.default_rng(7))
-    assert n == 5600 and np.count_nonzero(~keep) > 0
-    assert len(precursors) == np.count_nonzero(keep)
-    assert np.array_equal(precursors.positions, positions[keep])
-    assert len(place_precursors(device, replace(tddb, precursor_concentration=0.0), defects, raw)) == 0
+    box = np.array([device.Lx, device.Ly, 4.0 * device.Lz])
+    sites = cKDTree(positions, boxsize=box)
+    assert sites.query(positions, k=2)[0][:, 1].min() >= d
+    assert cKDTree(np.mod(defects, box), boxsize=box).query(positions)[0].min() >= d
+    window = (device.Lz - 2.0 * d) * device.Lx * device.Ly
+    assert 0.70 < len(positions) * d ** 3 / window < 0.80
+
+    rng = np.random.default_rng(8)
+    probes = np.column_stack([rng.uniform(0.0, device.Lx, 200000), rng.uniform(0.0, device.Ly, 200000),
+                              rng.uniform(d, device.Lz - d, 200000)])
+    nearest = np.minimum(sites.query(probes)[0], cKDTree(np.mod(defects, box), boxsize=box).query(probes)[0])
+    assert nearest.max() < d
+
+    assert np.array_equal(place_precursors(device, defects, np.random.default_rng(7)).positions, positions)
+    flat = make_device(defects=make_defect_config(concentration_cm3=3.0e19, min_separation=0.0))
+    with pytest.raises(ValueError):
+        place_precursors(flat, defects, np.random.default_rng(7))
 
 
-def test_converted_precursor_takes_out_its_blocked_neighbours():
-    """断键的位点用掉，离它不到 min_separation 的位点（xy 最小镜像）也删去，其余位点原样保留（ADR-052）。"""
-    device = make_device()  # 20×20×8 nm，min_separation 0.5 nm
-    positions = 1e-9 * np.array([
-        [0.1, 10.0, 3.0],  # 断键的位点
-        [0.4, 10.0, 3.0],  # 0.3 nm：删去
-        [19.8, 10.0, 3.0],  # 跨周期边界 0.3 nm：删去
-        [0.1, 10.0, 3.6],  # 0.6 nm：保留
-        [10.0, 10.0, 3.0],  # 远处：保留
-    ])
+def test_converted_precursor_is_the_only_site_taken_out():
+    """断键的位点用掉，其余位点原样保留、顺序不变：位点两两之间本来就 ≥ min_separation（ADR-055）。"""
+    positions = 1e-9 * np.arange(15.0).reshape(5, 3)
     precursors = Precursors(positions)
-    left = precursors.converted(0, device)
-    assert len(left) == 2 and len(precursors) == 5
-    assert np.array_equal(left.positions, positions[[3, 4]])
+    left = precursors.converted(2)
+    assert len(left) == 4 and len(precursors) == 5
+    assert np.array_equal(left.positions, positions[[0, 1, 3, 4]])
 
 
 def test_each_birth_converts_one_precursor_site(trajectory):
-    """新空位就落在上一步的某个前驱位点上（ADR-052）：这个位点用掉，离新空位不到 min_separation 的位点也删去，其余
-    位点原样留到下一步；记录的 ΣG 与剩余位点数就是该步的生成速率与位点表。"""
+    """新空位就落在上一步的某个前驱位点上（ADR-052）：只用掉这一个位点，其余位点原样留到下一步（ADR-055）；记录的
+    ΣG 与剩余位点数就是该步的生成速率与位点表。"""
     config, result, _, generations = trajectory
-    device = config.device
-    standoff = _global_standoff(device)
     assert len(generations) == result.time.size
     for k, (precursors, rates) in enumerate(generations):
         assert result.n_precursors[k] == len(precursors)
@@ -339,10 +336,9 @@ def test_each_birth_converts_one_precursor_site(trajectory):
     for k in range(result.time.size - 1):
         before, after = generations[k][0], generations[k + 1][0]
         vacancy = result.defects.positions[result.n_initial + k]
-        assert np.flatnonzero(np.all(before.positions == vacancy, axis=1)).size == 1
-        distance = np.linalg.norm(minimum_image_delta(before.positions - vacancy, device.Lx, device.Ly), axis=1)
-        keep = distance >= standoff
-        assert np.array_equal(after.positions, before.positions[keep])
+        used = np.flatnonzero(np.all(before.positions == vacancy, axis=1))
+        assert used.size == 1
+        assert np.array_equal(after.positions, np.delete(before.positions, used[0], axis=0))
 
 
 def _admissible(device, positions, point):
@@ -395,11 +391,12 @@ def _probe(config, inner, occupancy, positions):
 
 @pytest.mark.parametrize("width", [0.0, 0.5e-9])
 def test_electrode_term_and_bond_breaking_match_engine_probe(monkeypatch, width):
-    """电极项（式 T4）：每个前驱位点的 R_1e,电极 等于引擎在该点放一个前驱参数陷阱时的两侧 R2 + R4；局域电势、局域场
-    都含当前占据下的空间电荷。引擎的 R4 用 12 个声子项，这里把前驱的声子项数也设成 12 再逐项对拍。三分之一的缺陷带
-    与之重合的固定电荷 −e，另有一个离开缺陷 0.6 nm：生成率的泊松源项（固定电荷放在各自的位置）与引擎的静电背景一致
-    （ADR-048）。P_bb 用配置的 E_A（全部位点相同，ADR-053），场取泊松解在 Gaussian 窗口上的平均（ADR-043），窗口
-    宽度 0 时就是引擎在探针处读到的局域场。"""
+    """电极项（式 T4）：逐点求值（单个位点，插值表每个方向只有一个节点）时每个前驱位点的 R_1e,电极 等于引擎在该点放
+    一个前驱参数陷阱时的两侧 R2 + R4；局域电势、局域场都含当前占据下的空间电荷。引擎的 R4 用 12 个声子项，这里把
+    前驱的声子项数也设成 12 再逐项对拍。一组位点一起求值时走插值表（ADR-055），与逐点求值相比按生成率加权的相对
+    误差 ≤ 10⁻³、ΣG 的相对误差 ≤ 10⁻³。三分之一的缺陷带与之重合的固定电荷 −e，另有一个离开缺陷 0.6 nm：生成率的
+    泊松源项（固定电荷放在各自的位置）与引擎的静电背景一致（ADR-048）。P_bb 用配置的 E_A（全部位点相同，ADR-053），
+    场取泊松解在 Gaussian 窗口上的平均（ADR-043），窗口宽度 0 时就是引擎在探针处读到的局域场。"""
     monkeypatch.setattr(tddb_module, "_PRECURSOR_N_PHONON", _N_PHONON)
     config = _config(concentration_cm3=3.0e19, field_averaging_width=width)
     tddb = config.tddb
@@ -411,20 +408,22 @@ def test_electrode_term_and_bond_breaking_match_engine_probe(monkeypatch, width)
     offset[1, 2] = 0.6e-9 if defects.positions[1, 2] < 0.5 * config.device.Lz else -0.6e-9
     inner = KMCSimulation(config, defects=replace(defects, fixed_charge=fixed, fixed_charge_offset=offset))
     occupancy = solve_mean_field(inner).occupancy
-    precursors = place_precursors(
-        config.device,
-        replace(tddb, precursor_concentration=1.0e20 * PER_CM3),
-        inner.defects.positions,
-        np.random.default_rng(5),
-    )
+    # 铺满窗口的位点每 60 个取一个，约 290 个
+    precursors = Precursors(place_precursors(config.device, inner.defects.positions, np.random.default_rng(5)).positions[::60])
     rates = generation_rates(inner, occupancy, tddb, precursors)
+    single = np.array([
+        generation_rates(inner, occupancy, tddb, Precursors(point[None, :])).electrode[0] for point in precursors.positions
+    ])
 
     extended, occ, probe = _probe(config, inner, occupancy, precursors.positions)
     energy, field, barrier_c, barrier_a = extended._trap_state(occ)
     blocks = extended._electrode_blocks(energy, field, barrier_c, barrier_a)
     capture = (blocks[_B_R2C] + blocks[_B_R2A] + blocks[_B_R4C] + blocks[_B_R4A])[probe]
     assert len(precursors) > 200 and np.all(capture > 0.0)
-    np.testing.assert_allclose(rates.electrode, capture, rtol=1e-8)
+    np.testing.assert_allclose(single, capture, rtol=1e-8)
+    generation = single * rates.bond_breaking
+    assert np.sum(np.abs(rates.electrode / single - 1.0) * generation) <= 1e-3 * generation.sum()
+    assert rates.electrode @ rates.bond_breaking == pytest.approx(generation.sum(), rel=1e-3)
 
     bond_field = field[probe]
     if width > 0.0:
@@ -476,7 +475,8 @@ def test_trap_term_is_the_direct_sum_over_occupied_traps():
 
 def test_generation_rates_follow_local_temperature():
     """局域温度（§6.6）：温度场处处取环境温度时三个分量都等于缺省（按工作点温度求值）；温度场不均匀时每个位点按它
-    所在处的温度求值，等于整张温度场取这个温度时同一位点的值。"""
+    所在处的温度求值：单个位点求值时等于整张温度场取这个温度时的值；一组位点一起求值时陷阱项与 P_bb 与单个位点
+    相同，电极项的差别在插值表的精度内（ADR-055）。"""
     config = _config(concentration_cm3=3.0e19)
     tddb = config.tddb
     inner = KMCSimulation(config)
@@ -496,9 +496,14 @@ def test_generation_rates_follow_local_temperature():
     assert not np.allclose(local.rates, base.rates)
     for i in (0, 17, 39, 40, len(precursors) - 1):
         single = Precursors(precursors.positions[i:i + 1])
+        alone = generation_rates(inner, occupancy, tddb, single, field)
         uniform = generation_rates(inner, occupancy, tddb, single, np.full(shape, temperature[i]))
         for name in GenerationRates._fields:
-            assert getattr(local, name)[i] == pytest.approx(getattr(uniform, name)[0], rel=1e-10), name
+            assert getattr(alone, name)[0] == pytest.approx(getattr(uniform, name)[0], rel=1e-10), name
+        # 一组位点一起求值：陷阱项与 P_bb 与单个位点相同，电极项走插值表（ADR-055）
+        assert local.trap[i] == pytest.approx(alone.trap[0], rel=1e-10)
+        assert local.bond_breaking[i] == pytest.approx(alone.bond_breaking[0], rel=1e-10)
+        assert local.electrode[i] == pytest.approx(alone.electrode[0], rel=1e-2)
 
 
 def test_activation_energy_shift_only_rescales_time(monkeypatch):
@@ -698,7 +703,7 @@ def test_trajectory_stops_at_the_first_spanning_path(monkeypatch):
     """击穿判据（§6.3，ADR-054）：每条记录按当时的缺陷集合找导电簇；没有贯穿通路的记录细丝电流为 0，记录的导体间隙就是
     `conductor_gap`、不小于 r_c；轨迹停在第一条出现贯穿通路的记录上，t_BD 就是它的时刻，电流 = 内层输运电流 + G₀·V，
     间隙为 0、不求生成率。进度回调拿到的是总电流密度；I-t 拟合只用内层输运电流。r_c = 1.95 nm 时初始缺陷还没连通
-    （阈值 2.017 nm），第 5 次生成接通。"""
+    （阈值 2.017 nm），第 3 次生成接通。"""
     config = _config(seed=1, concentration_cm3=3.0e19, percolation_distance=1.95e-9, max_generated_vacancies=12)
     device, r_c = config.device, config.tddb.percolation_distance
     calls, reported = [], []
@@ -713,7 +718,7 @@ def test_trajectory_stops_at_the_first_spanning_path(monkeypatch):
     result = run_tddb(config, progress=lambda n, t, density: reported.append(density))
 
     assert result.stop_reason == "breakdown" and result.breakdown_time == result.end_time == result.time[-1]
-    assert result.n_generated[-1] == 5 and len(calls) == len(reported) == result.time.size
+    assert result.n_generated[-1] == 3 and len(calls) == len(reported) == result.time.size
     for k, (sim, mf) in enumerate(calls):
         sides = conducting_clusters(sim.defects.positions, device, r_c)
         last = k == len(calls) - 1
@@ -815,7 +820,7 @@ def test_cli_tddb_writes_csv_and_figure(tmp_path, capsys):
         "tddb": {
             "activation_energy_eV": 4.0, "precursor_ionization_energy_eV": 1.15,
             "precursor_relaxation_energy_eV": 1.0, "dipole_moment_eA": 7.1, "field_averaging_width_nm": 0.5,
-            "precursor_concentration_cm3": 4.0e19, "max_generated_vacancies": 2, "stop_time_s": 1.0e4,
+            "max_generated_vacancies": 2, "stop_time_s": 1.0e4,
             "percolation_distance_nm": 0.4,
             "thermal_conductivity_W_mK": 1.0,
         },

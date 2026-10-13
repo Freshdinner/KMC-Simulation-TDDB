@@ -1,12 +1,12 @@
 """TDDB 瞬态驱动：准静态双层循环，含热反馈与击穿判据。
 
-规格见 PROJECT_CONTEXT_TDDB.md §5、§6，决策记录见 ADR-032–054。公式编号 T1–T14 是 TDDB 的
+规格见 PROJECT_CONTEXT_TDDB.md §5、§6，决策记录见 ADR-032–055。公式编号 T1–T14 是 TDDB 的
 编号（PROJECT_CONTEXT_TDDB.md 第 3 节），与 docs/rate_equations.md 的 R1–R8 不对应。
 
 电子输运事件的时间尺度（~10⁻¹³…10⁻⁶ s）比缺陷生成（秒以上）短十几个数量级，所以输运相对
-生成瞬间达到稳态（§5）。t = 0 在初始缺陷之外撒离散前驱位点（§6.1，ADR-052）：可采样窗口里均匀放
-round(N_T·V_窗口) 个，全部位点的无场断键激活能取同一个 E_A（ADR-053）。外层是缺陷生成的 Gillespie 循环，
-每步：
+生成瞬间达到稳态（§5）。t = 0 在初始缺陷之外铺离散前驱位点（§6.1，ADR-052/055）：可采样窗口里按最小间隔
+min_separation 做最大随机堆积，直到再也放不下一个位点，浓度由间隔决定；全部位点的无场断键激活能取同一个
+E_A（ADR-053）。外层是缺陷生成的 Gillespie 循环，每步：
 
 1. **内层稳态**：按当前缺陷集合与输运温度重建 `KMCSimulation`（静电耦合用
    `IncrementalCoupling` 逐个追加的那份），从上一步的占据热启动，求簇级平均场不动点
@@ -26,11 +26,12 @@ round(N_T·V_窗口) 个，全部位点的无场断键激活能取同一个 E_A�
    导电簇与该电极等电位（ADR-054）；在每个前驱位点上求式 T1 的 G_i = R_1e,i·P_bb,i：
    - R_1e,i = 两侧电极 R2 + R4（电极项，式 T4）+ Σ_j p_j·R7(j → i)（陷阱项：近旁已占据陷阱经陷阱间通道
      送来的电子，ADR-039；导电簇的空位按所接电极费米能级处占满的电子源计入）。前驱能级、R4 的局域场与
-     温度取位点处含空间电荷的局域值，取法同引擎处理真实陷阱；
+     温度取位点处含空间电荷的局域值，取法同引擎处理真实陷阱；电极项在 (z, 前驱能级, 温度) 的插值表上
+     求值（ADR-055）；
    - P_bb,i 的场取泊松解在 Gaussian 窗口上的平均（宏观场，ADR-043）。导电簇尖端前方的场被抬高，生成
      向尖端集中，导电簇越长尖端场越强，这是贯穿通路最后一段迅速形成的机制。
-5. **抽事件**：Δt = −ln(r)/ΣG，按 G_i 选一个前驱位点断键，新空位就落在这个位点上。这个前驱用掉，
-   离新空位不到 min_separation 的前驱也删去：缺陷只增不减，它们以后放不下新空位（§6.8）。
+5. **抽事件**：Δt = −ln(r)/ΣG，按 G_i 选一个前驱位点断键，新空位就落在这个位点上。这个位点用掉，
+   其余位点离它本来就 ≥ min_separation，原样保留。
 6. **出生**：新空位与初始缺陷同一物种（能级按缺陷预设的分布抽样，S、m_di 取预设），出生占据 1，
    施主约定 `charge_state` = +1（§6.7、ADR-035）。生成反应"前驱 + e⁻ → V_O + O_i⁻"按电荷守恒处理
    （ADR-048）：前驱俘获的那个电子的电荷留在 O 间隙离子上，O_i⁻ 作为新空位的固定电荷
@@ -46,6 +47,7 @@ O_i⁻ 一起留在介质里。平均场没有时间推进，每条记录的电�
 """
 
 import csv
+import itertools
 from dataclasses import dataclass, replace
 from typing import Callable, Dict, List, NamedTuple, Optional, Tuple
 
@@ -87,7 +89,7 @@ from .mean_field import solve_mean_field
 from .rates import (
     CaptureElectrode,
     bond_break_probability,
-    single_electron_capture_rate,
+    single_electron_capture_parts,
     trap_precursor_capture_rate,
 )
 from .thermal import heat_release, power_map, solve_temperature, transport_temperature
@@ -103,11 +105,22 @@ _DENSE_CLUSTER_DISTANCE = 0.6 * constants.nano
 _DENSE_CLUSTER_SIZE = 25
 # 贯穿通路形成后细丝的电导：一个量子电导 G₀ = 2e²/h（量子点接触，ADR-054）
 _QUANTUM_CONDUCTANCE = 2.0 * constants.elementary_charge ** 2 / constants.h
-# 分块求 R_1e 电极项：每块的前驱位点数，块内 (位点, 声子数, 路径点) 的数组约 1.7 MB
-_SITE_CHUNK = 32
+# R_1e 电极项的插值表（`_electrode_capture`，ADR-055）：z、前驱能级、温度三个方向的节点间距。3.6 V 默认工况下与逐点
+# 求值相比，按生成率加权的相对误差 2.5×10⁻⁴，生成率不可忽略的位点上最大 1.1×10⁻³
+_TABLE_Z_STEP = 0.05 * constants.nano
+_TABLE_ENERGY_STEP = 0.005 * constants.electron_volt
+_TABLE_TEMPERATURE_STEP = 0.5  # [K]
+# 分块求表节点：每块的节点数，块内 (节点, 声子数, 路径点) 的数组约 3.3 MB
+_TABLE_CHUNK = 64
 # 陷阱项的近邻截断（`_trap_capture`）：截断外每个前驱被丢掉的陷阱项总速率不超过此值 [1/s]（MA 因子与
 # 源陷阱占据都取 1 的上界）。应力时间上限 10⁴ s 内，这部分让任何一个前驱断键的概率变化不超过 10⁻⁸
 _TRAP_TERM_FLOOR = 1.0e-12
+# 陷阱项按源陷阱分块求和：每块的源陷阱数，块内 (位点, 源) 对的数组不超过几 MB
+_SOURCE_CHUNK = 32
+# 前驱位点的最大随机堆积（`_maximal_packing`）：每批扔的随机点数（批内两两冲突的点对数组随批大小增长），
+# 以及格子细分的层数上限（格边细到 2⁻³⁰ 时剩下的空隙体积可以忽略）
+_PACKING_BATCH = 250000
+_PACKING_MAX_LEVEL = 30
 
 
 class IncrementalCoupling:
@@ -193,10 +206,11 @@ class IncrementalCoupling:
 
 @dataclass(frozen=True)
 class Precursors:
-    """还没断键、还能放下新空位的离散前驱位点（§6.1，ADR-052）。
+    """还没断键的离散前驱位点（§6.1，ADR-052/055）。
 
     前驱是 O-Zr-O 键上的一个位置，俘获一个电子后可能断键、原地变成 O 空位（式 T1），断一次就用掉。
-    位点位置连续随机（§6.8）；无场断键激活能全部取 `tddb.activation_energy`（ADR-053）。
+    位点是最小间隔 min_separation 的最大随机堆积（`place_precursors`），位置连续（§6.8）；无场断键激活能
+    全部取 `tddb.activation_energy`（ADR-053）。
     """
 
     positions: np.ndarray  # (M, 3) 位点坐标 [m]
@@ -204,43 +218,94 @@ class Precursors:
     def __len__(self) -> int:
         return int(self.positions.shape[0])
 
-    def converted(self, index: int, device: DeviceConfig) -> "Precursors":
-        """第 `index` 个位点断键、原地变成新空位之后剩下的位点：它自己用掉，离新空位不到 min_separation 的
-        位点也删去（缺陷只增不减，它们以后放不下新空位）。"""
-        keep = _clear_of(self.positions, self.positions[index][None, :], device)
-        keep[index] = False
-        return Precursors(self.positions[keep])
+    def converted(self, index: int) -> "Precursors":
+        """第 `index` 个位点断键、原地变成新空位之后剩下的位点：只去掉它自己。其余位点离它本来就
+        ≥ min_separation，都还能放下新空位。"""
+        return Precursors(np.delete(self.positions, index, axis=0))
 
 
-def _clear_of(points: np.ndarray, defects: np.ndarray, device: DeviceConfig) -> np.ndarray:
-    """各点离 `defects` 里每个缺陷都 ≥ min_separation（xy 最小镜像），形状 (len(points),)。"""
-    if points.shape[0] == 0 or defects.shape[0] == 0:
-        return np.ones(points.shape[0], dtype=bool)
-    # xy 周期：坐标先折回 [0, L)；z 不周期：盒长取 4·Lz，点都在 [0, Lz] 内，不会回绕
-    box = np.array([device.Lx, device.Ly, 4.0 * device.Lz])
-    distance, _ = cKDTree(np.mod(defects, box), boxsize=box).query(np.mod(points, box))
-    return distance >= _global_standoff(device)
+def place_precursors(device: DeviceConfig, defects: np.ndarray, rng: np.random.Generator) -> Precursors:
+    """t = 0 的前驱位点（§6.1，ADR-052/055）。
 
-
-def place_precursors(
-    device: DeviceConfig, tddb: TDDBConfig, defects: np.ndarray, rng: np.random.Generator
-) -> Precursors:
-    """t = 0 的前驱位点（§6.1，ADR-052）。
-
-    在可采样窗口 [0,Lx)×[0,Ly)×[standoff, Lz−standoff]（与 `generate_defects` 的电极避让相同）里均匀撒
-    round(N_T·V_窗口) 个位点；离初始缺陷 `defects`（坐标 (N, 3)）不到 min_separation 的位点放不下新空位，
-    删去。随机数的消耗只取决于位点个数。
+    前驱位点不设浓度，由最小间隔 d = min_separation 决定（取 ZrO₂ 的 O–O 间距）：在可采样窗口
+    [0,Lx)×[0,Ly)×[d, Lz−d]（与 `generate_defects` 的电极避让相同）里做最大随机堆积（`_maximal_packing`），
+    位点两两之间、位点与初始缺陷 `defects`（坐标 (N, 3)）之间都 ≥ d，且窗口里再也放不下一个位点。
+    d = 0.26 nm 时密度约 4.3×10²² cm⁻³。
     """
     standoff = _global_standoff(device)
-    window = device.Lz - 2.0 * standoff
-    if window <= 0.0:
+    if not standoff > 0.0:
+        raise ValueError("前驱位点按 min_separation 堆积，min_separation_nm 必须为正")
+    if device.Lz - 2.0 * standoff <= 0.0:
         raise ValueError("min_separation 约束下 z 方向没有可放置新空位的区间")
-    n = int(round(tddb.precursor_concentration * device.Lx * device.Ly * window))
-    positions = np.column_stack(
-        [rng.uniform(0.0, device.Lx, n), rng.uniform(0.0, device.Ly, n), rng.uniform(standoff, device.Lz - standoff, n)]
-    )
-    keep = _clear_of(positions, defects, device)
-    return Precursors(positions[keep])
+    return Precursors(_maximal_packing(device, standoff, defects, rng))
+
+
+# 一个格子切成 8 个子格时各子格的下角（以子格边长为单位）
+_CHILD_CORNERS = np.array(list(itertools.product((0.0, 1.0), repeat=3)))
+
+
+def _maximal_packing(
+    device: DeviceConfig, separation: float, obstacles: np.ndarray, rng: np.random.Generator
+) -> np.ndarray:
+    """可采样窗口 [0,Lx)×[0,Ly)×[d, Lz−d]（d = `separation`）里的最大随机堆积，返回 (M, 3) 坐标（ADR-055）。
+
+    位点两两之间、位点与 `obstacles`（已有缺陷，(N, 3)）之间都 ≥ d（xy 最小镜像），且窗口里再也放不下一个这样的
+    位点。做法是最大泊松圆盘抽样（Ebeida 等 2012）：顶层格子的对角线 ≤ d，每格最多一个位点。每一层在还空着的
+    格子里各扔一个随机点，离已有的点或同批里排在前面的点 < d 的扔掉；然后去掉落了位点的格子与整个落在某个点
+    d 球里的格子，其余各切成 8 个子格进下一层。没有格子剩下时，窗口里每一点离某个位点或已有缺陷都 ≤ d。
+    """
+    d = separation
+    extent = np.array([device.Lx, device.Ly, device.Lz - 2.0 * d])
+    shape = np.ceil(extent * np.sqrt(3.0) / d).astype(int)
+    size = extent / shape
+    # xy 周期；z 不周期：盒长取 4·Lz，点都在 [0, Lz] 内，不会回绕
+    box = np.array([device.Lx, device.Ly, 4.0 * device.Lz])
+    filled = np.zeros(int(np.prod(shape)), dtype=bool)  # 顶层格子里是否已有位点
+    top = np.arange(filled.size)  # 各活动格所在的顶层格子
+    lower = np.column_stack(np.unravel_index(top, shape)) * size + np.array([0.0, 0.0, d])  # 各活动格的下角
+    points = np.mod(np.asarray(obstacles, dtype=float).reshape(-1, 3), box)
+    n_obstacles = points.shape[0]
+    tree = cKDTree(points, boxsize=box)
+
+    def covered(corner: np.ndarray, side: np.ndarray) -> np.ndarray:
+        """各格 [corner, corner + side] 是否整个落在离格心最近的那个点的 d 球里（最远的角离它 ≤ d）。"""
+        center = corner + 0.5 * side
+        _, nearest = tree.query(center)
+        delta = np.abs(center - points[nearest])
+        delta[:, :2] = np.minimum(delta[:, :2], box[:2] - delta[:, :2])
+        return np.sum((delta + 0.5 * side) ** 2, axis=1) <= d * d
+
+    for _ in range(_PACKING_MAX_LEVEL + 1):
+        if top.size == 0:
+            break
+        order = rng.permutation(top.size)
+        for start in range(0, order.size, _PACKING_BATCH):
+            batch = order[start:start + _PACKING_BATCH]
+            batch = batch[~filled[top[batch]]]
+            darts = lower[batch] + rng.random((batch.size, 3)) * size
+            darts[:, :2] = np.mod(darts[:, :2], box[:2])
+            distance, _ = tree.query(darts, distance_upper_bound=d)
+            batch, darts = batch[distance >= d], darts[distance >= d]
+            # 同批里两点冲突时留下排在前面的（批内顺序随机）
+            accept = np.ones(batch.size, dtype=bool)
+            accept[cKDTree(darts, boxsize=box).query_pairs(d, output_type="ndarray").max(axis=1)] = False
+            filled[top[batch[accept]]] = True
+            points = np.vstack([points, darts[accept]])
+            tree = cKDTree(points, boxsize=box)
+        keep = ~filled[top]
+        top, lower = top[keep], lower[keep]
+        keep = ~covered(lower, size)
+        top, lower = top[keep], lower[keep]
+        size = 0.5 * size
+        tops, lowers = [], []
+        for start in range(0, top.size, _PACKING_BATCH // 8):
+            children = (lower[start:start + _PACKING_BATCH // 8, None, :] + _CHILD_CORNERS * size).reshape(-1, 3)
+            keep = ~covered(children, size)
+            tops.append(np.repeat(top[start:start + _PACKING_BATCH // 8], 8)[keep])
+            lowers.append(children[keep])
+        top = np.concatenate(tops) if tops else np.zeros(0, dtype=int)
+        lower = np.concatenate(lowers) if lowers else np.zeros((0, 3))
+    return points[n_obstacles:]
 
 
 def _capture_electrodes(
@@ -402,27 +467,74 @@ def _electrode_capture(
     temperature: np.ndarray,
 ) -> np.ndarray:
     """各前驱位点的 R_1e 电极项：两侧电极 R2 + R4 [1/s]（式 T4）。`conduction` 是位点处的导带底 B − e·φ，
-    `field` 是局域场大小，隧穿路径与势垒见 `_capture_electrodes`。"""
+    `field` 是局域场大小，隧穿路径与势垒见 `_capture_electrodes`。
+
+    R_1e,电极 = Σ R2 + F²·Σ R4/F²（`single_electron_capture_parts`），两部分只依赖位点的 z、前驱能级与温度。完整的
+    WKB 与声子求和只在 (z, 前驱能级, 温度) 的等距表节点上做，节点间距 `_TABLE_Z_STEP`、`_TABLE_ENERGY_STEP`、
+    `_TABLE_TEMPERATURE_STEP`，只求位点用得到的节点；位点上对两部分的 ln 值做三线性插值，再按局域场组合（ADR-055）。
+    全部位点在某个方向上取值相同时这个方向只有一个节点，单个位点就是逐点求值。
+    """
     device = inner.device
     material = device.stack.single_material
-    sides = _capture_electrodes(device, inner.solver, phi, inner.sim.voltage, z)
-    rate = np.empty(z.size)
-    for start in range(0, z.size, _SITE_CHUNK):
-        rows = slice(start, start + _SITE_CHUNK)
-        rate[rows] = single_electron_capture_rate(
-            conduction[rows],
-            field[rows],
-            [side._replace(path=side.path[rows], barrier=side.barrier[rows], m_di_path=side.m_di_path[rows])
-             for side in sides],
-            tddb.precursor_ionization_energy,
-            tddb.precursor_relaxation_energy,
-            material.phonon_energy,
-            material.band_gap,
-            material.m_di,
-            temperature[rows],
-            _PRECURSOR_N_PHONON,
-        )
-    return rate
+    energy = conduction - tddb.precursor_ionization_energy
+    axes = [
+        _table_axis(z, _TABLE_Z_STEP),
+        _table_axis(energy, _TABLE_ENERGY_STEP),
+        _table_axis(temperature, _TABLE_TEMPERATURE_STEP),
+    ]
+    shape = tuple(nodes.size for nodes, _, _ in axes)
+    # 每个位点的 8 个角：表节点编号（三个方向展平）与三线性权重
+    keys, weights = [], []
+    for corner in itertools.product((0, 1), repeat=3):
+        keys.append(np.ravel_multi_index(
+            [np.minimum(left + c, nodes.size - 1) for (nodes, left, _), c in zip(axes, corner)], shape
+        ))
+        weights.append(np.prod([fraction if c else 1.0 - fraction for (_, _, fraction), c in zip(axes, corner)], axis=0))
+    needed, inverse = np.unique(np.concatenate(keys), return_inverse=True)
+    z_node, energy_node, temperature_node = np.unravel_index(needed, shape)
+    sides = _capture_electrodes(device, inner.solver, phi, inner.sim.voltage, axes[0][0])
+    tiny = np.finfo(float).tiny
+    log_parts = np.empty((2, needed.size))
+    # 同一个 z 节点、同一个温度节点的表节点共用隧穿路径与声子线型，按能级分块求
+    group = z_node * shape[2] + temperature_node
+    order = np.argsort(group, kind="stable")
+    for nodes in np.split(order, np.flatnonzero(np.diff(group[order])) + 1):
+        k, j = z_node[nodes[0]], temperature_node[nodes[0]]
+        for start in range(0, nodes.size, _TABLE_CHUNK):
+            rows = nodes[start:start + _TABLE_CHUNK]
+            log_parts[:, rows] = np.log(np.maximum(single_electron_capture_parts(
+                axes[1][0][energy_node[rows]] + tddb.precursor_ionization_energy,
+                [side._replace(
+                    path=np.broadcast_to(side.path[k], (rows.size, side.path.shape[1])),
+                    barrier=np.broadcast_to(side.barrier[k], (rows.size, side.barrier.shape[1])),
+                    m_di_path=np.broadcast_to(side.m_di_path[k], (rows.size, side.m_di_path.shape[1])),
+                ) for side in sides],
+                tddb.precursor_ionization_energy,
+                tddb.precursor_relaxation_energy,
+                material.phonon_energy,
+                material.band_gap,
+                material.m_di,
+                float(axes[2][0][j]),
+                _PRECURSOR_N_PHONON,
+            ), tiny))
+    n = z.size
+    log_rate = np.zeros((2, n))
+    for c, weight in enumerate(weights):
+        log_rate += weight * log_parts[:, inverse[c * n:(c + 1) * n]]
+    elastic, multiphonon = np.exp(log_rate)
+    return elastic + field ** 2 * multiphonon
+
+
+def _table_axis(values: np.ndarray, step: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """插值表的一个方向：[最小值, 最大值] 上间距 ≤ `step` 的等距节点，返回 (节点, 各值所在区间的左节点编号,
+    在区间内的位置 ∈ [0, 1])。全部值相同时只有一个节点，位置记 0。"""
+    lo, hi = float(values.min()), float(values.max())
+    if hi == lo:
+        return np.array([lo]), np.zeros(values.size, dtype=int), np.zeros(values.size)
+    nodes = np.linspace(lo, hi, int(np.ceil((hi - lo) / step)) + 1)
+    position = (values - lo) / (nodes[1] - nodes[0])
+    left = np.clip(np.floor(position).astype(int), 0, nodes.size - 2)
+    return nodes, left, np.clip(position - left, 0.0, 1.0)
 
 
 def _trap_capture(
@@ -439,33 +551,38 @@ def _trap_capture(
     R7 是引擎的陷阱间通道把目标换成前驱：ν_j·exp[−r·(1/r_D,j + 1/r_D,前驱)]·Θ，能量差取前驱能级与源能级
     `source_energy` 之差（ADR-038），温度取前驱处的温度。`occupancy` 是源的占据 p_j（导电簇的空位取 1）。只对
     p_j > 0 的源求和，距离取 xy 最小镜像。截断半径让截掉的部分（Θ 与 p 都取 1 的上界）每个前驱不超过
-    `_TRAP_TERM_FLOOR`，且不超过横向盒长的一半。
+    `_TRAP_TERM_FLOOR`，且不超过横向盒长的一半。源陷阱按 `_SOURCE_CHUNK` 个一块求和。
     """
     device, defects = inner.device, inner.defects
     p = np.asarray(occupancy, dtype=float)
     sources = np.flatnonzero(p > 0.0)
+    rate = np.zeros(points.shape[0])
     if sources.size == 0:
-        return np.zeros(points.shape[0])
+        return rate
     precursor_r_D = localization_radius(tddb.precursor_ionization_energy, device.stack.single_material.m_di)
     alpha_min = 1.0 / float(defects.r_D[sources].max()) + 1.0 / float(precursor_r_D)
     nu_max = float(defects.attempt_frequency[sources].max())
     reach = min(np.log(sources.size * nu_max / _TRAP_TERM_FLOOR) / alpha_min, 0.5 * min(device.Lx, device.Ly))
     box = np.array([device.Lx, device.Ly, 4.0 * device.Lz])
-    pairs = cKDTree(np.mod(points, box), boxsize=box).sparse_distance_matrix(
-        cKDTree(np.mod(defects.positions[sources], box), boxsize=box), reach, output_type="ndarray"
-    )
-    site, source = pairs["i"], sources[pairs["j"]]
-    hop = trap_precursor_capture_rate(
-        defects.attempt_frequency[source],
-        pairs["v"],
-        defects.r_D[source],
-        precursor_r_D,
-        source_energy[source],
-        precursor_energy[site],
-        p[source],
-        temperature[site],
-    )
-    return np.bincount(site, hop, minlength=points.shape[0])
+    tree = cKDTree(np.mod(points, box), boxsize=box)
+    for start in range(0, sources.size, _SOURCE_CHUNK):
+        chunk = sources[start:start + _SOURCE_CHUNK]
+        pairs = tree.sparse_distance_matrix(
+            cKDTree(np.mod(defects.positions[chunk], box), boxsize=box), reach, output_type="ndarray"
+        )
+        site, source = pairs["i"], chunk[pairs["j"]]
+        hop = trap_precursor_capture_rate(
+            defects.attempt_frequency[source],
+            pairs["v"],
+            defects.r_D[source],
+            precursor_r_D,
+            source_energy[source],
+            precursor_energy[site],
+            p[source],
+            temperature[site],
+        )
+        rate += np.bincount(site, hop, minlength=points.shape[0])
+    return rate
 
 
 def _draw_generation(rates: np.ndarray, rng: np.random.Generator) -> Optional[Tuple[float, int]]:
@@ -543,7 +660,7 @@ def conductor_gap(positions: np.ndarray, sides: np.ndarray, device: DeviceConfig
     if anode.size:
         gap = min(gap, float(anode[:, 2].min()))
     if cathode.size and anode.size:
-        box = np.array([device.Lx, device.Ly, 4.0 * device.Lz])  # 同 `_clear_of`：xy 周期，z 不回绕
+        box = np.array([device.Lx, device.Ly, 4.0 * device.Lz])  # 同 `_maximal_packing`：xy 周期，z 不回绕
         distance, _ = cKDTree(np.mod(anode, box), boxsize=box).query(np.mod(cathode, box))
         gap = min(gap, float(distance.min()))
     return gap
@@ -570,7 +687,7 @@ class TDDBResult:
     conductor_gap: np.ndarray  # (K,) 阴极侧与阳极侧导体的最短距离 [m]，击穿记录为 0（`conductor_gap`）
     # (K,) 这一状态下全部前驱位点的总生成速率 ΣG [1/s]；击穿记录不求生成率，记 NaN
     generation_rate: np.ndarray
-    n_precursors: np.ndarray  # (K,) 这一状态下剩下的前驱位点数（还没断键、离已有缺陷 ≥ min_separation）
+    n_precursors: np.ndarray  # (K,) 这一状态下还没断键的前驱位点数
     n_defects: np.ndarray  # (K,) 缺陷总数（初始 + 生成）
     space_charge: np.ndarray  # (K,) 全部缺陷的净电荷 Σ[q·(Z − p) + q_fix] [C]（§8.6）
     empty_generated: np.ndarray  # (K,) 生成的空位里处于空态的期望个数 Σ(1 − p)（§8.6）
@@ -640,7 +757,7 @@ def run_tddb(
     """按 `config` 跑一条 TDDB 瞬态轨迹（模块文档的双层循环）。
 
     初始缺陷与 `KMCSimulation(config)` 是同一个实现：同一个种子的随机数流先生成初始缺陷，
-    再撒前驱位点（`place_precursors`），之后的生成事件接着用同一个流。应力工况取 `simulation.voltage`，环境温度取
+    再铺前驱位点（`place_precursors`），之后的生成事件接着用同一个流。应力工况取 `simulation.voltage`，环境温度取
     `simulation.temperature`，生成、热与击穿参数取 `config.tddb`。本阶段只做单层
     （PROJECT_CONTEXT_TDDB.md §1）。
 
@@ -656,7 +773,7 @@ def run_tddb(
     rng = np.random.default_rng(sim.seed)
     defects = generate_defects(device, rng)
     n_initial = len(defects)
-    precursors = place_precursors(device, tddb, defects.positions, rng)
+    precursors = place_precursors(device, defects.positions, rng)
     solver = PoissonSolver(device, sim.grid)
     coupling = IncrementalCoupling.build(solver, defects.positions, defects.field_side)
     birth_time = np.zeros(n_initial)
@@ -738,7 +855,7 @@ def run_tddb(
             break
         time += dt
         position = precursors.positions[index]
-        precursors = precursors.converted(index, device)
+        precursors = precursors.converted(index)
         vacancy = layer_bulk_defects(device, 0, position, rng)
         defects = append_defects(defects, replace(vacancy, fixed_charge=np.full(1, _INTERSTITIAL_CHARGE)))
         coupling = coupling.extended(position)

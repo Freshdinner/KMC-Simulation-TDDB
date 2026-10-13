@@ -403,11 +403,12 @@ class EnsembleConfig:
 
 @dataclass(frozen=True)
 class TDDBConfig:
-    """TDDB 缺陷生成参数（PROJECT_CONTEXT_TDDB.md 第 3 节参数表，ADR-024/028/035/036/052/053/054）。
+    """TDDB 缺陷生成参数（PROJECT_CONTEXT_TDDB.md 第 3 节参数表，ADR-024/028/035/036/052/053/054/055）。
 
     只收已定取值的参数，每个字段在用到它的 Phase 加入。G 场加速项里的相对介电常数 k 取
     介质材料的静态 κ，前驱俘获线型用的声子能量 ℏω₀ 取宿主介质的值，应力电压与环境温度
-    取 simulation 段的工作点，都不在这里另设。
+    取 simulation 段的工作点，都不在这里另设。前驱位点不设浓度，按缺陷配置的 min_separation 做最大随机堆积
+    （ADR-055）。
     """
 
     # E_A：无场下形成 Frenkel 对的激活能 [J]，全部前驱位点取同一个值（式 T2；双电子机制下即 E_A,2e；ADR-053）
@@ -421,9 +422,6 @@ class TDDBConfig:
     # Lorentz 局域场因子 (2+k)/3 针对宏观场，窗口取 Lorentz 球的尺度；0 = 直接用泊松网格上的局域场
     field_averaging_width: float
     # --- 瞬态驱动（Phase 3，ADR-033）---
-    # N_T：前驱位点浓度 [1/m^3]。t = 0 在可采样窗口里撒 round(N_T·V_窗口) 个离散前驱位点，每个位点断键一次
-    # 就用掉（§6.1，ADR-052）。0 = 关掉生成
-    precursor_concentration: float
     max_generated_vacancies: int  # 生成的空位数达到此值即停（机时上限）
     stop_time: float  # 应力时间上限 [s]
     # --- 击穿判据与热反馈（Phase 4，ADR-036/054）---

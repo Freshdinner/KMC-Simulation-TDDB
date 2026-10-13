@@ -296,14 +296,20 @@ def _positive_int(value: Any, where: str) -> int:
 
 
 def _tddb(raw: Optional[Dict[str, Any]]) -> Optional[TDDBConfig]:
-    """TDDB 缺陷生成参数（ADR-024/028/033/036/052/053/054）；整段省略返回 None，即纯漏电流仿真。
+    """TDDB 缺陷生成参数（ADR-024/028/033/036/052/053/054/055）；整段省略返回 None，即纯漏电流仿真。
 
     三个能量（E_A、E_t1、E_rel1）必须为正；p₀ 必须 ≥ 0，取 0 即关掉场加速；P_bb 宏观场的平均窗口宽度
-    必须 ≥ 0，取 0 即用局域场（ADR-043）；N_T 必须 ≥ 0，取 0 即关掉生成（G = 0）。空位数上限是正整数，
-    应力时间上限、导电通路的连通距离 r_c 必须为正。热导率 k_TH 可省略（等温），给出时必须为正。
+    必须 ≥ 0，取 0 即用局域场（ADR-043）。空位数上限是正整数，应力时间上限、导电通路的连通距离 r_c 必须为正。
+    热导率 k_TH 可省略（等温），给出时必须为正。前驱位点不设浓度（按缺陷配置的 min_separation_nm 做最大随机
+    堆积，ADR-055），写了 `precursor_concentration_cm3` 直接报错。
     """
     if raw is None:
         return None
+    if "precursor_concentration_cm3" in raw:
+        raise ValueError(
+            "tddb.precursor_concentration_cm3 已取消（ADR-055）：前驱位点按缺陷配置的 min_separation_nm 做最大随机堆积，"
+            "浓度由间隔决定，删去这一项"
+        )
 
     def positive(key: str, unit: str) -> float:
         value = float(_require(raw, key, "tddb"))
@@ -320,11 +326,6 @@ def _tddb(raw: Optional[Dict[str, Any]]) -> Optional[TDDBConfig]:
     averaging = float(_require(raw, "field_averaging_width_nm", "tddb"))
     if not averaging >= 0.0:
         raise ValueError("tddb.field_averaging_width_nm 必须 ≥ 0（单位 nm），收到 {!r}".format(averaging))
-    concentration = float(_require(raw, "precursor_concentration_cm3", "tddb"))
-    if not concentration >= 0.0:
-        raise ValueError(
-            "tddb.precursor_concentration_cm3 必须 ≥ 0（单位 cm⁻³），收到 {!r}".format(concentration)
-        )
     thermal_conductivity = None
     if raw.get("thermal_conductivity_W_mK") is not None:
         thermal_conductivity = positive("thermal_conductivity_W_mK", "W/(m·K)")
@@ -334,7 +335,6 @@ def _tddb(raw: Optional[Dict[str, Any]]) -> Optional[TDDBConfig]:
         precursor_relaxation_energy=energy("precursor_relaxation_energy_eV"),
         dipole_moment=dipole * E_ANGSTROM,
         field_averaging_width=averaging * NM,
-        precursor_concentration=concentration * PER_CM3,
         max_generated_vacancies=_positive_int(
             _require(raw, "max_generated_vacancies", "tddb"), "tddb.max_generated_vacancies"
         ),
