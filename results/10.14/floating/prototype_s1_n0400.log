@@ -1,0 +1,32 @@
+seed 1 n 400: 460 defects, 796805 precursors (placed in 256 s)
+inner built in 131 s
+
+== r_c 0.30 nm: 43 floating clusters with >= 2 vacancies (98 members, largest 4); electrode members 1
+  old: sum G 154.2 1/s (electrode 23, trap 131) in 8 s; G-weighted z 3.16 nm; gap share 0.037; max potential spread in floating clusters 0.4 V
+     top sites z [nm] [5.11, 5.19, 3.11, 5.01, 3.24] G [1/s] ['5.52', '4.6', '4.03', '4.01', '2.44']
+  new: sum G 196.3 1/s (electrode 23, trap 173) in 8 s; G-weighted z 3.38 nm; gap share 0.038; max potential spread in floating clusters 3.55e-15 V
+     top sites z [nm] [6.22, 5.11, 5.19, 5.01, 3.11] G [1/s] ['7.7', '5.66', '4.67', '4.13', '4.03']
+  cond(G on members) 11.6
+  cluster 4 members, z 2.11-2.56 nm, potential 1.003 V (applied at mid-height 1.053 V)
+  cluster 4 members, z 5.53-5.97 nm, potential 2.380 V (applied at mid-height 2.606 V)
+  cluster 3 members, z 2.30-2.72 nm, potential 1.001 V (applied at mid-height 1.140 V)
+
+== r_c 0.35 nm: 51 floating clusters with >= 2 vacancies (137 members, largest 11); electrode members 5
+  old: sum G 154.4 1/s (electrode 22.9, trap 132) in 8 s; G-weighted z 3.16 nm; gap share 0.052; max potential spread in floating clusters 0.547 V
+     top sites z [nm] [5.11, 5.19, 5.01, 3.11, 3.24] G [1/s] ['5.57', '4.65', '4.05', '4.03', '2.44']
+  new: sum G 221.4 1/s (electrode 22.9, trap 199) in 8 s; G-weighted z 3.47 nm; gap share 0.123; max potential spread in floating clusters 5.33e-15 V
+     top sites z [nm] [6.22, 5.11, 5.19, 5.01, 3.11] G [1/s] ['6.66', '6.62', '5.44', '5.17', '4.2']
+  cond(G on members) 13
+  cluster 11 members, z 1.73-3.00 nm, potential 0.976 V (applied at mid-height 1.047 V)
+  cluster 6 members, z 5.20-5.97 nm, potential 2.340 V (applied at mid-height 2.537 V)
+  cluster 5 members, z 1.99-2.72 nm, potential 0.969 V (applied at mid-height 1.084 V)
+
+== r_c 0.40 nm: 56 floating clusters with >= 2 vacancies (171 members, largest 11); electrode members 8
+  old: sum G 154.4 1/s (electrode 22.8, trap 132) in 8 s; G-weighted z 3.16 nm; gap share 0.053; max potential spread in floating clusters 0.547 V
+     top sites z [nm] [5.11, 5.19, 5.01, 3.11, 3.24] G [1/s] ['5.57', '4.65', '4.05', '4.03', '2.44']
+  new: sum G 256.2 1/s (electrode 22.7, trap 234) in 8 s; G-weighted z 3.56 nm; gap share 0.124; max potential spread in floating clusters 6.22e-15 V
+     top sites z [nm] [5.11, 6.22, 5.19, 5.01, 3.11] G [1/s] ['8.55', '7.42', '6.32', '6.16', '5.87']
+  cond(G on members) 14.1
+  cluster 11 members, z 1.73-3.00 nm, potential 0.976 V (applied at mid-height 1.047 V)
+  cluster 10 members, z 5.05-5.97 nm, potential 2.309 V (applied at mid-height 2.473 V)
+  cluster 5 members, z 1.93-2.75 nm, potential 0.928 V (applied at mid-height 1.017 V)

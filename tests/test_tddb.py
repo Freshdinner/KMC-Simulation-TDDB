@@ -14,8 +14,9 @@
   ≤ `_TRAP_TERM_FLOOR`），P_bb 取配置的 E_A（全部位点相同，ADR-053）与 Gaussian 平均场；三项都按位点处的局域温度求值；
 - P_bb 未饱和时 E_A 整体平移只改时间标尺；Gillespie 按速率选位点；
 - 热反馈（§6.6、§8.4）：每步的输运温度是上一步功率给出的缺陷处加权温度，生成率取同一步的温度场；
-- 导电簇与击穿判据（§6.3，ADR-054）：间距 < r_c 的空位连成导电簇，离电极 < r_c 的接到该电极；接电极的导电簇
-  在生成率的电势里与该电极等电位，并作为电极费米能级处占满的电子源进陷阱项；轨迹停在第一条出现贯穿通路的记录上，
+- 导电簇与击穿判据（§6.3，ADR-054/056）：间距 < r_c 的空位连成导电簇，离电极 < r_c 的接到该电极；接电极的导电簇
+  在生成率的电势里与该电极等电位，并作为电极费米能级处占满的电子源进陷阱项；悬空导电簇自身等电位、总电荷守恒；
+  轨迹停在第一条出现贯穿通路的记录上，
   这条记录的电流加上细丝的 G₀·V；
 - 致密团簇标志：间距 < 截断的缺陷连边，xy 取最小镜像；
 - I-t 幂律拟合对纯幂律精确还原 n，对带噪声的幂律给出合理的拟合优度。
@@ -612,11 +613,13 @@ def test_conducting_clusters_join_vacancies_and_electrodes_closer_than_r_c():
     assert conducting_clusters(np.zeros((0, 3)), device, 0.9e-9).size == 0
 
 
-def test_conductors_sit_at_their_electrode_potential_and_supply_electrons_at_its_fermi_level():
-    """接电极的导电簇（ADR-054）：生成率的电势里成员处的电势等于所接电极的边界值（负极 0、正极 U）；其余缺陷处的电势
-    扣掉自身电荷的贡献，等于引擎的电势加上导电簇电荷带来的改变。陷阱项把成员当作所接电极费米能级处占满（p = 1）的
-    电子源，其余陷阱的能级取同一份电势；P_bb 的场取这份电势的 Gaussian 平均。没有导电簇时电势就是只放缺陷电荷的解。
-    三分之一的缺陷带与之重合的固定电荷 −e，另有一个离开缺陷 0.6 nm。"""
+def test_conductors_are_equipotential_and_electrode_conductors_supply_electrons_at_the_fermi_level():
+    """导电簇是等电位的导体（ADR-054/056）。生成率的电势里：接电极的导电簇成员处的电势等于所接电极的边界值（负极 0、
+    正极 U）；悬空导电簇（≥ 2 个空位）成员处的电势彼此相同，导体电荷之和等于这些成员在引擎里的电荷之和；成员的能级取
+    导体电势；其余缺陷处的电势扣掉自身电荷的贡献，等于引擎的电势加上导电簇带来的改变。陷阱项把接电极的成员当作所接
+    电极费米能级处占满（p = 1）的电子源，其余陷阱（含悬空导电簇的成员）按平均场占据、能级取同一份电势；P_bb 的场取
+    这份电势的 Gaussian 平均。没有导电簇时电势就是只放缺陷电荷的解。三分之一的缺陷带与之重合的固定电荷 −e，另有一个
+    离开缺陷 0.6 nm。"""
     config = _config(concentration_cm3=3.0e19, percolation_distance=1.2e-9)
     tddb, device = config.tddb, config.device
     material = device.stack.single_material
@@ -627,26 +630,52 @@ def test_conductors_sit_at_their_electrode_potential_and_supply_electrons_at_its
     offset[1, 2] = 0.6e-9 if defects.positions[1, 2] < 0.5 * device.Lz else -0.6e-9
     inner = KMCSimulation(config, defects=replace(defects, fixed_charge=fixed, fixed_charge_offset=offset))
     occupancy = solve_mean_field(inner).occupancy
-    sides = conducting_clusters(inner.defects.positions, device, tddb.percolation_distance)
-    members, free = np.flatnonzero(sides >= 0), np.flatnonzero(sides < 0)
+    positions = inner.defects.positions
+    labels = distance_clusters(positions, device, tddb.percolation_distance)
+    sides = conducting_clusters(positions, device, tddb.percolation_distance)
+    floating = (np.bincount(labels)[labels] >= 2) & (sides < 0)
+    members = np.flatnonzero(sides >= 0)
+    conductor = np.flatnonzero((sides >= 0) | floating)
+    free = np.flatnonzero((sides < 0) & ~floating)
+    groups = np.unique(labels[floating])
     assert np.any(sides == 0) and np.any(sides == 1) and not np.any(sides == 2)
-    assert np.any(fixed[members] != 0.0)
+    assert groups.size >= 2 and np.any(fixed[members] != 0.0) and np.any(fixed[floating] != 0.0)
 
     solver = inner.solver
     top = tddb_module.top_boundary_potential(device, config.simulation.voltage)
-    phi, shift = tddb_module._conductor_potential(inner, occupancy, sides)
-    at = solver.interpolate(phi, inner.defects.positions)
+    phi, shift = tddb_module._conductor_potential(inner, occupancy, sides, labels)
+    at = solver.interpolate(phi, positions)
     np.testing.assert_allclose(at[members], np.where(sides[members] == 0, 0.0, top), rtol=0.0, atol=1e-10)
+    for group in groups:
+        assert np.ptp(at[labels == group]) < 1e-10
     electrons = occupancy - inner.defects.charge_state - inner.defects.colocated_fixed_charge / Q
     engine = inner._electrostatics(occupancy)[0]
     np.testing.assert_allclose(
         (at - electrons * inner.coupling.phi_self)[free], (engine + shift)[free], rtol=1e-9, atol=1e-12
     )
+    np.testing.assert_allclose((engine + shift)[conductor], at[conductor], rtol=0.0, atol=1e-12)
     assert np.abs(shift[free]).max() > 1e-3
+    # 导体电荷：从电势里扣掉其余电荷的解，在成员上解耦合矩阵即得；悬空导电簇的总电子数守恒
+    outside = np.setdiff1d(np.arange(len(positions)), conductor)
+    rest = solver.solve(
+        solver.deposit(positions[outside], Q * (inner.defects.charge_state - occupancy)[outside])
+        + solver.deposit(
+            inner.defects.fixed_charge_positions,
+            np.where(np.isin(np.arange(len(positions)), conductor), fixed - inner.defects.colocated_fixed_charge, fixed),
+        ),
+        top,
+    )
+    green = inner.coupling.phi_matrix[np.ix_(conductor, conductor)]
+    carried = np.linalg.solve(green, at[conductor] - solver.interpolate(rest, positions[conductor]))
+    for group in groups:
+        inside = labels[conductor] == group
+        assert carried[inside].sum() == pytest.approx(electrons[conductor][inside].sum(), rel=1e-8, abs=1e-8)
+        assert not np.allclose(carried[inside], electrons[conductor][inside], atol=1e-3)
 
-    plain, zero = tddb_module._conductor_potential(inner, occupancy, np.full(len(sides), -1))
+    no_clusters = np.arange(len(positions))
+    plain, zero = tddb_module._conductor_potential(inner, occupancy, np.full(len(sides), -1), no_clusters)
     reference = solver.solve(
-        solver.deposit(inner.defects.positions, Q * (inner.defects.charge_state - occupancy))
+        solver.deposit(positions, Q * (inner.defects.charge_state - occupancy))
         + solver.deposit(inner.defects.fixed_charge_positions, inner.defects.fixed_charge),
         top,
     )
@@ -703,7 +732,7 @@ def test_trajectory_stops_at_the_first_spanning_path(monkeypatch):
     """击穿判据（§6.3，ADR-054）：每条记录按当时的缺陷集合找导电簇；没有贯穿通路的记录细丝电流为 0，记录的导体间隙就是
     `conductor_gap`、不小于 r_c；轨迹停在第一条出现贯穿通路的记录上，t_BD 就是它的时刻，电流 = 内层输运电流 + G₀·V，
     间隙为 0、不求生成率。进度回调拿到的是总电流密度；I-t 拟合只用内层输运电流。r_c = 1.95 nm 时初始缺陷还没连通
-    （阈值 2.017 nm），第 3 次生成接通。"""
+    （阈值 2.017 nm），第 4 次生成接通。"""
     config = _config(seed=1, concentration_cm3=3.0e19, percolation_distance=1.95e-9, max_generated_vacancies=12)
     device, r_c = config.device, config.tddb.percolation_distance
     calls, reported = [], []
@@ -718,7 +747,7 @@ def test_trajectory_stops_at_the_first_spanning_path(monkeypatch):
     result = run_tddb(config, progress=lambda n, t, density: reported.append(density))
 
     assert result.stop_reason == "breakdown" and result.breakdown_time == result.end_time == result.time[-1]
-    assert result.n_generated[-1] == 3 and len(calls) == len(reported) == result.time.size
+    assert result.n_generated[-1] == 4 and len(calls) == len(reported) == result.time.size
     for k, (sim, mf) in enumerate(calls):
         sides = conducting_clusters(sim.defects.positions, device, r_c)
         last = k == len(calls) - 1

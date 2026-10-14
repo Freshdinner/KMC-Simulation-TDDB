@@ -23,7 +23,8 @@ E_A（ADR-053）。外层是缺陷生成的 Gillespie 循环，每步：
    记录的电流加上细丝按一个量子电导 G₀ = 2e²/h 导通的 G₀·V。论文的"25 个空位、间距 ≤ 6 Å"团簇只作标志
    记录，不作判据。
 4. **生成率**（§6.1，`generation_rates`）：各缺陷净电荷 q·(Z − p) + q_fix 与外加偏压一起解泊松方程，接电极的
-   导电簇与该电极等电位（ADR-054）；在每个前驱位点上求式 T1 的 G_i = R_1e,i·P_bb,i：
+   导电簇与该电极等电位（ADR-054），悬空导电簇保持总电荷、自身等电位（ADR-056）；在每个前驱位点上求式 T1 的
+   G_i = R_1e,i·P_bb,i：
    - R_1e,i = 两侧电极 R2 + R4（电极项，式 T4）+ Σ_j p_j·R7(j → i)（陷阱项：近旁已占据陷阱经陷阱间通道
      送来的电子，ADR-039；导电簇的空位按所接电极费米能级处占满的电子源计入）。前驱能级、R4 的局域场与
      温度取位点处含空间电荷的局域值，取法同引擎处理真实陷阱；电极项在 (z, 前驱能级, 温度) 的插值表上
@@ -359,14 +360,14 @@ def generation_rates(
 
     `inner` 提供当前缺陷集合、工作点与泊松求解器，`occupancy` 是各缺陷的平均场占据 p。
     电势由 `_conductor_potential` 给出：每个缺陷随占据变的电荷 q·(Z − p)（放在缺陷处）与固定电荷 q_fix
-    （放在固定电荷处）和外加偏压一起解泊松方程；接电极的导电簇（`conducting_clusters`，r_c 取
-    `tddb.percolation_distance`）与该电极等电位（ADR-054）。各位点在这份电势上求值，取法同引擎处理
-    真实陷阱：前驱能级 E = B − e·φ(x) − E_t1，R4 的 c_MP 用局域场。
+    （放在固定电荷处）和外加偏压一起解泊松方程；导电簇（`distance_clusters` / `conducting_clusters`，r_c 取
+    `tddb.percolation_distance`）是等电位的导体：接电极的与该电极等电位（ADR-054），悬空的保持总电荷、电势待定
+    （ADR-056）。各位点在这份电势上求值，取法同引擎处理真实陷阱：前驱能级 E = B − e·φ(x) − E_t1，R4 的 c_MP 用局域场。
 
     - **电极项**（`_electrode_capture`）：两侧电极 R2 + R4；
     - **陷阱项**（`_trap_capture`）：近旁已占据陷阱经陷阱间通道 p·R7 送给前驱的电子（式 T5 的陷阱来源，
-      ADR-039）。导电簇的空位是所接电极的延伸，按电极费米能级处占满（p = 1）的电子源计入；其余陷阱的能级
-      取同一份电势（引擎的平均场能级加上导电簇电荷带来的电势改变）；
+      ADR-039）。接电极的导电簇的空位是所接电极的延伸，按电极费米能级处占满（p = 1）的电子源计入；其余陷阱
+      （含悬空导电簇的成员）按平均场占据计入，能级取同一份电势（引擎的平均场能级加上导电簇带来的电势改变）；
     - **P_bb**：E_A 全部位点相同（ADR-053）；场是泊松解的场在标准差 `tddb.field_averaging_width` 的 Gaussian
       窗口上的平均（宏观场，ADR-043）。Lorentz 关系 (2+k)/3 针对在 Lorentz 球上近似均匀的宏观场，带电缺陷亚纳米
       近旁的点电荷场不满足这个前提。
@@ -379,8 +380,9 @@ def generation_rates(
     n = len(precursors)
     if n == 0:
         return GenerationRates(np.zeros(0), np.zeros(0), np.zeros(0))
+    labels = distance_clusters(defects.positions, device, tddb.percolation_distance)
     sides = conducting_clusters(defects.positions, device, tddb.percolation_distance)
-    phi, shift = _conductor_potential(inner, occupancy, sides)
+    phi, shift = _conductor_potential(inner, occupancy, sides, labels)
     field = np.stack(solver.electric_field(phi), axis=-1)
     bond_field = solver.gaussian_average(field, tddb.field_averaging_width)
     # 要读的网格量叠成一个多通道数组，每个位点一次插值读回：φ、局域场三个分量、P_bb 宏观场三个分量、
@@ -413,17 +415,22 @@ def generation_rates(
 
 
 def _conductor_potential(
-    inner: KMCSimulation, occupancy: np.ndarray, sides: np.ndarray
+    inner: KMCSimulation, occupancy: np.ndarray, sides: np.ndarray, labels: np.ndarray
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """生成率用的电势 φ（泊松网格节点，[V]）与导电簇带来的各缺陷处电势改变 (N,) [V]（ADR-054）。
+    """生成率用的电势 φ（泊松网格节点，[V]）与导电簇带来的各缺陷处电势改变 (N,) [V]（ADR-054/056）。
 
-    不在导电簇里的缺陷带 q·(Z − p) + q_fix，固定电荷放在各自的位置。接电极的导电簇（`sides` 取 0 或 1）与所接
-    电极等电位：成员的电荷不再由占据决定，取让每个成员处的电势等于该电极边界值（负极 0、正极
-    `top_boundary_potential`）的那一组电荷。成员处的电势对这组电荷是线性的，系数就是耦合矩阵 `phi_matrix`（同一套
-    沉积、求解与插值），在成员上解一次线性方程即得；离开成员位置的固定电荷照常放置。
+    `labels` 是 r_c 下的导电簇编号（`distance_clusters`），`sides` 是各缺陷所在导电簇接的电极（`conducting_clusters`）。
+    不在导电簇里的缺陷带 q·(Z − p) + q_fix，固定电荷放在各自的位置。两个及以上空位连成的导电簇是导体，成员的电荷
+    不再由占据决定，取让全部成员处电势相同的那一组电荷：
+    - 接电极的导电簇（`sides` 取 0 或 1）：成员处的电势等于所接电极的边界值（负极 0、正极 `top_boundary_potential`）；
+    - 悬空导电簇（`sides` = −1）：电势是待定的常数，簇的总电荷保持引擎给的 Σ[q·(Z − p) + q_fix,重合]。
+    成员处的电势对这组电荷是线性的，系数就是耦合矩阵 `phi_matrix`（同一套沉积、求解与插值）；悬空导电簇每个多一个电势
+    未知数和一条总电荷方程，在全部成员上解一次线性方程即得。离开成员位置的固定电荷照常放置。只有一个空位的悬空
+    "导电簇"按这个规则电荷不变，与不在导电簇里相同。
 
-    第二项是成员电荷从 q·(Z − p) + q_fix,重合 换成导体电荷之后各缺陷处电势的改变：引擎的平均场能级减去
-    e·(这一项) 就是同一份电势下的陷阱能级。没有导电簇时电势与只放缺陷电荷的解相同，第二项全为 0。
+    第二项是电势改变：引擎的平均场能级减去 e·(这一项) 就是同一份电势下的陷阱能级。其余缺陷处是成员电荷从
+    q·(Z − p) + q_fix,重合 换成导体电荷带来的改变；成员处取导体电势与引擎电势之差，成员的能级由导体电势定。没有导电簇时
+    电势与只放缺陷电荷的解相同，第二项全为 0。
     """
     defects, solver = inner.defects, inner.solver
     q = constants.elementary_charge
@@ -431,14 +438,16 @@ def _conductor_potential(
     if np.any(sides == 2):
         raise ValueError("贯穿通路两端接在两个电极上，不能与单个电极等电位；击穿状态不求生成率")
     charge = q * (defects.charge_state - occupancy)
-    members = np.flatnonzero(sides >= 0)
+    conductor = np.bincount(labels, minlength=1)[labels] >= 2
+    conductor |= sides >= 0  # 单个空位离电极 < r_c 也接到电极
+    members = np.flatnonzero(conductor)
     if members.size == 0:
         rho = solver.deposit(
             np.concatenate([defects.positions, defects.fixed_charge_positions]),
             np.concatenate([charge, defects.fixed_charge]),
         )
         return solver.solve(rho, top), np.zeros(len(defects))
-    free = sides < 0
+    free = ~conductor
     # 成员自己的电荷（随占据变的部分与重合的固定电荷）由导体电荷代替；离开成员的固定电荷是另一个点电荷，保留
     colocated = defects.colocated_fixed_charge
     rho = solver.deposit(
@@ -447,14 +456,22 @@ def _conductor_potential(
     )
     phi = solver.solve(rho, top)
     green = inner.coupling.phi_matrix  # 一个电子（−q）在 j 处产生的电势在 i 处的值，对称
-    target = np.where(sides[members] == 0, 0.0, top)
-    electrons = np.linalg.solve(
-        green[np.ix_(members, members)], target - solver.interpolate(phi, defects.positions[members])
-    )
+    m = members.size
+    # 成员在引擎里的电子数 (p − Z) − q_fix,重合/q；悬空导电簇的导体电子数之和等于它
+    engine_electrons = -(charge + colocated)[members] / q
+    floating = np.unique(labels[members][sides[members] < 0])
+    # (m, 悬空簇数)：成员属于哪个悬空导电簇
+    belongs = ((labels[members][:, None] == floating[None, :]) & (sides[members] < 0)[:, None]).astype(float)
+    system = np.block([[green[np.ix_(members, members)], -belongs], [belongs.T, np.zeros((floating.size,) * 2)]])
+    rhs = np.concatenate([
+        np.where(sides[members] == 1, top, 0.0) - solver.interpolate(phi, defects.positions[members]),
+        belongs.T @ engine_electrons,
+    ])
+    electrons = np.linalg.solve(system, rhs)[:m]
     phi = solver.solve(rho + solver.deposit(defects.positions[members], -q * electrons), top)
-    # 成员上的电子数：导体电荷减去引擎里的 (p − Z) − q_fix,重合/q
-    replaced = electrons + (charge + colocated)[members] / q
-    return phi, replaced @ green[members]
+    shift = (electrons - engine_electrons) @ green[members]
+    shift[members] = solver.interpolate(phi, defects.positions[members]) - inner._electrostatics(occupancy)[0][members]
+    return phi, shift
 
 
 def _electrode_capture(

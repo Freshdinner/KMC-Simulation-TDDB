@@ -9,6 +9,13 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。实测数据与方案对�
 
 #### TDDB 阶段
 
+- **悬空导电簇也等电位**（ADR-056，§6.3）。`_conductor_potential` 多一个参数 `labels`（r_c 下的导电簇编号）：没接电极、两个及以上空位的
+  导电簇成员处电势相同、总电荷保持引擎给的值，与接电极的导电簇在同一个线性方程里求解；成员的能级取导体电势。内层输运不变。
+  **为什么**：ADR-055 验收里竖直细柱长到 6–7 nm，柱里空位不等电位，电压落不到细柱与负极之间的缺口上。原型上 ΣG 升 27–66%，
+  r_c = 0.35–0.4 nm 时生成落在悬空导电簇下方缺口的占比由 5% 升到 12%。
+  **测试**：等电位测试扩到悬空导电簇（成员电势相同、总电荷守恒、能级取导体电势）；r_c = 1.95 nm 的短轨迹改为第 4 次生成接通。
+  `pytest tests/ -v` 304 passed。
+
 - **电极命名统一为正负极**（全项目，results/ 除外）。中文"阴极/阳极"改为"负极/正极"；英文标识符 cathode → negative、
   anode → positive，包括 YAML 配置键 `electrodes.negative` / `electrodes.positive`、`DeviceConfig.negative/positive`、
   `BandProfile.E_F_negative/E_F_positive`、`positive_fermi_level`、`HeatRelease.negative/positive`、`n_positive_events` 等。
