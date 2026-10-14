@@ -39,7 +39,8 @@ E_A（ADR-053）。外层是缺陷生成的 Gillespie 循环，每步：
    q_fix = −e，与空位重合放置（`DefectEnsemble.fixed_charge_offset` = 0）。新空位与 O_i⁻ 合起来出生时
    带 −e，就是被俘获的那个电子；空位放出电子后合起来为中性。静电耦合增量扩一行一列（§6.4），回到 1。
 
-未击穿时按生成空位数上限或应力时间上限停止，前驱用完时按"总生成率为 0"停止。
+未击穿时按生成空位数上限或应力时间上限停止，前驱用完时按"总生成率为 0"停止。每步开始时的全部状态是 `TDDBState`，
+可以存盘（`save_state` / `load_state`），交给 `run_tddb` 的 `start` 接着跑（ADR-057）。
 
 **出生时的电子**：新空位出生时带的那个电子来自前驱俘获，不计入输运电流（§6.7）；它的电荷随新空位与
 O_i⁻ 一起留在介质里。平均场没有时间推进，每条记录的电流就是该缺陷集合下的稳态电流。
@@ -47,9 +48,11 @@ O_i⁻ 一起留在介质里。平均场没有时间推进，每条记录的电�
 **导电簇只进生成率**（ADR-054）：内层输运仍把导电簇的空位当作 TAT 陷阱，击穿前的电流是 TAT 电流。
 """
 
+import copy
 import csv
 import itertools
-from dataclasses import dataclass, replace
+import json
+from dataclasses import dataclass, fields, replace
 from typing import Callable, Dict, List, NamedTuple, Optional, Tuple
 
 import numpy as np
@@ -768,17 +771,91 @@ class TDDBResult:
         return np.clip(index, 0, None)
 
 
+@dataclass(frozen=True)
+class TDDBState:
+    """外层循环一步开始时（求内层稳态之前）的全部状态，续跑用（ADR-057）。
+
+    从这个状态起跑（`run_tddb` 的 `start`）与不停跑的同一条轨迹只差舍入误差：静电耦合按当前缺陷集合从头算
+    （`IncrementalCoupling.build`），与逐个追加的结果相对差约 10⁻¹⁰；其余量原样接上。
+    """
+
+    defects: DefectEnsemble  # 当前缺陷集合（初始缺陷在前，生成空位按出生顺序接在后面）
+    n_initial: int  # 初始缺陷个数
+    birth_time: np.ndarray  # (N,) 各缺陷的出生时刻 [s]，初始缺陷记 0
+    time: float  # 当前时刻 [s]
+    occupancy: Optional[np.ndarray]  # (N,) 平均场热启动的占据；t = 0 为 None（从全空起）
+    precursors: Precursors  # 还没断键的前驱位点
+    transport_temperature: float  # 这一步内层输运用的全局标量温度 [K]（上一步功率给出，第一步为环境温度）
+    rng: np.random.Generator  # 下一次生成事件接着用的随机数流
+
+
+def initial_state(config: Config) -> TDDBState:
+    """t = 0 的状态：同一个种子的随机数流先生成初始缺陷（与 `KMCSimulation(config)` 是同一个实现），再铺前驱位点
+    （`place_precursors`），之后的生成事件接着用这个流。"""
+    rng = np.random.default_rng(config.simulation.seed)
+    defects = generate_defects(config.device, rng)
+    precursors = place_precursors(config.device, defects.positions, rng)
+    return TDDBState(
+        defects=defects,
+        n_initial=len(defects),
+        birth_time=np.zeros(len(defects)),
+        time=0.0,
+        occupancy=None,
+        precursors=precursors,
+        transport_temperature=config.simulation.temperature,
+        rng=rng,
+    )
+
+
+def save_state(state: TDDBState, path: str) -> None:
+    """把续跑状态写成一个 npz：缺陷集合逐字段、前驱位点坐标、随机数流的内部状态（JSON）与其余标量。"""
+    arrays = {"defect_" + item.name: getattr(state.defects, item.name) for item in fields(DefectEnsemble)}
+    np.savez(
+        path,
+        n_initial=state.n_initial,
+        birth_time=state.birth_time,
+        time=state.time,
+        occupancy=np.full(0, np.nan) if state.occupancy is None else state.occupancy,
+        has_occupancy=state.occupancy is not None,
+        precursor_positions=state.precursors.positions,
+        transport_temperature=state.transport_temperature,
+        rng_state=json.dumps(state.rng.bit_generator.state),
+        **arrays,
+    )
+
+
+def load_state(path: str) -> TDDBState:
+    """读回 `save_state` 写的续跑状态，逐位相同。"""
+    with np.load(path) as data:
+        rng_state = json.loads(str(data["rng_state"]))
+        rng = np.random.Generator(getattr(np.random, rng_state["bit_generator"])())
+        rng.bit_generator.state = rng_state
+        return TDDBState(
+            defects=DefectEnsemble(**{item.name: data["defect_" + item.name] for item in fields(DefectEnsemble)}),
+            n_initial=int(data["n_initial"]),
+            birth_time=data["birth_time"],
+            time=float(data["time"]),
+            occupancy=data["occupancy"] if bool(data["has_occupancy"]) else None,
+            precursors=Precursors(data["precursor_positions"]),
+            transport_temperature=float(data["transport_temperature"]),
+            rng=rng,
+        )
+
+
 def run_tddb(
-    config: Config, progress: Optional[Callable[[int, float, float], None]] = None
+    config: Config,
+    progress: Optional[Callable[[int, float, float], None]] = None,
+    start: Optional[TDDBState] = None,
+    checkpoint: Optional[Callable[[TDDBState], None]] = None,
 ) -> TDDBResult:
     """按 `config` 跑一条 TDDB 瞬态轨迹（模块文档的双层循环）。
 
-    初始缺陷与 `KMCSimulation(config)` 是同一个实现：同一个种子的随机数流先生成初始缺陷，
-    再铺前驱位点（`place_precursors`），之后的生成事件接着用同一个流。应力工况取 `simulation.voltage`，环境温度取
-    `simulation.temperature`，生成、热与击穿参数取 `config.tddb`。本阶段只做单层
-    （PROJECT_CONTEXT_TDDB.md §1）。
+    缺省从 `initial_state(config)` 起跑；给了 `start` 就从这个状态接着跑（续跑，ADR-057），`start` 本身不被改动。
+    应力工况取 `simulation.voltage`，环境温度取 `simulation.temperature`，生成、热与击穿参数取 `config.tddb`。本阶段只做
+    单层（PROJECT_CONTEXT_TDDB.md §1）。续跑的结果只含起跑之后的记录，`n_initial` 与 `birth_time` 接着 `start`。
 
-    `progress(已生成空位数, 时刻 [s], 电流密度 [A/m^2])` 每求完一个状态调用一次。
+    `progress(已生成空位数, 时刻 [s], 电流密度 [A/m^2])` 每求完一个状态调用一次；`checkpoint(状态)` 每步开始时调用一次，
+    拿到的状态交给 `start` 即从这一步接着跑。
     """
     tddb = config.tddb
     if tddb is None:
@@ -787,21 +864,22 @@ def run_tddb(
     if len(device.stack.layers) != 1:
         raise NotImplementedError("TDDB 本阶段只做单层介质（PROJECT_CONTEXT_TDDB.md §1），叠层 TDDB 后续再扩")
 
-    rng = np.random.default_rng(sim.seed)
-    defects = generate_defects(device, rng)
-    n_initial = len(defects)
-    precursors = place_precursors(device, defects.positions, rng)
+    state = initial_state(config) if start is None else start
+    rng = copy.deepcopy(state.rng)
+    defects, n_initial, birth_time = state.defects, state.n_initial, state.birth_time
+    precursors, occupancy, time = state.precursors, state.occupancy, state.time
+    transport = state.transport_temperature  # 内层输运的全局标量温度
     solver = PoissonSolver(device, sim.grid)
     coupling = IncrementalCoupling.build(solver, defects.positions, defects.field_side)
-    birth_time = np.zeros(n_initial)
-    occupancy: Optional[np.ndarray] = None
     thermal = tddb.thermal_conductivity is not None
     ambient = sim.temperature
-    transport = ambient  # 内层输运的全局标量温度，第一步取环境温度
-    time = 0.0
     records: List[dict] = []
 
     while True:
+        if checkpoint is not None:
+            checkpoint(
+                TDDBState(defects, n_initial, birth_time, time, occupancy, precursors, transport, copy.deepcopy(rng))
+            )
         step_config = replace(config, simulation=replace(sim, temperature=transport))
         inner = KMCSimulation(step_config, defects=defects, coupling=coupling, solver=solver)
         mf = solve_mean_field(inner, occupancy)

@@ -18,10 +18,12 @@
   在生成率的电势里与该电极等电位，并作为电极费米能级处占满的电子源进陷阱项；悬空导电簇自身等电位、总电荷守恒；
   轨迹停在第一条出现贯穿通路的记录上，
   这条记录的电流加上细丝的 G₀·V；
+- 续跑（ADR-057）：每步开始时的状态存盘后逐位还原，从中途状态续跑与不停跑的同一条轨迹只差舍入误差；
 - 致密团簇标志：间距 < 截断的缺陷连边，xy 取最小镜像；
 - I-t 幂律拟合对纯幂律精确还原 n，对带噪声的幂律给出合理的拟合优度。
 """
 
+import copy
 import csv
 from dataclasses import fields, replace
 
@@ -56,8 +58,11 @@ from kmc_leakage.tddb import (
     fit_power_law,
     fit_transient,
     generation_rates,
+    initial_state,
+    load_state,
     place_precursors,
     run_tddb,
+    save_state,
     write_tddb_csv,
 )
 from kmc_leakage.thermal import heat_release, power_map, solve_temperature, transport_temperature
@@ -764,6 +769,51 @@ def test_trajectory_stops_at_the_first_spanning_path(monkeypatch):
     fit, times = fit_transient(result)
     index = np.searchsorted(result.time, times, side="right") - 1
     assert fit == fit_power_law(times, result.transport_current[index] / result.area)
+
+
+def test_resuming_from_a_checkpoint_continues_the_same_trajectory(tmp_path):
+    """续跑（ADR-057）：`checkpoint` 每步开始时拿到一次状态，第 0 个就是 `initial_state`；状态经 `save_state` / `load_state`
+    逐位还原（含 t = 0 时没有占据的情形与随机数流）。从第 2 步的状态续跑（开热反馈），记录与不停跑的同一条轨迹从这一步起
+    一致：新空位落在同样的位置，时刻、电流与输运温度只差舍入误差（静电耦合从头算，与逐个追加相对差约 10⁻¹⁰）；
+    `n_initial` 与出生时刻接着原轨迹，交给 `start` 的状态不被改动。"""
+    config = _config(seed=1, concentration_cm3=3.0e19, max_generated_vacancies=5, thermal_conductivity=2.0)
+    states = []
+    full = run_tddb(config, checkpoint=states.append)
+    assert full.stop_reason == "max_generated" and len(states) == full.time.size == 6
+    first = initial_state(config)
+    assert np.array_equal(states[0].defects.positions, first.defects.positions)
+    assert np.array_equal(states[0].precursors.positions, first.precursors.positions)
+    assert states[0].occupancy is None and states[0].transport_temperature == config.simulation.temperature
+
+    for k in (0, 2):
+        path = str(tmp_path / "state_{}.npz".format(k))
+        save_state(states[k], path)
+        loaded = load_state(path)
+        for item in fields(DefectEnsemble):
+            assert np.array_equal(getattr(loaded.defects, item.name), getattr(states[k].defects, item.name)), item.name
+        assert loaded.n_initial == states[k].n_initial and loaded.time == states[k].time
+        assert np.array_equal(loaded.birth_time, states[k].birth_time)
+        assert (loaded.occupancy is None) == (k == 0)
+        if k:
+            assert np.array_equal(loaded.occupancy, states[k].occupancy)
+        assert np.array_equal(loaded.precursors.positions, states[k].precursors.positions)
+        assert loaded.transport_temperature == states[k].transport_temperature
+        assert np.array_equal(copy.deepcopy(loaded.rng).random(4), copy.deepcopy(states[k].rng).random(4))
+
+    start = load_state(str(tmp_path / "state_2.npz"))
+    before = start.rng.bit_generator.state
+    assert start.time == full.time[2] and len(start.defects) == full.n_defects[2]
+    assert start.transport_temperature != config.simulation.temperature
+    resumed = run_tddb(config, start=start)
+    assert start.rng.bit_generator.state == before and len(start.defects) == full.n_defects[2]
+    assert resumed.stop_reason == full.stop_reason and resumed.n_initial == full.n_initial
+    assert resumed.time.size == full.time.size - 2 and resumed.end_time == pytest.approx(full.end_time, rel=1e-9)
+    assert np.array_equal(resumed.defects.positions, full.defects.positions)
+    np.testing.assert_allclose(resumed.birth_time, full.birth_time, rtol=1e-9)
+    np.testing.assert_allclose(resumed.time, full.time[2:], rtol=1e-9)
+    np.testing.assert_allclose(resumed.current, full.current[2:], rtol=1e-8)
+    np.testing.assert_allclose(resumed.generation_rate, full.generation_rate[2:], rtol=1e-8)
+    np.testing.assert_allclose(resumed.transport_temperature, full.transport_temperature[2:], rtol=1e-12)
 
 
 def test_draw_generation_picks_sites_by_rate():

@@ -1,9 +1,10 @@
 """ADR-056 验收：悬空导电簇也等电位，r_c 取 0.3 / 0.35 / 0.4 nm 比较。examples/zro2_tddb.yaml 工况（50×50 nm、3.6 V / 25 °C、
 开热反馈、E_A = 1.30 eV、前驱位点按 0.26 nm 铺满）下跑一条轨迹到击穿，边跑边写结果。
 
-usage: drive.py SEED R_C_NM [STOP_TIME_S]
+usage: drive.py SEED R_C_NM [STOP_TIME_S [STATE_NPZ]]
 
-R_C_NM 覆盖 `tddb.percolation_distance_nm`，STOP_TIME_S 覆盖 `tddb.stop_time_s`；输出文件名里的 `{TAG}` 是 `s{SEED}_rc{100·r_c}`（如
+R_C_NM 覆盖 `tddb.percolation_distance_nm`，STOP_TIME_S 覆盖 `tddb.stop_time_s`；给了 STATE_NPZ 就从这个续跑状态接着跑（`tddb.load_state`，
+ADR-057），逐步数据写到 `steps_{TAG}_from{NNNN}.csv`（NNNN 是续跑起点的已生成空位数），其余文件名不变。输出文件名里的 `{TAG}` 是 `s{SEED}_rc{100·r_c}`（如
 `s1_rc030`）。由 `../../10.13/dense_sites/drive.py` 改写，另记最大悬空导电簇的空位数与高度范围。原脚本由 `../../10.12/percolation/drive.py` 改写：不改 `tddb.run_tddb`，在 tddb 模块的命名空间里
 包一层它每步调用的函数，在 `progress` 回调里追加一行 CSV：
 - `steps_{TAG}.csv`：第 k 行是第 k 个空位出生后的稳态（k = 0 为 t = 0），总电流、内层输运电流与细丝电流，ΣG 按电极项 / 陷阱项拆开
@@ -12,6 +13,7 @@ R_C_NM 覆盖 `tddb.percolation_distance_nm`，STOP_TIME_S 覆盖 `tddb.stop_tim
   2 贯穿），这一步生成率的耗时；
 - `snap_{TAG}_n{NNNN}.npz`：每 25 个空位（含 0）与击穿记录存一次缺陷位置、能级、固定电荷、平均场占据、出生时刻与导电簇归属。前驱位点
   约 80 万个，不存：同一种子下 `place_precursors` 重新生成、再去掉已出生空位的位置即得；
+- `state_{TAG}.npz`：每 25 个空位在这一步开始时存一次续跑状态（`tddb.save_state`，只留最新一份，约 20 MB），停跑后交给 STATE_NPZ 即可续跑；
 - 结束时写 `final_{TAG}.csv`（`write_tddb_csv`）与 `final_{TAG}.npz`。
 标准输出是逐步日志（第一行记代码版本与前驱位点数）。
 """
@@ -33,7 +35,7 @@ from kmc_leakage import tddb as tddb_module  # noqa: E402
 from kmc_leakage.io import load_config  # noqa: E402
 from kmc_leakage.kmc import MECHANISMS  # noqa: E402
 from kmc_leakage.tddb import (  # noqa: E402
-    conducting_clusters, conductor_gap, distance_clusters, run_tddb, write_tddb_csv,
+    conducting_clusters, conductor_gap, distance_clusters, load_state, run_tddb, save_state, write_tddb_csv,
 )
 
 SNAPSHOT_EVERY = 25
@@ -48,6 +50,8 @@ tddb = replace(config.tddb, percolation_distance=r_c_nm * constants.nano)
 if len(sys.argv) > 3:
     tddb = replace(tddb, stop_time=float(sys.argv[3]))
 config = replace(config, simulation=replace(config.simulation, seed=seed), tddb=tddb)
+resume = load_state(sys.argv[4]) if len(sys.argv) > 4 else None
+resumed_at = None if resume is None else len(resume.defects) - resume.n_initial
 device = config.device
 ambient = config.simulation.temperature
 area = device.area
@@ -57,6 +61,9 @@ dirty = subprocess.run(["git", "status", "--porcelain", "src"], cwd=ROOT, captur
 print("code {}{} | seed {} | V {} V | T {} K | E_A {:.3f} eV | min_separation {:.2f} nm | r_c {:.2f} nm | stop {:.3g} s".format(
     commit, " (src modified)" if dirty else "", seed, config.simulation.voltage, ambient, tddb.activation_energy / eV,
     config.defects.min_separation / nm, tddb.percolation_distance / nm, tddb.stop_time), flush=True)
+if resume is not None:
+    print("resume from {} ({} generated, t = {:.6g} s, {} precursors)".format(
+        sys.argv[4], resumed_at, resume.time, len(resume.precursors)), flush=True)
 
 
 class _MemoryCounters(ctypes.Structure):
@@ -138,17 +145,29 @@ COLUMNS = (["n_generated", "t_s", "J_A_cm2", "J_transport_A_cm2", "J_filament_A_
     "max_floating", "floating_bottom_nm", "floating_top_nm",
     "T_effective_K", "T_peak_K", "birth_x_nm", "birth_y_nm", "birth_z_nm", "birth_side", "rates_wall_s", "wall_s",
     "ws_MB", "ws_peak_MB"])
-steps_path = os.path.join(HERE, "steps_{}.csv".format(tag))
+steps_path = os.path.join(
+    HERE, "steps_{}.csv".format(tag) if resume is None else "steps_{}_from{:04d}.csv".format(tag, resumed_at))
 with open(steps_path, "w", encoding="utf-8") as handle:
     handle.write(",".join(COLUMNS) + "\n")
-birth_time = []
+birth_time = [] if resume is None else list(resume.birth_time[resume.n_initial:])
 start = time.time()
+
+
+def checkpoint(state):
+    """每 25 个空位（续跑起点除外）存一次这一步开始时的状态；先写临时文件再替换，停跑时不会留下写了一半的文件。"""
+    n_generated = len(state.defects) - state.n_initial
+    if n_generated % SNAPSHOT_EVERY or n_generated == resumed_at:
+        return
+    path = os.path.join(HERE, "state_{}.npz".format(tag))
+    save_state(state, path + ".tmp.npz")
+    os.replace(path + ".tmp.npz", path)
 
 
 def progress(n_generated, t, j):
     inner, mf = state["inner"], state["mf"]
     generation = state.get("generation")
-    if n_generated > 0:
+    born = "birth" in state  # 这条记录前刚出生一个空位（t = 0 与续跑起点的记录没有）
+    if born:
         birth_time.append(t)
     defects, p = inner.defects, mf.occupancy
     n_initial = len(defects) - n_generated
@@ -159,7 +178,7 @@ def progress(n_generated, t, j):
     floating_sizes = np.where(sides < 0, np.bincount(labels)[labels], 0)
     largest = labels[int(np.argmax(floating_sizes))] if floating_sizes.max(initial=0) >= 2 else -1
     floating_z = z[labels == largest] if largest >= 0 else np.zeros(1)
-    point = state.pop("birth") if n_generated > 0 else np.full(3, np.nan)
+    point = state.pop("birth") if born else np.full(3, np.nan)
     spanning = bool(np.any(sides == 2))
     filament = tddb_module._QUANTUM_CONDUCTANCE * config.simulation.voltage if spanning else 0.0
     left = -1 if generation is None else len(state["precursors"])  # 击穿记录不求生成率，剩余位点数记 -1
@@ -180,7 +199,7 @@ def progress(n_generated, t, j):
         int(floating_sizes.max(initial=0)), "{:.4f}".format(floating_z.min()), "{:.4f}".format(floating_z.max()),
         "{:.9f}".format(state.get("T_effective", ambient)),
         "{:.9f}".format(float(state["T_field"].max()) if "T_field" in state else ambient)] + [
-        "{:.6f}".format(v / nm) for v in point] + [int(sides[-1]) if n_generated > 0 else -1] + [
+        "{:.6f}".format(v / nm) for v in point] + [int(sides[-1]) if born else -1] + [
         "{:.1f}".format(state.get("rates_wall", float("nan")) if generation is not None else float("nan")),
         "{:.0f}".format(time.time() - start)] + ["{:.0f}".format(v) for v in working_set_mb()]
     with open(steps_path, "a", encoding="utf-8") as handle:
@@ -193,12 +212,12 @@ def progress(n_generated, t, j):
           "pos={} gap={:.2f} float={} [{:.2f}, {:.2f}] z={:.3f} side={} rates={}s wall={:.0f} ws={}/{} MB".format(
               n_generated, t, j * per_cm2, mf.current_density * per_cm2, G, left, mf.iterations,
               mf.newton_steps, mf.residual, int(negative.sum()), z[negative].max() if negative.any() else 0.0,
-              int(positive.sum()), gap, int(floating_sizes.max(initial=0)), floating_z.min(), floating_z.max(), point[2] / nm, int(sides[-1]) if n_generated > 0 else -1, row[-4],
+              int(positive.sum()), gap, int(floating_sizes.max(initial=0)), floating_z.min(), floating_z.max(), point[2] / nm, int(sides[-1]) if born else -1, row[-4],
               time.time() - start, row[-2], row[-1]),
           flush=True)
 
 
-result = run_tddb(config, progress=progress)
+result = run_tddb(config, progress=progress, start=resume, checkpoint=checkpoint)
 write_tddb_csv(result, os.path.join(HERE, "final_{}.csv".format(tag)))
 np.savez(os.path.join(HERE, "final_{}.npz".format(tag)), positions=result.defects.positions,
          fixed_charge=result.defects.fixed_charge, birth_time=result.birth_time, occupancy=result.occupancy,
