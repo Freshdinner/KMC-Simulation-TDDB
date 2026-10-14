@@ -51,7 +51,7 @@ class CaptureElectrode(NamedTuple):
     path: np.ndarray  # (N, P) 电极→前驱路径采样点 z [m]
     barrier: np.ndarray  # (N, P) 路径上的导带底 [J]
     m_di_path: np.ndarray  # (N, P) 路径传播质量 m_di(s) [kg]
-    fermi_level: float  # 电极费米能级 [J]（全局零点 = 阴极费米能级）
+    fermi_level: float  # 电极费米能级 [J]（全局零点 = 负极费米能级）
     band_bottom: float  # 电极导带底 [J]
     mass: float  # 电极侧电子质量 [kg]
 

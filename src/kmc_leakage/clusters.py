@@ -147,48 +147,48 @@ def cluster_generator(
 
 def cluster_steady_state(
     states: np.ndarray,
-    capture_anode: np.ndarray,
+    capture_positive: np.ndarray,
     capture_other: np.ndarray,
-    escape_anode: np.ndarray,
+    escape_positive: np.ndarray,
     pf: np.ndarray,
     escape_other: np.ndarray,
     intra_a: np.ndarray,
     intra_b: np.ndarray,
     intra_rate: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """簇内条件稳态下各成员的阳极净通量 (TAT, PF) 与占据期望，通量单位 1/s。
+    """簇内条件稳态下各成员的正极净通量 (TAT, PF) 与占据期望，通量单位 1/s。
 
-    输入均为 (S, k)（`intra_rate` 为 (S, P)）：`capture_anode` 是阳极俘获
-    R2A+R4A，`escape_anode` 是向阳极的 TAT 逃逸 R3A+R5A，`pf` 是 R8_eff，
-    `capture_other`/`escape_other` 是其余通道（阴极侧 + 与簇外陷阱的跃迁）。
+    输入均为 (S, k)（`intra_rate` 为 (S, P)）：`capture_positive` 是正极俘获
+    R2A+R4A，`escape_positive` 是向正极的 TAT 逃逸 R3A+R5A，`pf` 是 R8_eff，
+    `capture_other`/`escape_other` 是其余通道（负极侧 + 与簇外陷阱的跃迁）。
 
-    成员 i 的阳极净通量有两种等价写法：阳极侧 Σπ[n_i(E_a+P) − (1−n_i)C_a]，
-    或由稳态 d⟨n_i⟩/dt = 0 换到其余通道（阴极侧、簇外跃迁、簇内跃迁的净流入）。
+    成员 i 的正极净通量有两种等价写法：正极侧 Σπ[n_i(E_a+P) − (1−n_i)C_a]，
+    或由稳态 d⟨n_i⟩/dt = 0 换到其余通道（负极侧、簇外跃迁、簇内跃迁的净流入）。
     两者都是两个大数之差；逐成员取两侧总量较小的一种，舍入误差就不会被贴着
     电极、交换速率极大的成员放大。
     """
-    capture = capture_anode + capture_other
-    escape = escape_anode + pf + escape_other
+    capture = capture_positive + capture_other
+    escape = escape_positive + pf + escape_other
     Q = cluster_generator(states, capture, escape, intra_a, intra_b, intra_rate)
     pi = stationary_distribution_gth(Q)
     return cluster_flux(
-        pi, states, capture_anode, capture_other, escape_anode, pf, escape_other, intra_a, intra_b, intra_rate
+        pi, states, capture_positive, capture_other, escape_positive, pf, escape_other, intra_a, intra_b, intra_rate
     )
 
 
 def cluster_flux(
     pi: np.ndarray,
     states: np.ndarray,
-    capture_anode: np.ndarray,
+    capture_positive: np.ndarray,
     capture_other: np.ndarray,
-    escape_anode: np.ndarray,
+    escape_positive: np.ndarray,
     pf: np.ndarray,
     escape_other: np.ndarray,
     intra_a: np.ndarray,
     intra_b: np.ndarray,
     intra_rate: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """簇内稳态分布 `pi` 下各成员的阳极净通量 (TAT, PF) 与占据期望（`cluster_steady_state` 的后半段）。
+    """簇内稳态分布 `pi` 下各成员的正极净通量 (TAT, PF) 与占据期望（`cluster_steady_state` 的后半段）。
 
     参数口径同 `cluster_steady_state`；`pi` 是同一组速率的生成矩阵的稳态分布。调用方已经
     求出 π、还要拿它做别的记账时（TDDB 平均场内层求解器）直接用这一步。
@@ -197,8 +197,8 @@ def cluster_flux(
     empty = pi[:, None] * ~states
     pf_flux = (occupied * pf).sum(axis=0)
 
-    anode_out = (occupied * (escape_anode + pf)).sum(axis=0)
-    anode_in = (empty * capture_anode).sum(axis=0)
+    positive_out = (occupied * (escape_positive + pf)).sum(axis=0)
+    positive_in = (empty * capture_positive).sum(axis=0)
     other_in = (empty * capture_other).sum(axis=0)
     other_out = (occupied * escape_other).sum(axis=0)
     for p in range(intra_a.size):
@@ -207,6 +207,6 @@ def cluster_flux(
         other_out[i] += flow
         other_in[j] += flow
 
-    anode_side = anode_out + anode_in <= other_in + other_out
-    net = np.where(anode_side, anode_out - anode_in, other_in - other_out)
+    positive_side = positive_out + positive_in <= other_in + other_out
+    net = np.where(positive_side, positive_out - positive_in, other_in - other_out)
     return net - pf_flux, pf_flux, occupied.sum(axis=0)

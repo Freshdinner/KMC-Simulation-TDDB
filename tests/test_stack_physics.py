@@ -45,7 +45,7 @@ AL2O3 = _material("Al2O3", 9.0, eps_opt=3.0, band_gap_eV=6.4, chi_eV=1.4, m_cb=0
 _ELECTRODE = ElectrodeMaterial("TiN", 4.6 * EV, M_E, 5.0 * EV)
 
 
-def _zaz_device(t1=4e-9, t2=1e-9, t3=4e-9, cathode=_ELECTRODE, anode=_ELECTRODE,
+def _zaz_device(t1=4e-9, t2=1e-9, t3=4e-9, negative=_ELECTRODE, positive=_ELECTRODE,
                 barrier_height=1.74 * EV, interfaces=None):
     """ZrO₂/Al₂O₃/ZrO₂ 对称叠层（总厚 t1+t2+t3）。"""
     if interfaces is None:
@@ -55,7 +55,7 @@ def _zaz_device(t1=4e-9, t2=1e-9, t3=4e-9, cathode=_ELECTRODE, anode=_ELECTRODE,
         layers=(Layer("L0", "ZrO2", t1), Layer("L1", "Al2O3", t2), Layer("L2", "ZrO2", t3)),
         interfaces=interfaces,
     )
-    return DeviceConfig(50e-9, 50e-9, cathode, anode, stack, barrier_height=barrier_height)
+    return DeviceConfig(50e-9, 50e-9, negative, positive, stack, barrier_height=barrier_height)
 
 
 def _uniform_multilayer_device(barrier_height=1.74 * EV):
@@ -253,10 +253,10 @@ def test_explicit_delta_ec_override_enters_band_and_vbi():
 def test_built_in_potential_follows_band_reference_relation():
     """q·V_bi = B_c + ΣΔE_C − B_a：对称亲和能对齐叠层 ΣΔE_C=0 → V_bi=0。"""
     assert _zaz_device().built_in_potential() == pytest.approx(0.0)
-    # 非对称接触（Pt 阳极）：V_bi = (B_c − B_a)/q，带阶仍抵消
-    asym = _zaz_device(anode=ElectrodeMaterial("Pt", 5.3 * EV, M_E, 5.0 * EV), barrier_height=None)
-    assert asym.barrier(asym.cathode) == pytest.approx(1.74 * EV)
-    assert asym.barrier(asym.anode) == pytest.approx(2.44 * EV)
+    # 非对称接触（Pt 正极）：V_bi = (B_c − B_a)/q，带阶仍抵消
+    asym = _zaz_device(positive=ElectrodeMaterial("Pt", 5.3 * EV, M_E, 5.0 * EV), barrier_height=None)
+    assert asym.barrier(asym.negative) == pytest.approx(1.74 * EV)
+    assert asym.barrier(asym.positive) == pytest.approx(2.44 * EV)
     assert asym.built_in_potential() == pytest.approx(-0.7)
 
 

@@ -55,14 +55,14 @@ def test_r1_contribution_is_the_ideal_barrier_formula():
     result = KMCSimulation(config).run()
 
     z = np.linspace(0.0, device.Lz, kmc._R1_PATH_POINTS)
-    band = device.barrier(device.cathode) - constants.elementary_charge * 3.0 * z / device.Lz
+    band = device.barrier(device.negative) - constants.elementary_charge * 3.0 * z / device.Lz
     tunnel, thermionic = r1_electrode_electrode(
         z,
         band,
         device.area,
         3.0,
         config.simulation.temperature,
-        device.cathode.effective_mass,
+        device.negative.effective_mass,
         device.stack.single_material.m_di,
         n_points=kmc._R1_ENERGY_POINTS,
     )
@@ -111,13 +111,13 @@ def test_occupancy_is_a_probability_and_matches_mean_field():
 def test_estimators_agree_when_direct_statistics_are_sufficient():
     """输运事件足够多时，三个估计量必须相互印证。
 
-    低偏压下直接估计量被阳极俘获/逃逸的相消淹没（这正是主输出改用条件
+    低偏压下直接估计量被正极俘获/逃逸的相消淹没（这正是主输出改用条件
     期望估计量的原因），所以这一检验放在事件充足的工况下做。注意本测试
     对种子敏感：漏电流由"位置最合适的那一个缺陷"主导，不同缺陷实现之间
     可以差几个数量级，这里固定一个事件数充足的实现。
     """
     result = _run(voltage=4.0, n_events=2000, seed=13)
-    assert result.n_anode_events > 50
+    assert result.n_positive_events > 50
     assert result.current > 0.0
     assert result.current_direct == pytest.approx(result.current, rel=0.3)
     assert result.current_counts == pytest.approx(result.current, rel=0.3)

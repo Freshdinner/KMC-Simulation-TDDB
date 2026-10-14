@@ -1,8 +1,8 @@
 """能带剖面与费米分布。
 
-**全局能量零点 = 阴极费米能级。** 阳极费米能级在偏压 U 下位于 -eU。
+**全局能量零点 = 负极费米能级。** 正极费米能级在偏压 U 下位于 -eU。
 
-导带底剖面 E_C(z) = E_B(阴极侧) - e·φ(z)，其中 φ 由泊松方程给出
+导带底剖面 E_C(z) = E_B(负极侧) - e·φ(z)，其中 φ 由泊松方程给出
 （φ(0)=0，φ(Lz)=U + 内建电势）。按 docs 的势垒形状约定，界面处能带保持
 直线，**不做镜像力圆化、势垒高度一律取零场值 E_B**。
 """
@@ -29,8 +29,8 @@ class BandProfile:
     z: np.ndarray  # (nz+1,) [m]
     E_C: np.ndarray  # 导带底 [J]
     E_V: np.ndarray  # 价带顶 [J]
-    E_F_cathode: float  # [J]，按约定恒为 0
-    E_F_anode: float  # [J]，= -eU
+    E_F_negative: float  # [J]，按约定恒为 0
+    E_F_positive: float  # [J]，= -eU
     voltage: float  # [V]
     interface_z: np.ndarray = field(default_factory=lambda: np.zeros(0))  # 内部界面 z [m]
     E_C_lower: np.ndarray = field(default_factory=lambda: np.zeros(0))  # 各界面下侧 E_C [J]
@@ -53,8 +53,8 @@ class BandProfile:
         )
 
 
-def anode_fermi_level(voltage: float) -> float:
-    """阳极费米能级 [J]（阴极费米能级为零点）。"""
+def positive_fermi_level(voltage: float) -> float:
+    """正极费米能级 [J]（负极费米能级为零点）。"""
     return -constants.elementary_charge * voltage
 
 
@@ -122,8 +122,8 @@ def band_profile(
         z=z,
         E_C=E_C,
         E_V=E_C - device.band_gap_profile(z),
-        E_F_cathode=0.0,
-        E_F_anode=anode_fermi_level(voltage),
+        E_F_negative=0.0,
+        E_F_positive=positive_fermi_level(voltage),
         voltage=voltage,
         interface_z=interface_z,
         E_C_lower=E_C_lower,

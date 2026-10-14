@@ -30,10 +30,10 @@ Q = constants.elementary_charge
 
 
 def test_review_four_state_counterexample_reproduced():
-    """复现 review F04 附录：条件通量比真实稳态阳极通量低 25%（0.3 vs 0.4）。
+    """复现 review F04 附录：条件通量比真实稳态正极通量低 25%（0.3 vs 0.4）。
 
-    两陷阱、强正向驱动极限，三条通道速率均 1/s：阴极→陷阱0、陷阱0→陷阱1、
-    陷阱1→阳极。手搭生成矩阵解稳态，直接调 `KMCSimulation._conditional_flux`，
+    两陷阱、强正向驱动极限，三条通道速率均 1/s：负极→陷阱0、陷阱0→陷阱1、
+    陷阱1→正极。手搭生成矩阵解稳态，直接调 `KMCSimulation._conditional_flux`，
     证明条件稳态近似在耦合网络里存在系统偏差——这正是 F04 要求独立验证的原因。
     """
     states = np.array([[0, 0], [1, 0], [0, 1], [1, 1]])
@@ -46,8 +46,8 @@ def test_review_four_state_counterexample_reproduced():
     assert pi == pytest.approx([0.2, 0.4, 0.2, 0.2], abs=1e-12)
 
     blocks = np.zeros((9, 2))
-    blocks[0, 0] = 1.0  # R2C：阴极向陷阱 0 注入
-    blocks[5, 1] = 1.0  # R3A：陷阱 1 向阳极逃逸
+    blocks[0, 0] = 1.0  # R2C：负极向陷阱 0 注入
+    blocks[5, 1] = 1.0  # R3A：陷阱 1 向正极逃逸
 
     conditional = []
     for occ_a, occ_b in states:
@@ -56,7 +56,7 @@ def test_review_four_state_counterexample_reproduced():
         tat, pf, _ = KMCSimulation._conditional_flux(blocks, hop_in, hop_out)
         conditional.append(float(np.sum(tat + pf)))
 
-    exact_flux = float(pi @ states[:, 1])  # 真实阳极通量 = 陷阱1 的平均占据 × 1/s
+    exact_flux = float(pi @ states[:, 1])  # 真实正极通量 = 陷阱1 的平均占据 × 1/s
     conditional_flux = float(pi @ np.array(conditional))
     assert exact_flux == pytest.approx(0.4, abs=1e-12)
     assert conditional_flux == pytest.approx(0.3, abs=1e-12)

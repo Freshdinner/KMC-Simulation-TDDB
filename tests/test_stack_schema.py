@@ -98,7 +98,7 @@ def _single_layer_dict():
         "materials": {"ref": dict(_MATERIAL_YAML)},
         "layers": [{"material": "ref", "thickness_nm": 8.0, "defects": dict(_DEFECTS_YAML)}],
         "device": {"Lx_nm": 20.0, "Ly_nm": 20.0, "barrier_height_eV": 1.74},
-        "electrodes": {"cathode": dict(_ELECTRODE_YAML), "anode": dict(_ELECTRODE_YAML)},
+        "electrodes": {"negative": dict(_ELECTRODE_YAML), "positive": dict(_ELECTRODE_YAML)},
         "simulation": {
             "voltage_V": 3.0, "temperature_C": 25.0, "n_events": 300, "seed": 7,
             "grid": {"nx": 8, "ny": 8, "nz": 16},
@@ -180,7 +180,7 @@ def _zaz_dict():
             {},
         ],
         "device": {"Lx_nm": 50.0, "Ly_nm": 50.0, "barrier_height_eV": 1.74},
-        "electrodes": {"cathode": dict(_ELECTRODE_YAML), "anode": dict(_ELECTRODE_YAML)},
+        "electrodes": {"negative": dict(_ELECTRODE_YAML), "positive": dict(_ELECTRODE_YAML)},
         "simulation": {
             "voltage_V": 3.0, "temperature_C": 25.0, "n_events": 10, "seed": 7,
             "grid": {"nx": 8, "ny": 8, "nz": 36},

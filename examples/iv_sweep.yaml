@@ -44,12 +44,12 @@ device:
   barrier_height_eV: 1.74
 
 electrodes:
-  cathode: &electrode
+  negative: &electrode
     name: TiN
     work_function_eV: 4.6
     effective_mass_me: 1.0
     fermi_energy_eV: 5.0
-  anode: *electrode
+  positive: *electrode
 
 simulation:
   # 扫描时每个工作点都跑一遍 KMC，事件数比单点少一些

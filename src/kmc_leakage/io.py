@@ -209,8 +209,8 @@ def _device(raw: Dict[str, Any], electrodes: Dict[str, Any], stack: DielectricSt
     return DeviceConfig(
         Lx=float(_require(raw, "Lx_nm", "device")) * NM,
         Ly=float(_require(raw, "Ly_nm", "device")) * NM,
-        cathode=_electrode(_require(electrodes, "cathode", "electrodes"), "electrodes.cathode"),
-        anode=_electrode(_require(electrodes, "anode", "electrodes"), "electrodes.anode"),
+        negative=_electrode(_require(electrodes, "negative", "electrodes"), "electrodes.negative"),
+        positive=_electrode(_require(electrodes, "positive", "electrodes"), "electrodes.positive"),
         stack=stack,
         barrier_height=None if barrier is None else float(barrier) * EV,
     )

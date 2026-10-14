@@ -153,10 +153,10 @@ def test_band_diagram_works_without_defects(profile_and_levels):
 
 
 def test_band_diagram_respects_energy_zero_convention(profile_and_levels):
-    """能量零点 = 阴极费米能级；阳极费米能级在 -eU。"""
+    """能量零点 = 负极费米能级；正极费米能级在 -eU。"""
     profile, _ = profile_and_levels
-    assert profile.E_F_cathode == 0.0
-    assert profile.E_F_anode == pytest.approx(-constants.elementary_charge * profile.voltage)
+    assert profile.E_F_negative == 0.0
+    assert profile.E_F_positive == pytest.approx(-constants.elementary_charge * profile.voltage)
     # 界面处能带是直线（不做镜像力圆化）：无空间电荷时 E_C 严格线性
     slope = np.diff(profile.E_C) / np.diff(profile.z)
     assert np.allclose(slope, slope[0], rtol=1e-10)

@@ -19,15 +19,15 @@
    run() 末尾把 I_R1 = q·R1 直接加进 by_mechanism。结果与 KMC 轨迹无关，
    不随 seed、n_events 变化，也不含采样噪声。
 
-3. **电流估计量。** 稳态净电流是阳极侧两个大通量之差：阳极→陷阱的俘获
-   与陷阱→阳极的逃逸，二者在稳态下几乎精确抵消，直接数事件（或直接对
+3. **电流估计量。** 稳态净电流是正极侧两个大通量之差：正极→陷阱的俘获
+   与陷阱→正极的逃逸，二者在稳态下几乎精确抵消，直接数事件（或直接对
    瞬时通量做时间平均）会被这个相消淹没——本项目参数下噪声比信号大 2–3
    个数量级。把单个陷阱的条件稳态占据 p̂_i = C_i/(C_i+E_i) 代入净通量表
    达式后，相消项 C_a·E_a 解析地约掉：
 
        flux_i = [(C_c+H_in)·E_a - (E_c+H_out)·C_a] / (C_i+E_i)
 
-   C_c/C_a 为阴极/阳极侧俘获总速率，E_c/E_a 为向阴极/阳极的逃逸总速率
+   C_c/C_a 为负极/正极侧俘获总速率，E_c/E_a 为向负极/正极的逃逸总速率
    （E_a 含 R8），H_in/H_out 为陷阱间跃迁的进出速率。这是把 KMC 采到的
    组态做 Rao-Blackwell 化：陷阱占据在环境变化的时间尺度上快速弛豫时
    精确，本项目参数下这一条充分满足。KMC 仍然在做实事——组态决定静电
@@ -46,8 +46,8 @@
 
 5. **强耦合簇的条件稳态（ADR-022）。** 说明 3 的估计量只把陷阱**自身**的占据解析
    平均掉，H_in/H_out 里的邻居占据仍是 KMC 采样值。两个陷阱间的跃迁与它们自身的
-   电极交换一样快时（如阴极侧陷阱 a 以 3e6 s⁻¹ 慢慢填充、再以 3e7 s⁻¹ 跳给紧挨着
-   的 b，b 以 1e8 s⁻¹ 放给阳极），b 的电流取决于 a 的稀有填充是否落在测量窗口里：
+   电极交换一样快时（如负极侧陷阱 a 以 3e6 s⁻¹ 慢慢填充、再以 3e7 s⁻¹ 跳给紧挨着
+   的 b，b 以 1e8 s⁻¹ 放给正极），b 的电流取决于 a 的稀有填充是否落在测量窗口里：
    落进来就高估、形成 I-V 尖峰，没落进来就整条通路漏算。所以工作点初始化时，把
    跃迁速率 ≥ `_CLUSTER_COUPLING` × 两端电极交换速率较小者的陷阱对连成强耦合簇
    （`clusters.coupled_clusters`，全空组态下的速率），测量时对每个簇枚举簇内全部
@@ -72,7 +72,7 @@
 
 统计口径按"电子抵达收集电极（或进入导带后被收集）的最后一步事件类型"
 归类，见 docs/rate_equations.md 的机制对照表。R8 发射到导带的电子按
-"立即被阳极收集"处理（U>0 时导带电子向阳极漂移）。
+"立即被正极收集"处理（U>0 时导带电子向正极漂移）。
 """
 
 from dataclasses import dataclass, field
@@ -82,7 +82,7 @@ import numpy as np
 from scipy import constants
 
 from .bands import (
-    anode_fermi_level,
+    positive_fermi_level,
     conduction_band_edge,
     electrode_band_bottom,
     fermi_dirac,
@@ -137,7 +137,7 @@ _CLUSTER_MAX_SIZE = 8  # 簇内组态数 2^k 的上限（256）；超限的分�
 # F04 每个工作点的"未通过验证"判据阈值（ADR-021 F04，见 _validate_result）
 _MIN_MEASURED_EVENTS = 100  # 测量窗口至少要有这么多事件才算采到
 _MEAN_FIELD_TOL = 0.1  # KMC 占据与条件稳态 p̂ 的平均偏差上限（局部稳态/条件通量成立的前提）
-_COUNTS_SUFFICIENT = 50  # 阳极事件数达到此值，净计数交叉校验才纳入硬门槛（否则统计为空、跳过）
+_COUNTS_SUFFICIENT = 50  # 正极事件数达到此值，净计数交叉校验才纳入硬门槛（否则统计为空、跳过）
 _COUNTS_REL_TOL = 0.5  # 计数够用时 |J_counts+R1 − J_cond| 相对 |J_cond| 的上限（计数本身仍噪声大）
 _N_BATCHES = 10  # 测量窗口按事件数等分的批次数，批次均值法估计电流的统计误差
 # 批次均值法给出的电流相对标准误上限。实测正常点 ≤0.001（条件稳态估计量很平滑），
@@ -155,17 +155,17 @@ _FAST_MAX_ITER = 20
 _B_R2C, _B_R2A, _B_R4C, _B_R4A, _B_R3C, _B_R3A, _B_R5C, _B_R5A, _B_R8 = range(9)
 _N_BLOCKS = 9
 _N_CAPTURE_BLOCKS = 4
-# 各块对"阳极净流入电子数"的贡献（+1 到达阳极，-1 由阳极取走）
-_ANODE_SIGN = np.array([0.0, -1.0, 0.0, -1.0, 0.0, 1.0, 0.0, 1.0, 1.0])
-# 各块对"阴极净送入器件电子数"的贡献（+1 阴极注入陷阱，-1 陷阱回到阴极）；
-# R8 只到阳极，对阴极记 0。cathode_net − anode_net = ΔN_inside，全局守恒的基础（F04）
-_CATHODE_SIGN = np.array([1.0, 0.0, 1.0, 0.0, -1.0, 0.0, -1.0, 0.0, 0.0])
+# 各块对"正极净流入电子数"的贡献（+1 到达正极，-1 由正极取走）
+_POSITIVE_SIGN = np.array([0.0, -1.0, 0.0, -1.0, 0.0, 1.0, 0.0, 1.0, 1.0])
+# 各块对"负极净送入器件电子数"的贡献（+1 负极注入陷阱，-1 陷阱回到负极）；
+# R8 只到正极，对负极记 0。negative_net − positive_net = ΔN_inside，全局守恒的基础（F04）
+_NEGATIVE_SIGN = np.array([1.0, 0.0, 1.0, 0.0, -1.0, 0.0, -1.0, 0.0, 0.0])
 _BLOCK_MECHANISM = ("tat",) * 8 + ("pf",)
 
 
 @dataclass
 class SimulationResult:
-    """单点仿真结果。电流均为净值，正号 = 电子由阴极流向阳极。"""
+    """单点仿真结果。电流均为净值，正号 = 电子由负极流向正极。"""
 
     voltage: float  # [V]
     temperature: float  # [K]
@@ -181,10 +181,10 @@ class SimulationResult:
     n_events: int  # 实际执行的事件数（预热 + 测量）
     measured_events: int  # 测量窗口内执行的事件数
     # --- 三个估计量与全局守恒（F04，ADR-021）---
-    current_direct: float  # 瞬时阳极通量的时间平均 [A]（相消未消去，方差大）
-    current_counts: float  # 阳极净事件电流 [A]（只数执行了的事件，不含 R1 与快陷阱）
-    current_counts_cathode: float  # 阴极净事件电流 [A]（同上，即 I_C − I_R1）
-    n_anode_events: int
+    current_direct: float  # 瞬时正极通量的时间平均 [A]（相消未消去，方差大）
+    current_counts: float  # 正极净事件电流 [A]（只数执行了的事件，不含 R1 与快陷阱）
+    current_counts_negative: float  # 负极净事件电流 [A]（同上，即 I_C − I_R1）
+    n_positive_events: int
     # 测量窗口内慢陷阱电子数变化 ΔN_inside。守恒：(I_C−I_A)·Δt = q·(ΔN_inside − fast_exchange)
     delta_n_inside: int
     # --- 收敛/验证状态（F04，ADR-021）---
@@ -192,13 +192,13 @@ class SimulationResult:
     validation_notes: Tuple[str, ...]  # 未通过/存疑的具体原因
     # --- 快陷阱（ADR-023），未启用时全为 0 ---
     n_fast_traps: int = 0
-    current_fast: float = 0.0  # 快陷阱的阳极净电流 [A]（条件稳态通量，它们的事件不再执行）
+    current_fast: float = 0.0  # 快陷阱的正极净电流 [A]（条件稳态通量，它们的事件不再执行）
     fast_exchange: int = 0  # 测量窗口内由快陷阱跳进慢陷阱的净电子数（跃迁事件记账）
     defects: Optional[DefectEnsemble] = field(repr=False, default=None)
 
     @property
     def current_counts_total(self) -> float:
-        """数事件估计量 [A]：阳极净事件电流 + 快陷阱电流 + R1（F04 交叉校验的口径）。"""
+        """数事件估计量 [A]：正极净事件电流 + 快陷阱电流 + R1（F04 交叉校验的口径）。"""
         r1 = self.by_mechanism["direct_fn"] + self.by_mechanism["thermionic"]
         return self.current_counts + self.current_fast + r1
 
@@ -255,7 +255,7 @@ def _validate_result(
     elapsed: float,
     measured_events: int,
     occ_mean_abs_dev: float,
-    n_anode_events: int,
+    n_positive_events: int,
     current: float,
     current_counts_total: float,
     batch_rel_error: float,
@@ -267,7 +267,7 @@ def _validate_result(
     稳态 p̂ 接近（局部稳态/条件通量成立的前提）、批次均值法给出的电流相对标准误
     不超限（测量窗口内电流统计收敛）、启用快陷阱时时间尺度分离足够（min Γ_F 与
     平均事件速率之比，ADR-023）、机制分量闭合（构造保证）。净事件计数交叉
-    校验 ΔJ=J_cond−(J_counts+R1) 噪声大，只有阳极事件数足够（统计非空）时才纳入
+    校验 ΔJ=J_cond−(J_counts+R1) 噪声大，只有正极事件数足够（统计非空）时才纳入
     门槛，否则作诊断记录、不判失败（Q1 口径）。全器件无缺陷（R1-only）没有统计
     估计量要验证、R1 是确定性解，直接通过。
     """
@@ -286,7 +286,7 @@ def _validate_result(
         notes.append(
             "快陷阱与剩余事件的时间尺度分离不足（{:.1f}<{}）".format(timescale_separation, _FAST_SEPARATION_MIN)
         )
-    if n_anode_events >= _COUNTS_SUFFICIENT and current != 0.0:
+    if n_positive_events >= _COUNTS_SUFFICIENT and current != 0.0:
         rel = abs(current_counts_total - current) / abs(current)
         if rel > _COUNTS_REL_TOL:
             notes.append("计数交叉校验超差（ΔJ/J={:.2f}>{}）".format(rel, _COUNTS_REL_TOL))
@@ -361,7 +361,7 @@ def r1_electrode_current(
         device.area,
         voltage,
         temperature,
-        device.cathode.effective_mass,
+        device.negative.effective_mass,
         device.stack.m_di_at(z),
         n_points=_R1_ENERGY_POINTS,
     )
@@ -529,27 +529,27 @@ class KMCSimulation:
         # R8 的 β 取电子发射后缺陷所在位置留下的电荷（以 e 为单位）：Z 加上与缺陷重合的固定电荷
         self._emission_charge = defects.charge_state + defects.colocated_fixed_charge / constants.elementary_charge
 
-        # 电极侧能量参考（全局零点 = 阴极费米能级）
-        self._fermi_cathode = 0.0
-        self._fermi_anode = anode_fermi_level(sim.voltage)
+        # 电极侧能量参考（全局零点 = 负极费米能级）
+        self._fermi_negative = 0.0
+        self._fermi_positive = positive_fermi_level(sim.voltage)
         self._band_bottom = (
-            electrode_band_bottom(self._fermi_cathode, device.cathode.fermi_energy),
-            electrode_band_bottom(self._fermi_anode, device.anode.fermi_energy),
+            electrode_band_bottom(self._fermi_negative, device.negative.fermi_energy),
+            electrode_band_bottom(self._fermi_positive, device.positive.fermi_energy),
         )
 
         # WKB 路径：电极→缺陷的采样点在几何上固定，只有势垒值每步变化
         t = np.linspace(0.0, 1.0, _TRAP_PATH_POINTS)
         z_i = positions[:, 2][:, None]
-        self._path_cathode = z_i * t[None, :]
-        self._path_anode = z_i + (device.Lz - z_i) * t[None, :]
+        self._path_negative = z_i * t[None, :]
+        self._path_positive = z_i + (device.Lz - z_i) * t[None, :]
         self._z_nodes = self.solver.z
 
         # 分段能带：界面台阶插值用的节点索引与 ΔE_C（一次算好，供 _rates 每步复用）；
         # 沿电极→缺陷路径的隧穿质量 m_di(s) 按所在层取（路径传播质量，ADR-012/F08），
         # 几何上固定、与组态无关，一次算好
         self._iface_node_idx, self._delta_Ec = _interface_step_nodes(device, self._z_nodes)
-        self._m_di_path_cathode = stack.m_di_at(self._path_cathode)
-        self._m_di_path_anode = stack.m_di_at(self._path_anode)
+        self._m_di_path_negative = stack.m_di_at(self._path_negative)
+        self._m_di_path_positive = stack.m_di_at(self._path_positive)
 
         # R1：不经过任何缺陷，势垒剖面就是零空间电荷的理想（分段）梯形，与占据组态
         # 无关——按公式求值一次，run() 末尾直接加到结果上
@@ -583,7 +583,7 @@ class KMCSimulation:
         self._hop_U_ab = -0.5 * constants.elementary_charge * (phi_ab + phi_ba)
 
         # F03：PF 收集概率 P_A（位置感知，与 KMC 组态无关，一次算好）。收集电极随
-        # 驱动电势 U+V_bi 定：>0 阳极收集（正向工况）。R8_eff = P_A·R8 在 _rates 里
+        # 驱动电势 U+V_bi 定：>0 正极收集（正向工况）。R8_eff = P_A·R8 在 _rates 里
         # 折进事件表。单层无阻挡层 → P_A≡1，逐位退回原路径。
         self._drive_potential = sim.voltage + device.built_in_potential()
         self._pf_forward = self._drive_potential > 0.0
@@ -693,8 +693,8 @@ class KMCSimulation:
         blocking = _blocking_layer_indices(band_refs)
         if blocking.size == 0:
             return p
-        # 收集电极方向：驱动电势 >0 阳极（z=Lz）收集；<0 阴极（=0 时退化取阳极，工况标未验证）
-        collect_anode = self._drive_potential >= 0.0
+        # 收集电极方向：驱动电势 >0 正极（z=Lz）收集；<0 负极（=0 时退化取正极，工况标未验证）
+        collect_positive = self._drive_potential >= 0.0
         host = self._defect_host_layers()
         stack = device.stack
         thickness = stack.layer_thickness
@@ -702,11 +702,11 @@ class KMCSimulation:
         m_di_layer = stack.layer_m_di
         s_kappa = float(np.sum(thickness / kappa))
         for b in blocking:
-            if collect_anode:
-                crossing = host < b  # 收集在阳极：宿主层在阻挡层下方的陷阱要穿过它
+            if collect_positive:
+                crossing = host < b  # 收集在正极：宿主层在阻挡层下方的陷阱要穿过它
                 entrance = b - 1
             else:
-                crossing = host > b  # 收集在阴极：宿主层在阻挡层上方的陷阱要穿过它
+                crossing = host > b  # 收集在负极：宿主层在阻挡层上方的陷阱要穿过它
                 entrance = b + 1
             delta_Ec = float(band_refs[b] - band_refs[entrance])
             if delta_Ec <= 0.0 or not np.any(crossing):
@@ -829,16 +829,16 @@ class KMCSimulation:
         return phi, np.linalg.norm(field, axis=0), phi_bar
 
     def _path_barriers(self, band: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """全部电极→缺陷路径上的势垒剖面 (阴极侧, 阳极侧)，形状 (N, 路径点)。
+        """全部电极→缺陷路径上的势垒剖面 (负极侧, 正极侧)，形状 (N, 路径点)。
 
         `band` 是一个组态在 z 节点上的一维导带底剖面（含台阶）。界面双值保留真实
         台阶，不插成斜坡（ADR-012）。
         """
         barrier_c = _band_on_path_steps(
-            self._path_cathode, self._z_nodes, band, self._iface_node_idx, self._delta_Ec
+            self._path_negative, self._z_nodes, band, self._iface_node_idx, self._delta_Ec
         )
         barrier_a = _band_on_path_steps(
-            self._path_anode, self._z_nodes, band, self._iface_node_idx, self._delta_Ec
+            self._path_positive, self._z_nodes, band, self._iface_node_idx, self._delta_Ec
         )
         return barrier_c, barrier_a
 
@@ -879,8 +879,8 @@ class KMCSimulation:
 
         for side, (path, barrier, m_di_path, electrode, fermi, bottom) in enumerate(
             (
-                (pick(self._path_cathode), barrier_c, pick(self._m_di_path_cathode), device.cathode, self._fermi_cathode, self._band_bottom[0]),
-                (pick(self._path_anode), barrier_a, pick(self._m_di_path_anode), device.anode, self._fermi_anode, self._band_bottom[1]),
+                (pick(self._path_negative), barrier_c, pick(self._m_di_path_negative), device.negative, self._fermi_negative, self._band_bottom[0]),
+                (pick(self._path_positive), barrier_a, pick(self._m_di_path_positive), device.positive, self._fermi_positive, self._band_bottom[1]),
             )
         ):
             # --- R2 / R3：弹性隧穿（陷阱能级处的单一能量） ---
@@ -952,7 +952,7 @@ class KMCSimulation:
         return blocks, self._hop_rates(energy)
 
     def _trap_state(self, occ: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """组态 `occ` 下的 (陷阱能级, 局域场大小, 阴极侧路径势垒, 阳极侧路径势垒)。"""
+        """组态 `occ` 下的 (陷阱能级, 局域场大小, 负极侧路径势垒, 正极侧路径势垒)。"""
         phi_at, field_at, phi_bar = self._electrostatics(occ)
         energy = trap_levels(self.defects.band_reference, phi_at, self.defects.ED)  # 陷阱上电子的总能量
         band = conduction_band_edge(self.device, self._z_nodes, phi_bar)  # 一维导带底剖面（含台阶）
@@ -990,7 +990,7 @@ class KMCSimulation:
     def _conditional_flux(
         blocks: np.ndarray, hop_in: np.ndarray, hop_out: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """条件稳态下每个陷阱的阳极净通量分解。
+        """条件稳态下每个陷阱的正极净通量分解。
 
         返回 (TAT 分量, PF 分量, 条件稳态占据 p̂)，单位 1/s。
         相消项 C_a·E_a 已解析约掉，见模块文档说明 3。
@@ -1011,7 +1011,7 @@ class KMCSimulation:
     def _trap_flux(
         self, occ: np.ndarray, blocks: np.ndarray, hop: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """当前组态下每个陷阱的阳极净通量 (TAT, PF) 与条件稳态占据 p̂，单位 1/s。
+        """当前组态下每个陷阱的正极净通量 (TAT, PF) 与条件稳态占据 p̂，单位 1/s。
 
         单陷阱用 `_conditional_flux`（模块文档说明 3）；强耦合簇的成员换成簇内条件
         稳态（说明 5），簇外占据取 `occ` 作为环境。`blocks`/`hop` 是 `_rates(occ)`
@@ -1037,9 +1037,9 @@ class KMCSimulation:
             members = c.members
             tat[members], pf[members], p_hat[members] = cluster_steady_state(
                 c.states,
-                capture_anode=block[_B_R2A] + block[_B_R4A],
+                capture_positive=block[_B_R2A] + block[_B_R4A],
                 capture_other=block[_B_R2C] + block[_B_R4C] + table.hop_in,
-                escape_anode=block[_B_R3A] + block[_B_R5A],
+                escape_positive=block[_B_R3A] + block[_B_R5A],
                 pf=block[_B_R8],
                 escape_other=block[_B_R3C] + block[_B_R5C] + table.hop_out,
                 intra_a=c.intra_a,
@@ -1080,7 +1080,7 @@ class KMCSimulation:
         # 电极→成员的路径势垒同 _path_barriers（界面双值已在上面一次补好）
         rows, idx, barrier_c, barrier_a = [], [], [], []
         for c, start, stop in zip(clusters, row_start[:-1], row_start[1:]):
-            path_c, path_a = self._path_cathode[c.members], self._path_anode[c.members]
+            path_c, path_a = self._path_negative[c.members], self._path_positive[c.members]
             for r in range(start, stop):
                 barrier_c.append(np.interp(path_c.ravel(), z_aug, band_aug[r]).reshape(path_c.shape))
                 barrier_a.append(np.interp(path_a.ravel(), z_aug, band_aug[r]).reshape(path_a.shape))
@@ -1141,7 +1141,7 @@ class KMCSimulation:
         fast = self._fast
         has_fast = bool(fast.any())
         p_fast = np.zeros(n)
-        fast_flux = 0.0  # 快陷阱阳极净通量的时间积分
+        fast_flux = 0.0  # 快陷阱正极净通量的时间积分
         fast_exchange = 0  # 快→慢跃迁减慢→快跃迁的净次数（测量窗口内）
 
         elapsed = 0.0
@@ -1150,10 +1150,10 @@ class KMCSimulation:
         occupancy_time = np.zeros(n)
         occupancy_mf = np.zeros(n)
         direct_flux = 0.0
-        counts = 0.0  # 阳极净电子计数
-        cathode_counts = 0.0  # 阴极净电子计数（F04 全局守恒）
-        n_anode_events = 0
-        n_cathode_events = 0
+        counts = 0.0  # 正极净电子计数
+        negative_counts = 0.0  # 负极净电子计数（F04 全局守恒）
+        n_positive_events = 0
+        n_negative_events = 0
         n_executed = 0  # 实际执行的事件数（可能因总速率归零早停，如全器件无缺陷）
         measured_events = 0  # 测量窗口内执行的事件数
         n_inside_start = 0  # 测量开始时器件内电子数（初始全空 = 0）
@@ -1205,9 +1205,9 @@ class KMCSimulation:
                 defect_flux += (tat + pf) * dt
                 mech_flux["tat"] += tat.sum() * dt
                 mech_flux["pf"] += pf.sum() * dt
-                direct_flux += (_ANODE_SIGN[:, None] * event_blocks).sum() * dt
+                direct_flux += (_POSITIVE_SIGN[:, None] * event_blocks).sum() * dt
                 if has_fast:
-                    # 快陷阱的事件不再执行，它们的阳极通量按条件稳态补进两个交叉估计量
+                    # 快陷阱的事件不再执行，它们的正极通量按条件稳态补进两个交叉估计量
                     flux_fast = (tat[fast] + pf[fast]).sum() * dt
                     direct_flux += flux_fast
                     fast_flux += flux_fast
@@ -1227,14 +1227,14 @@ class KMCSimulation:
                 block, i = divmod(index, n)
                 occ[i] = block < _N_CAPTURE_BLOCKS
                 if measuring:
-                    a_sign = _ANODE_SIGN[block]
+                    a_sign = _POSITIVE_SIGN[block]
                     if a_sign != 0.0:
-                        n_anode_events += 1
+                        n_positive_events += 1
                         counts += a_sign
-                    c_sign = _CATHODE_SIGN[block]
+                    c_sign = _NEGATIVE_SIGN[block]
                     if c_sign != 0.0:
-                        n_cathode_events += 1
-                        cathode_counts += c_sign
+                        n_negative_events += 1
+                        negative_counts += c_sign
             else:
                 k = index - _N_BLOCKS * n
                 a, b = pairs.a[k], pairs.b[k]
@@ -1276,7 +1276,7 @@ class KMCSimulation:
             separation = self._fast_gamma_min * elapsed / measured_events if measured_events else 0.0
         validated, validation_notes = _validate_result(
             n, self._pf_forward, elapsed, measured_events, occ_dev,
-            n_anode_events, current, current_counts_total, batch_rel_error, separation,
+            n_positive_events, current, current_counts_total, batch_rel_error, separation,
         )
         return SimulationResult(
             voltage=sim.voltage,
@@ -1294,8 +1294,8 @@ class KMCSimulation:
             measured_events=measured_events,
             current_direct=float(direct_flux * scale + r1_tunnel + r1_thermionic),
             current_counts=current_counts,
-            current_counts_cathode=float(cathode_counts * scale),
-            n_anode_events=n_anode_events,
+            current_counts_negative=float(negative_counts * scale),
+            n_positive_events=n_positive_events,
             delta_n_inside=delta_n_inside,
             validated=validated,
             validation_notes=validation_notes,

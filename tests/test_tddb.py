@@ -589,7 +589,7 @@ def test_distance_clusters_link_defects_closer_than_the_cutoff():
 
 def test_conducting_clusters_join_vacancies_and_electrodes_closer_than_r_c():
     """导电簇（ADR-054）：间距 < r_c 的空位连边（xy 最小镜像），离电极平面 < r_c 的空位接到该电极，整个簇随之接上；两侧
-    都接即贯穿通路。导体间隙是阴极侧导体（阴极平面与接阴极的簇）到阳极侧导体的最短距离，有贯穿通路时为 0。"""
+    都接即贯穿通路。导体间隙是负极侧导体（负极平面与接负极的簇）到正极侧导体的最短距离，有贯穿通路时为 0。"""
     device = make_device()  # 20×20×8 nm
     z = np.linspace(0.6e-9, 7.4e-9, 10)  # 相邻间距 0.756 nm，两端离电极 0.6 nm
     x = np.where(np.arange(10) % 2 == 0, 19.9e-9, 0.1e-9)  # 横向来回跨过周期边界，最小镜像下只差 0.2 nm
@@ -597,7 +597,7 @@ def test_conducting_clusters_join_vacancies_and_electrodes_closer_than_r_c():
     sides = conducting_clusters(chain, device, 0.9e-9)
     assert np.all(sides == 2) and conductor_gap(chain, sides, device) == 0.0
 
-    broken = np.delete(chain, 5, axis=0)  # 去掉中间一个：下半段接阴极、上半段接阳极，间隙是断口两端的距离
+    broken = np.delete(chain, 5, axis=0)  # 去掉中间一个：下半段接负极、上半段接正极，间隙是断口两端的距离
     sides = conducting_clusters(broken, device, 0.9e-9)
     assert sides.tolist() == [0] * 5 + [1] * 4
     gap = conductor_gap(broken, sides, device)
@@ -613,7 +613,7 @@ def test_conducting_clusters_join_vacancies_and_electrodes_closer_than_r_c():
 
 
 def test_conductors_sit_at_their_electrode_potential_and_supply_electrons_at_its_fermi_level():
-    """接电极的导电簇（ADR-054）：生成率的电势里成员处的电势等于所接电极的边界值（阴极 0、阳极 U）；其余缺陷处的电势
+    """接电极的导电簇（ADR-054）：生成率的电势里成员处的电势等于所接电极的边界值（负极 0、正极 U）；其余缺陷处的电势
     扣掉自身电荷的贡献，等于引擎的电势加上导电簇电荷带来的改变。陷阱项把成员当作所接电极费米能级处占满（p = 1）的
     电子源，其余陷阱的能级取同一份电势；P_bb 的场取这份电势的 Gaussian 平均。没有导电簇时电势就是只放缺陷电荷的解。
     三分之一的缺陷带与之重合的固定电荷 −e，另有一个离开缺陷 0.6 nm。"""
@@ -815,7 +815,7 @@ def test_cli_tddb_writes_csv_and_figure(tmp_path, capsys):
             "concentration_cm3": 3.0e18, "min_separation_nm": 0.5, "level": {"mode": "fixed", "ED_eV": 1.15},
         }}],
         "device": {"Lx_nm": 20.0, "Ly_nm": 20.0, "barrier_height_eV": 1.74},
-        "electrodes": {"cathode": {"work_function_eV": 4.6}, "anode": {"work_function_eV": 4.6}},
+        "electrodes": {"negative": {"work_function_eV": 4.6}, "positive": {"work_function_eV": 4.6}},
         "simulation": {"voltage_V": 3.0, "temperature_C": 25.0, "seed": 3, "grid": {"nx": 8, "ny": 8, "nz": 16}},
         "tddb": {
             "activation_energy_eV": 4.0, "precursor_ionization_energy_eV": 1.15,

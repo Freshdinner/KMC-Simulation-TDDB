@@ -46,13 +46,13 @@ device:
   barrier_height_eV: 1.74
 
 electrodes:
-  cathode: &electrode
+  negative: &electrode
     name: TiN
     work_function_eV: 4.6
     effective_mass_me: 1.0
     # 费米能相对电极导带底的高度：R2/R3 的 E1 与 R4/R5 的 N_C 需要
     fermi_energy_eV: 5.0
-  anode: *electrode
+  positive: *electrode
 
 simulation:
   voltage_V: 3.0

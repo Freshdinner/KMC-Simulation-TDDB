@@ -42,7 +42,7 @@ M_E = constants.electron_mass
 
 def _analytic(device, voltage, temperature):
     return richardson_schottky_current_density(
-        temperature, voltage, device.barrier(device.cathode), device.stack.single_material.m_cb
+        temperature, voltage, device.barrier(device.negative), device.stack.single_material.m_cb
     )
 
 
@@ -50,7 +50,7 @@ def _mass_corrected_deviation(result, device):
     """把规格指定的前置因子质量差折算掉之后的相对偏差。"""
     j_kmc = result.by_mechanism["thermionic"] / result.area
     j_analytic = _analytic(device, result.voltage, result.temperature)
-    mass_ratio = device.stack.single_material.m_cb / device.cathode.effective_mass
+    mass_ratio = device.stack.single_material.m_cb / device.negative.effective_mass
     return j_kmc * mass_ratio / j_analytic - 1.0
 
 
@@ -103,7 +103,7 @@ def test_ratio_is_constant_across_operating_points():
             ).run()
             j_kmc = result.by_mechanism["thermionic"] / result.area
             ratios.append(j_kmc / _analytic(device, voltage, temperature))
-    expected = device.cathode.effective_mass / device.stack.single_material.m_cb
+    expected = device.negative.effective_mass / device.stack.single_material.m_cb
     assert np.allclose(ratios, expected, rtol=1.5e-2)
     assert np.std(ratios) / np.mean(ratios) < 5e-3  # 漂移远小于偏差本身
 
@@ -116,7 +116,7 @@ def test_barrier_bump_suppresses_thermionic_part():
     这里用一个小偏压配一个 50 meV 的鼓包。
     """
     device = make_device()
-    E_B = device.barrier(device.cathode)
+    E_B = device.barrier(device.negative)
     voltage = 0.1
     z = np.linspace(0.0, device.Lz, 129)
     flat = E_B - constants.elementary_charge * voltage * z / device.Lz
@@ -175,7 +175,7 @@ def test_stack_thermionic_referenced_to_barrier_top():
         z = np.linspace(0.0, device.Lz, _R1_PATH_POINTS)
         barrier = _band_on_path_steps(z, z_nodes, band_nodes, iface_idx, delta_Ec)
         e_max = barrier_maximum(barrier)
-        assert e_max / EV > 1.74  # 势垒顶抬到了 Al₂O₃ 内（比阴极 E_B 高）
+        assert e_max / EV > 1.74  # 势垒顶抬到了 Al₂O₃ 内（比负极 E_B 高）
 
         kT = constants.Boltzmann * temperature
         prefactor = device.area * M_E * kT ** 2 / (2.0 * np.pi ** 2 * constants.hbar ** 3)

@@ -1,7 +1,7 @@
 """快陷阱移出事件预算（ADR-023，kmc 模块文档说明 6）。
 
 - 没有陷阱达到 R_cut 时与不配置逐位相同（回归锚点）；
-- 三陷阱小体系：贴阴极的快陷阱退出事件表后，电流仍等于主方程精确稳态（快陷阱照样
+- 三陷阱小体系：贴负极的快陷阱退出事件表后，电流仍等于主方程精确稳态（快陷阱照样
   进强耦合簇），测量窗口延长 8 个数量级；
 - 快陷阱与慢陷阱之间的跃迁仍逐事件记账，全局守恒改为
   (I_C−I_A)·Δt = q·(ΔN_inside − fast_exchange)，逐事件精确成立；
@@ -30,7 +30,7 @@ def _with_fast_rate(config, rate):
 
 
 def _three_trap_sim(fast_trap_rate=None, n_events=3000, seed=1):
-    """9 nm 单层 + 三个陷阱：#0 贴阴极（Γ≈4e12 s⁻¹）、#1 在它旁边 0.8 nm（Γ≈2e8）、#2 在膜中部。
+    """9 nm 单层 + 三个陷阱：#0 贴负极（Γ≈4e12 s⁻¹）、#1 在它旁边 0.8 nm（Γ≈2e8）、#2 在膜中部。
 
     #0 与 #1 之间的跃迁 5.5e8 s⁻¹，两者连成一个强耦合簇；2^3 个组态，主方程可解。
     """
@@ -84,7 +84,7 @@ def test_global_conservation_includes_fast_exchange():
     """快↔慢跃迁不经过电极：(I_C−I_A)·Δt = q·(ΔN_inside − fast_exchange)，逐事件精确。"""
     result = _three_trap_sim(fast_trap_rate=1e7).run()
     assert result.fast_exchange != 0
-    lhs = (result.current_counts_cathode - result.current_counts) * result.elapsed_time
+    lhs = (result.current_counts_negative - result.current_counts) * result.elapsed_time
     assert lhs == pytest.approx(Q * (result.delta_n_inside - result.fast_exchange), rel=1e-9, abs=1e-30)
 
 
@@ -101,7 +101,7 @@ def test_insufficient_timescale_separation_fails_validation():
     """min Γ_F 与平均事件速率之比低于下限 → 未通过验证；没有快陷阱（∞）不受影响。"""
     args = dict(
         n_defects=10, forward=True, elapsed=1e-6, measured_events=3200,
-        occ_mean_abs_dev=0.0, n_anode_events=0, current=1e-15, current_counts_total=0.0,
+        occ_mean_abs_dev=0.0, n_positive_events=0, current=1e-15, current_counts_total=0.0,
         batch_rel_error=0.0,
     )
     ok, notes = _validate_result(timescale_separation=np.inf, **args)

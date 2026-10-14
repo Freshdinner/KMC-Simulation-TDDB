@@ -95,7 +95,7 @@ def test_gth_keeps_componentwise_accuracy_on_stiff_chain():
 # 簇内条件稳态
 # --------------------------------------------------------------------------
 def test_cluster_steady_state_is_exact_on_review_counterexample():
-    """review F04 的 4 态反例：阴极→陷阱0、陷阱0→陷阱1、陷阱1→阳极，速率均 1/s。
+    """review F04 的 4 态反例：负极→陷阱0、陷阱0→陷阱1、陷阱1→正极，速率均 1/s。
 
     单陷阱条件通量给 0.3（`test_master_equation` 里复现），把两个陷阱放进同一个簇
     就是精确的 0.4，占据期望分别为 0.6、0.4。
@@ -104,13 +104,13 @@ def test_cluster_steady_state_is_exact_on_review_counterexample():
     zeros = np.zeros((4, 2))
     capture_other = zeros.copy()
     capture_other[:, 0] = 1.0
-    escape_anode = zeros.copy()
-    escape_anode[:, 1] = 1.0
+    escape_positive = zeros.copy()
+    escape_positive[:, 1] = 1.0
     tat, pf, occupancy = cluster_steady_state(
         states,
-        capture_anode=zeros,
+        capture_positive=zeros,
         capture_other=capture_other,
-        escape_anode=escape_anode,
+        escape_positive=escape_positive,
         pf=zeros,
         escape_other=zeros,
         intra_a=np.array([0]),
@@ -136,10 +136,10 @@ def test_cluster_generator_follows_kmc_event_rules():
     assert np.allclose(Q.sum(axis=1), 0.0)
 
 
-def test_uncoupled_cluster_reproduces_single_trap_flux_near_anode():
+def test_uncoupled_cluster_reproduces_single_trap_flux_near_positive():
     """簇内没有跃迁时，各成员退回单陷阱条件通量（rtol 1e-10）。
 
-    成员 0 贴着阳极：阳极俘获/逃逸 4e13、6e13 s⁻¹，净通量却只有 0.4 s⁻¹。阳极侧
+    成员 0 贴着正极：正极俘获/逃逸 4e13、6e13 s⁻¹，净通量却只有 0.4 s⁻¹。正极侧
     写法是两个 1e13 量级数之差，这里必须改用另一侧的写法才不丢精度。
     """
     blocks = np.zeros((9, 2))
@@ -152,9 +152,9 @@ def test_uncoupled_cluster_reproduces_single_trap_flux_near_anode():
 
     tat, pf, occupancy = cluster_steady_state(
         enumerate_occupations(2),
-        capture_anode=per_state(_B_R2A),
+        capture_positive=per_state(_B_R2A),
         capture_other=per_state(_B_R2C),
-        escape_anode=per_state(_B_R3A),
+        escape_positive=per_state(_B_R3A),
         pf=per_state(_B_R8),
         escape_other=per_state(_B_R3C),
         intra_a=np.zeros(0, dtype=int),

@@ -30,7 +30,7 @@ TDDB 外层每生成一个空位都要重求一次输运稳态，KMC 当主路�
      平衡，零偏压下会经"电极 → 成员 → 边界"形成环流（ADR-038 的实测）。
 - 簇–簇对要精确就得按两个簇稳态分布的乘积平均，迭代状态要带上各簇的分布，这里不做；
   它们按第 2 类处理，电流连续、能量守恒照样精确，零偏压下留一个小环流（ADR-038）。
-- 不动点处的阳极净通量就是电流，与 KMC 的条件通量估计量是同一个公式，只是占据组态
+- 不动点处的正极净通量就是电流，与 KMC 的条件通量估计量是同一个公式，只是占据组态
   换成了平均占据、跃迁速率按上面三类取。R1 与组态无关，照旧加在总电流上。
 
 **迭代变量取 ln p，收敛判据是占据的相对残差** max|ln p̂ − ln p| ≤ `_TOL`。占据很小的
@@ -94,7 +94,7 @@ _LOG_FLOOR = float(np.log(np.finfo(float).tiny))
 
 @dataclass
 class MeanFieldResult:
-    """簇级平均场不动点处的稳态电流与分解。电流均为净值，正号 = 电子由阴极流向阳极。"""
+    """簇级平均场不动点处的稳态电流与分解。电流均为净值，正号 = 电子由负极流向正极。"""
 
     voltage: float  # [V]
     temperature: float  # [K]
@@ -153,7 +153,7 @@ class MeanFieldRates:
 
 
 def _cluster_generator_rates(table: _ClusterTable) -> Tuple[np.ndarray, ...]:
-    """簇的生成矩阵所需的 (阳极俘获, 其余俘获, 阳极 TAT 逃逸, PF, 其余逃逸)，口径同 `_cluster_flux`。"""
+    """簇的生成矩阵所需的 (正极俘获, 其余俘获, 正极 TAT 逃逸, PF, 其余逃逸)，口径同 `_cluster_flux`。"""
     block = table.block
     return (
         block[_B_R2A] + block[_B_R4A],
@@ -215,10 +215,10 @@ def mean_field_rates(
         np.add.at(member_out.T, c.out_member, ((1.0 - p[c.out_target]) * rate[:, c.out_cols]).T)
         table = replace(table, hop=rate, hop_in=member_in, hop_out=member_out)
 
-        capture_anode, capture_other, escape_anode, pf, escape_other = _cluster_generator_rates(table)
+        capture_positive, capture_other, escape_positive, pf, escape_other = _cluster_generator_rates(table)
         pi = stationary_distribution_gth(
             cluster_generator(
-                states, capture_anode + capture_other, escape_anode + pf + escape_other,
+                states, capture_positive + capture_other, escape_positive + pf + escape_other,
                 c.intra_a, c.intra_b, rate[:, c.intra_cols],
             )
         )
@@ -251,7 +251,7 @@ def mean_field_rates(
 def mean_field_flux(
     sim: KMCSimulation, occupancy: np.ndarray
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """平均占据 `occupancy` 下每个陷阱的阳极净通量 (TAT, PF) 与条件稳态占据 p̂（不动点映射 F）。
+    """平均占据 `occupancy` 下每个陷阱的正极净通量 (TAT, PF) 与条件稳态占据 p̂（不动点映射 F）。
 
     孤立陷阱走单陷阱公式，簇成员按簇内稳态分布给出（`clusters.cluster_flux`，与 KMC 估计量
     同一个公式）。通量单位 1/s。
@@ -267,7 +267,7 @@ def mean_field_flux(
 
 
 class _Iterate(NamedTuple):
-    """不动点迭代里的一次求值：x = ln p 处的残差 G(x) = ln p̂ − x 与阳极净通量 (TAT, PF)。"""
+    """不动点迭代里的一次求值：x = ln p 处的残差 G(x) = ln p̂ − x 与正极净通量 (TAT, PF)。"""
 
     x: np.ndarray
     gap: np.ndarray

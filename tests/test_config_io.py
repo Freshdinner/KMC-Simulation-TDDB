@@ -49,12 +49,12 @@ _YAML = textwrap.dedent(
       Ly_nm: 50.0
       barrier_height_eV: 1.74
     electrodes:
-      cathode: &e
+      negative: &e
         name: TiN
         work_function_eV: 4.6
         effective_mass_me: 1.0
         fermi_energy_eV: 5.0
-      anode: *e
+      positive: *e
     simulation:
       voltage_V: 2.0
       temperature_C: 25.0
@@ -79,8 +79,8 @@ def test_units_are_converted_to_si():
     assert cfg.device.barrier_height == pytest.approx(1.74 * EV)
     assert material.band_gap == pytest.approx(5.4 * EV)
     assert material.phonon_energy == pytest.approx(0.04 * EV)
-    assert cfg.device.cathode.work_function == pytest.approx(4.6 * EV)
-    assert cfg.device.cathode.fermi_energy == pytest.approx(5.0 * EV)
+    assert cfg.device.negative.work_function == pytest.approx(4.6 * EV)
+    assert cfg.device.negative.fermi_energy == pytest.approx(5.0 * EV)
     assert material.m_cb == pytest.approx(1.2 * M_E)
     assert material.m_di == pytest.approx(1.2 * M_E)
     assert cfg.defects.concentration == pytest.approx(3.0e24)  # cm^-3 -> m^-3
@@ -190,25 +190,25 @@ def test_effective_masses_stay_independent_fields():
 def test_barrier_height_explicit_takes_priority_over_alignment():
     raw = _base_dict()
     cfg = config_from_dict(raw)
-    assert cfg.device.barrier(cfg.device.cathode) == pytest.approx(1.74 * EV)
+    assert cfg.device.barrier(cfg.device.negative) == pytest.approx(1.74 * EV)
     assert cfg.device.built_in_potential() == 0.0
 
     del raw["device"]["barrier_height_eV"]
     cfg = config_from_dict(raw)
     # 推算值 E_B = Φ_m - χ = 4.6 - 2.86 = 1.74 eV（χ 取自单层材料）
-    assert cfg.device.barrier(cfg.device.cathode) == pytest.approx(1.74 * EV)
+    assert cfg.device.barrier(cfg.device.negative) == pytest.approx(1.74 * EV)
 
 
 def test_asymmetric_electrodes_give_built_in_potential():
     raw = _base_dict()
     del raw["device"]["barrier_height_eV"]
     raw["electrodes"] = {
-        "cathode": {"name": "TiN", "work_function_eV": 4.6, "effective_mass_me": 1.0, "fermi_energy_eV": 5.0},
-        "anode": {"name": "Pt", "work_function_eV": 5.3, "effective_mass_me": 1.0, "fermi_energy_eV": 5.0},
+        "negative": {"name": "TiN", "work_function_eV": 4.6, "effective_mass_me": 1.0, "fermi_energy_eV": 5.0},
+        "positive": {"name": "Pt", "work_function_eV": 5.3, "effective_mass_me": 1.0, "fermi_energy_eV": 5.0},
     }
     cfg = config_from_dict(raw)
-    assert cfg.device.barrier(cfg.device.cathode) == pytest.approx(1.74 * EV)
-    assert cfg.device.barrier(cfg.device.anode) == pytest.approx(2.44 * EV)
+    assert cfg.device.barrier(cfg.device.negative) == pytest.approx(1.74 * EV)
+    assert cfg.device.barrier(cfg.device.positive) == pytest.approx(2.44 * EV)
     assert cfg.device.built_in_potential() == pytest.approx(-0.7)
 
 
@@ -386,8 +386,8 @@ def test_tddb_example_matches_leakage_reference_preset():
     assert dataclasses.replace(material, name=ref_material.name) == ref_material
     assert tddb.defects.min_separation == pytest.approx(0.26e-9)
     assert dataclasses.replace(tddb.defects, min_separation=ref.defects.min_separation) == ref.defects
-    assert tddb.device.cathode == ref.device.cathode
-    assert tddb.device.anode == ref.device.anode
+    assert tddb.device.negative == ref.device.negative
+    assert tddb.device.positive == ref.device.positive
     assert tddb.device.barrier_height == ref.device.barrier_height
     assert tddb.device.Lz == ref.device.Lz
     assert len(tddb.device.stack.layers) == 1

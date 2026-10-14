@@ -19,7 +19,7 @@ E_A（ADR-053）。外层是缺陷生成的 Gillespie 循环，每步：
    第 k−1 条记录的功率给出的温度下求的；温度随生成一步步爬升，这一步的滞后可以忽略。没有 k_TH
    时温度固定为环境值（Phase 3 的等温口径）。
 3. **导电簇与击穿判据**（§6.3，ADR-054）：O 空位间距 < r_c 连成导电簇，离电极平面 < r_c 的空位接到该
-   电极（`conducting_clusters`）。阴极侧与阳极侧导电簇连通、形成贯穿通路即击穿，这一刻就是 t_BD；击穿
+   电极（`conducting_clusters`）。负极侧与正极侧导电簇连通、形成贯穿通路即击穿，这一刻就是 t_BD；击穿
    记录的电流加上细丝按一个量子电导 G₀ = 2e²/h 导通的 G₀·V。论文的"25 个空位、间距 ≤ 6 Å"团簇只作标志
    记录，不作判据。
 4. **生成率**（§6.1，`generation_rates`）：各缺陷净电荷 q·(Z − p) + q_fix 与外加偏压一起解泊松方程，接电极的
@@ -58,7 +58,7 @@ from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
 from .bands import (
-    anode_fermi_level,
+    positive_fermi_level,
     conduction_band_edge,
     electrode_band_bottom,
     top_boundary_potential,
@@ -319,8 +319,8 @@ def _capture_electrodes(
     z = np.asarray(z_values, dtype=float)[:, None]
     sides = []
     for path, electrode, fermi in (
-        (z * t[None, :], device.cathode, 0.0),
-        (z + (device.Lz - z) * t[None, :], device.anode, anode_fermi_level(voltage)),
+        (z * t[None, :], device.negative, 0.0),
+        (z + (device.Lz - z) * t[None, :], device.positive, positive_fermi_level(voltage)),
     ):
         sides.append(
             CaptureElectrode(
@@ -397,7 +397,7 @@ def generation_rates(
         inner, tddb, phi, conduction, np.linalg.norm(local[:, 1:4], axis=1), points[:, 2], temperature
     )
     member = sides >= 0
-    fermi = np.array([0.0, anode_fermi_level(inner.sim.voltage)])  # 阴极、阳极费米能级
+    fermi = np.array([0.0, positive_fermi_level(inner.sim.voltage)])  # 负极、正极费米能级
     source_energy = np.where(
         member, fermi[np.clip(sides, 0, 1)], inner._trap_state(occupancy)[0] - constants.elementary_charge * shift
     )
@@ -418,7 +418,7 @@ def _conductor_potential(
     """生成率用的电势 φ（泊松网格节点，[V]）与导电簇带来的各缺陷处电势改变 (N,) [V]（ADR-054）。
 
     不在导电簇里的缺陷带 q·(Z − p) + q_fix，固定电荷放在各自的位置。接电极的导电簇（`sides` 取 0 或 1）与所接
-    电极等电位：成员的电荷不再由占据决定，取让每个成员处的电势等于该电极边界值（阴极 0、阳极
+    电极等电位：成员的电荷不再由占据决定，取让每个成员处的电势等于该电极边界值（负极 0、正极
     `top_boundary_potential`）的那一组电荷。成员处的电势对这组电荷是线性的，系数就是耦合矩阵 `phi_matrix`（同一套
     沉积、求解与插值），在成员上解一次线性方程即得；离开成员位置的固定电荷照常放置。
 
@@ -633,7 +633,7 @@ def distance_clusters(positions: np.ndarray, device: DeviceConfig, distance: flo
 
 
 def conducting_clusters(positions: np.ndarray, device: DeviceConfig, distance: float) -> np.ndarray:
-    """各缺陷所在的导电簇接到哪一侧电极（§6.3，ADR-054），返回 (N,)：−1 不接电极，0 接阴极，1 接阳极，
+    """各缺陷所在的导电簇接到哪一侧电极（§6.3，ADR-054），返回 (N,)：−1 不接电极，0 接负极，1 接正极，
     2 两侧都接（贯穿通路）。
 
     O 空位（初始缺陷与生成空位是同一物种）间距 < `distance`（连通距离 r_c）连成导电簇，xy 取最小镜像；离电极
@@ -641,27 +641,27 @@ def conducting_clusters(positions: np.ndarray, device: DeviceConfig, distance: f
     """
     labels = distance_clusters(positions, device, distance)
     z = positions[:, 2]
-    cathode = np.isin(labels, labels[z < distance])
-    anode = np.isin(labels, labels[device.Lz - z < distance])
-    return np.where(cathode & anode, 2, np.where(cathode, 0, np.where(anode, 1, -1)))
+    negative = np.isin(labels, labels[z < distance])
+    positive = np.isin(labels, labels[device.Lz - z < distance])
+    return np.where(negative & positive, 2, np.where(negative, 0, np.where(positive, 1, -1)))
 
 
 def conductor_gap(positions: np.ndarray, sides: np.ndarray, device: DeviceConfig) -> float:
-    """阴极侧导体（阴极平面与接阴极的导电簇）到阳极侧导体（阳极平面与接阳极的导电簇）的最短距离 [m]（ADR-054）。
+    """负极侧导体（负极平面与接负极的导电簇）到正极侧导体（正极平面与接正极的导电簇）的最短距离 [m]（ADR-054）。
 
     `sides` 取 `conducting_clusters` 的结果。有贯穿通路时为 0；否则不小于连通距离 r_c，降到 r_c 以下即连通。
     """
     if np.any(sides == 2):
         return 0.0
-    cathode, anode = positions[sides == 0], positions[sides == 1]
+    negative, positive = positions[sides == 0], positions[sides == 1]
     gap = device.Lz
-    if cathode.size:
-        gap = min(gap, device.Lz - float(cathode[:, 2].max()))
-    if anode.size:
-        gap = min(gap, float(anode[:, 2].min()))
-    if cathode.size and anode.size:
+    if negative.size:
+        gap = min(gap, device.Lz - float(negative[:, 2].max()))
+    if positive.size:
+        gap = min(gap, float(positive[:, 2].min()))
+    if negative.size and positive.size:
         box = np.array([device.Lx, device.Ly, 4.0 * device.Lz])  # 同 `_maximal_packing`：xy 周期，z 不回绕
-        distance, _ = cKDTree(np.mod(anode, box), boxsize=box).query(np.mod(cathode, box))
+        distance, _ = cKDTree(np.mod(positive, box), boxsize=box).query(np.mod(negative, box))
         gap = min(gap, float(distance.min()))
     return gap
 
@@ -672,7 +672,7 @@ class TDDBResult:
 
     第 k 条记录是第 k 次生成之后的输运稳态（k = 0 为 t = 0 的初始缺陷集合），电流在
     [time[k], time[k+1]) 上保持不变，最后一条保持到 `end_time`。电流均为净值，正号 = 电子由
-    阴极流向阳极。击穿时最后一条记录就是贯穿通路形成的状态，时刻为 t_BD，电流含细丝电流（ADR-054）。
+    负极流向正极。击穿时最后一条记录就是贯穿通路形成的状态，时刻为 t_BD，电流含细丝电流（ADR-054）。
     """
 
     voltage: float  # [V]
@@ -684,7 +684,7 @@ class TDDBResult:
     transport_current: np.ndarray  # (K,) 内层输运（平均场稳态）的电流 [A]
     by_mechanism: Dict[str, np.ndarray]  # 内层输运各机制 (K,) [A]
     filament_current: np.ndarray  # (K,) 贯穿通路的细丝电流 G₀·V [A]，击穿记录之前为 0（ADR-054）
-    conductor_gap: np.ndarray  # (K,) 阴极侧与阳极侧导体的最短距离 [m]，击穿记录为 0（`conductor_gap`）
+    conductor_gap: np.ndarray  # (K,) 负极侧与正极侧导体的最短距离 [m]，击穿记录为 0（`conductor_gap`）
     # (K,) 这一状态下全部前驱位点的总生成速率 ΣG [1/s]；击穿记录不求生成率，记 NaN
     generation_rate: np.ndarray
     n_precursors: np.ndarray  # (K,) 这一状态下还没断键的前驱位点数
@@ -797,7 +797,7 @@ def run_tddb(
             )
             effective = transport_temperature(solver, temperature_field, defects.positions, heat.defect, ambient)
             peak = float(temperature_field.max())
-        # §6.3（ADR-054）：阴极侧与阳极侧导电簇连通即击穿，这一状态的电流加上细丝的 G₀·V，不再求生成率
+        # §6.3（ADR-054）：负极侧与正极侧导电簇连通即击穿，这一状态的电流加上细丝的 G₀·V，不再求生成率
         sides = conducting_clusters(defects.positions, device, tddb.percolation_distance)
         spanning = bool(np.any(sides == 2))
         filament = _QUANTUM_CONDUCTANCE * sim.voltage if spanning else 0.0

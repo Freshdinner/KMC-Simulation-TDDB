@@ -50,12 +50,12 @@ device:
   barrier_height_eV: 1.74
 
 electrodes:
-  cathode: &electrode
+  negative: &electrode
     name: TiN
     work_function_eV: 4.6
     effective_mass_me: 1.0
     fermi_energy_eV: 5.0
-  anode: *electrode
+  positive: *electrode
 
 simulation:
   # 应力电压与温度待实验数据确定（第 1 节"待确认"），先取 3.6 V / 25 °C
@@ -108,7 +108,7 @@ tddb:
   # 前驱位点不设浓度（6.1，ADR-055）：t = 0 在 z ∈ [0.26, 7.74] nm 的可采样窗口里按上面的 min_separation_nm
   # 做最大随机堆积，直到再也放不下一个位点（约 4.3×10²² cm⁻³，50×50 nm 盒子约 80 万个），每个位点断键一次就用掉
   # r_c：导电通路的连通距离（6.3，ADR-054/055）。O 空位间距 < r_c 连成导电簇，离电极平面 < r_c 的空位接到该电极，
-  # 接电极的导电簇与该电极等电位；阴极侧与阳极侧导电簇连通（贯穿通路）即击穿，这一刻就是 t_BD，电流加上
+  # 接电极的导电簇与该电极等电位；负极侧与正极侧导电簇连通（贯穿通路）即击穿，这一刻就是 t_BD，电流加上
   # 细丝的 G₀·V（3.6 V 下 0.28 mA）。0.3 nm 略大于 O–O 间距，只有紧挨着的空位才连通
   percolation_distance_nm: 0.3
   # k_TH：ZrO₂ 热导率（式 T14，ADR-040）。删掉这一项即等温运行

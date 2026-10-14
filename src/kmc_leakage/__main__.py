@@ -62,11 +62,11 @@ def _report(result: SimulationResult) -> None:
         share = result.by_defect[i] / result.current if result.current else 0.0
         typer.echo("    #{:<3d} z = {:5.2f} nm   占比 {:>8.3%}".format(int(i), z_nm, share))
     typer.echo(
-        "  三估计量：J_条件 = {:.3e}，J_直接 = {:.3e}，J_数事件+R1 = {:.3e} A/cm²（阳极事件 {} 次）".format(
+        "  三估计量：J_条件 = {:.3e}，J_直接 = {:.3e}，J_数事件+R1 = {:.3e} A/cm²（正极事件 {} 次）".format(
             result.current * to_density,
             result.current_direct * to_density,
             result.current_counts_total * to_density,
-            result.n_anode_events,
+            result.n_positive_events,
         )
     )
     if result.n_fast_traps:
@@ -336,7 +336,7 @@ def _report_tddb(result: TDDBResult) -> None:
     """打印一条 TDDB 瞬态轨迹的摘要。"""
     density = result.current_density * _PER_CM2
     reasons = {
-        "breakdown": "击穿（阴极侧与阳极侧导电簇连通，形成贯穿通路），t_end 即 t_BD",
+        "breakdown": "击穿（负极侧与正极侧导电簇连通，形成贯穿通路），t_end 即 t_BD",
         "max_generated": "生成空位数达到上限",
         "stop_time": "应力时间达到上限",
         "no_generation": "总生成率为 0（前驱用完或 N_T = 0），电流保持最后一条记录的值",
@@ -353,7 +353,7 @@ def _report_tddb(result: TDDBResult) -> None:
     typer.echo("  J(t=0) = {:.4e} A/cm²   J(t_end) = {:.4e} A/cm²".format(density[0], density[-1]))
     nano = constants.nano
     typer.echo(
-        "  导电簇：阴极侧与阳极侧导体的最短距离 t = 0 为 {:.2f} nm，终态 {:.2f} nm".format(
+        "  导电簇：负极侧与正极侧导体的最短距离 t = 0 为 {:.2f} nm，终态 {:.2f} nm".format(
             result.conductor_gap[0] / nano, result.conductor_gap[-1] / nano
         )
     )

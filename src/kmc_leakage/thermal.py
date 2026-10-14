@@ -4,7 +4,7 @@
 TDDB 的编号，与 docs/rate_equations.md 的 R1–R8 不对应。
 
 **功率（式 T13）**：`heat_release` 在内层输运稳态上逐事件累加 ΔE·R——ΔE 是一次事件里电子
-放给晶格的能量，R 是该事件在稳态下的发生率。能量零点是阴极费米能级，电极侧取各自的费米
+放给晶格的能量，R 是该事件在稳态下的发生率。能量零点是负极费米能级，电极侧取各自的费米
 能级 μ。按事件类型：
 
 - R2/R3（弹性）：电子在陷阱能级 E 处隧穿，陷阱处不放热；电极里放出 μ − E（俘获）或
@@ -12,8 +12,8 @@ TDDB 的编号，与 docs/rate_equations.md 的 R1–R8 不对应。
 - R4/R5（多声子，p 个声子）：电子在 E + p·ℏω 处离开/进入电极，俘获时陷阱放出 p·ℏω、
   逃逸时陷阱吸收 p·ℏω。按声子数加权的求和与速率走同一套公式
   （`KMCSimulation._electrode_blocks` 的 `weights` 参数）。
-- R8（PF 发射）：陷阱吸收 E_D 把电子送到局部导带底；导带电子按引擎口径"立即被阳极收集"
-  （docs/rate_equations.md），它的能量放进阳极。
+- R8（PF 发射）：陷阱吸收 E_D 把电子送到局部导带底；导带电子按引擎口径"立即被正极收集"
+  （docs/rate_equations.md），它的能量放进正极。
 - R7（陷阱间跃迁 a→b）：放出的能量平分给两端陷阱。
 
 速率与内层簇级平均场走同一套（`mean_field.mean_field_rates`，ADR-038），一次 a→b 跃迁的放热
@@ -68,8 +68,8 @@ class HeatRelease:
     """内层输运稳态下单位时间放出的热量 [W]（式 T13）。负值表示从晶格吸热。"""
 
     defect: np.ndarray  # (N,) 各缺陷处放给介质晶格的功率
-    cathode: float  # 阴极里放出的功率
-    anode: float  # 阳极里放出的功率
+    negative: float  # 负极里放出的功率
+    positive: float  # 正极里放出的功率
 
     @property
     def dielectric(self) -> float:
@@ -83,10 +83,10 @@ def _electrode_event_heat(
     ED: np.ndarray,
     blocks: np.ndarray,
     phonon: np.ndarray,
-    fermi_cathode: float,
-    fermi_anode: float,
+    fermi_negative: float,
+    fermi_positive: float,
 ):
-    """电极事件（R2–R5 两侧与 R8）的放热 (陷阱处, 阴极里, 阳极里) [W]。
+    """电极事件（R2–R5 两侧与 R8）的放热 (陷阱处, 负极里, 正极里) [W]。
 
     `blocks` 是电极速率块，`phonon` 是按 p·ℏω 加权的同一组块（只用 R4/R5 四块）；`occupied`
     是占据（平均场的分数占据，或簇内组态的 0/1）。数组形状逐元素对应，块的第一维是 9 个
@@ -101,13 +101,13 @@ def _electrode_event_heat(
     trap = empty * (phonon[_B_R4C] + phonon[_B_R4A]) - occupied * (
         phonon[_B_R5C] + phonon[_B_R5A] + ED * pf
     )
-    cathode = empty * ((fermi_cathode - energy) * capture_c - phonon[_B_R4C]) + occupied * (
-        (energy - fermi_cathode) * escape_c + phonon[_B_R5C]
+    negative = empty * ((fermi_negative - energy) * capture_c - phonon[_B_R4C]) + occupied * (
+        (energy - fermi_negative) * escape_c + phonon[_B_R5C]
     )
-    anode = empty * ((fermi_anode - energy) * capture_a - phonon[_B_R4A]) + occupied * (
-        (energy - fermi_anode) * escape_a + phonon[_B_R5A] + (energy + ED - fermi_anode) * pf
+    positive = empty * ((fermi_positive - energy) * capture_a - phonon[_B_R4A]) + occupied * (
+        (energy - fermi_positive) * escape_a + phonon[_B_R5A] + (energy + ED - fermi_positive) * pf
     )
-    return trap, cathode, anode
+    return trap, negative, positive
 
 
 def heat_release(sim: KMCSimulation, occupancy: np.ndarray) -> HeatRelease:
@@ -118,15 +118,15 @@ def heat_release(sim: KMCSimulation, occupancy: np.ndarray) -> HeatRelease:
     """
     n = sim.n_defects
     if n == 0:
-        return HeatRelease(defect=np.zeros(0), cathode=0.0, anode=0.0)
+        return HeatRelease(defect=np.zeros(0), negative=0.0, positive=0.0)
     p = np.asarray(occupancy, dtype=float)
     ED = sim.defects.ED
-    fermi = (sim._fermi_cathode, sim._fermi_anode)
+    fermi = (sim._fermi_negative, sim._fermi_positive)
     weights = sim._phonon_weights * sim._phonon_offsets  # L_p·p·ℏω
 
     rates = mean_field_rates(sim, p, weights)
     energy, cluster_of = rates.energy, rates.cluster_of
-    trap, cathode, anode = _electrode_event_heat(p, energy, ED, rates.blocks, rates.weighted, *fermi)
+    trap, negative, positive = _electrode_event_heat(p, energy, ED, rates.blocks, rates.weighted, *fermi)
 
     # 各陷阱占据时与空时能级的期望 ⟨n·E⟩、⟨(1−n)·E⟩：孤立陷阱取平均场，簇成员下面按组态覆盖
     occupied_energy = p * energy
@@ -140,10 +140,10 @@ def heat_release(sim: KMCSimulation, occupancy: np.ndarray) -> HeatRelease:
     for table, pi in zip(rates.tables, rates.distributions):
         c = table.cluster
         members, states, e, rate = c.members, c.states, table.energy, table.hop
-        trap_s, cathode_s, anode_s = _electrode_event_heat(
+        trap_s, negative_s, positive_s = _electrode_event_heat(
             states.astype(float), e[:, members], ED[members], table.block, table.weighted, *fermi
         )
-        trap[members], cathode[members], anode[members] = pi @ trap_s, pi @ cathode_s, pi @ anode_s
+        trap[members], negative[members], positive[members] = pi @ trap_s, pi @ negative_s, pi @ positive_s
 
         # 簇内跃迁：完整事件能量差 −ΔH = E_a − E_b + U_ab
         ga, gb = members[c.intra_a], members[c.intra_b]
@@ -173,7 +173,7 @@ def heat_release(sim: KMCSimulation, occupancy: np.ndarray) -> HeatRelease:
     deposit((a, b), rates.hop[shared] * ((1.0 - p[b]) * occupied_energy[a] - p[a] * empty_energy[b]))
 
     return HeatRelease(
-        defect=trap + hop_heat, cathode=float(cathode.sum()), anode=float(anode.sum())
+        defect=trap + hop_heat, negative=float(negative.sum()), positive=float(positive.sum())
     )
 
 

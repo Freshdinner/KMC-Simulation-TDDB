@@ -35,7 +35,7 @@ materials:
     attempt_frequency_s: 1.0e13
 
 layers:
-  - material: ZrO2       # 阴极侧 ZrO₂
+  - material: ZrO2       # 负极侧 ZrO₂
     thickness_nm: 2.5
     defects: &zro2_defects
       concentration_cm3: 1.0e19
@@ -55,7 +55,7 @@ layers:
   - material: Al2O3      # 阻挡层：体相无缺陷，不配 defects 段
     thickness_nm: 2.0
 
-  - material: ZrO2       # 阳极侧 ZrO₂，与阴极侧同参数
+  - material: ZrO2       # 正极侧 ZrO₂，与负极侧同参数
     thickness_nm: 3.5
     defects: *zro2_defects
 
@@ -78,12 +78,12 @@ device:
   barrier_height_eV: 1.74   # 接触势垒直接指定
 
 electrodes:
-  cathode: &electrode
+  negative: &electrode
     name: TiN
     work_function_eV: 4.6
     effective_mass_me: 1.0
     fermi_energy_eV: 5.0
-  anode: *electrode
+  positive: *electrode
 
 simulation:
   voltage_V: 3.0          # 被 sweep 覆盖，仅作占位

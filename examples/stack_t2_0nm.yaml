@@ -50,12 +50,12 @@ device:
   barrier_height_eV: 1.74   # 接触势垒直接指定，三份配置一致
 
 electrodes:
-  cathode: &electrode
+  negative: &electrode
     name: TiN
     work_function_eV: 4.6
     effective_mass_me: 1.0
     fermi_energy_eV: 5.0
-  anode: *electrode
+  positive: *electrode
 
 simulation:
   voltage_V: 3.0          # 被 sweep 覆盖，仅作占位

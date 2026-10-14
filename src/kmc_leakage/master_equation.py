@@ -5,7 +5,7 @@ p̂=C/(C+E) 代入净通量，是"局部稳态近似"，在耦合跃迁网络里
 下的期望通量（review F04 给出 25% 反例）。KMC 现在对强耦合簇改用簇内条件稳态
 （ADR-022，`kmc._trap_flux`），孤立簇上与这里的精确解一致。这里对**可处理规模**的小体系（N 个
 陷阱 → 2^N 个组态）枚举完整状态空间、组装连续时间马氏链的生成矩阵、直接解
-稳态分布 π，再算真实稳态阳极通量，作为独立基准与条件通量估计量对照。
+稳态分布 π，再算真实稳态正极通量，作为独立基准与条件通量估计量对照。
 
 生成矩阵按 KMC 事件表同口径构造：单陷阱翻转（俘获/逃逸/PF）与两陷阱交换
 （跃迁），每个组态的速率直接调 `KMCSimulation._rates`，因此这是 KMC 采样的
@@ -30,9 +30,9 @@ from .kmc import (
     KMCSimulation,
 )
 
-# 阳极侧的逃逸/发射块（对阳极记 +1 电子）与俘获块（记 -1 电子）
-_ANODE_ESCAPE_BLOCKS = (_B_R3A, _B_R5A, _B_R8)
-_ANODE_CAPTURE_BLOCKS = (_B_R2A, _B_R4A)
+# 正极侧的逃逸/发射块（对正极记 +1 电子）与俘获块（记 -1 电子）
+_POSITIVE_ESCAPE_BLOCKS = (_B_R3A, _B_R5A, _B_R8)
+_POSITIVE_CAPTURE_BLOCKS = (_B_R2A, _B_R4A)
 
 
 def transition_generator(sim: KMCSimulation) -> Tuple[np.ndarray, np.ndarray]:
@@ -83,22 +83,22 @@ def stationary_distribution(Q: np.ndarray) -> np.ndarray:
     return np.linalg.solve(matrix, rhs)
 
 
-def _anode_electron_rate(blocks: np.ndarray, occ: np.ndarray) -> float:
-    """给定组态下真实的阳极净电子速率 Σ_i[占据·逃逸 − 空·俘获]（1/s）。
+def _positive_electron_rate(blocks: np.ndarray, occ: np.ndarray) -> float:
+    """给定组态下真实的正极净电子速率 Σ_i[占据·逃逸 − 空·俘获]（1/s）。
 
     这是"实际占据下的瞬时通量"，其稳态期望 = 真实稳态电流/q（不含 R1）。
     """
     occf = occ.astype(float)
-    escape = sum(blocks[b] for b in _ANODE_ESCAPE_BLOCKS)
-    capture = sum(blocks[b] for b in _ANODE_CAPTURE_BLOCKS)
+    escape = sum(blocks[b] for b in _POSITIVE_ESCAPE_BLOCKS)
+    capture = sum(blocks[b] for b in _POSITIVE_CAPTURE_BLOCKS)
     return float(np.sum(occf * escape - (1.0 - occf) * capture))
 
 
 def steady_state_flux(sim: KMCSimulation) -> dict:
-    """小体系的真实稳态阳极通量与条件通量估计量的期望，作独立对照。
+    """小体系的真实稳态正极通量与条件通量估计量的期望，作独立对照。
 
     返回 dict：
-    - `exact_flux` [1/s]：主方程稳态下真实阳极净电子速率的期望（= 真实 I_trap/q）
+    - `exact_flux` [1/s]：主方程稳态下真实正极净电子速率的期望（= 真实 I_trap/q）
     - `conditional_flux` [1/s]：KMC 所用估计量（单陷阱条件通量，强耦合簇成员换成
       簇内条件稳态，`KMCSimulation._trap_flux`）在同一 π 下的期望（KMC `current` 的极限）
     - `exact_current` / `conditional_current` [A]：上二者 ×q（陷阱相关部分，不含 R1）
@@ -114,7 +114,7 @@ def steady_state_flux(sim: KMCSimulation) -> dict:
     for s in range(occs.shape[0]):
         occ = occs[s]
         blocks, hop = sim._rates(occ)
-        exact[s] = _anode_electron_rate(blocks, occ)
+        exact[s] = _positive_electron_rate(blocks, occ)
         tat, pf, _ = sim._trap_flux(occ, blocks, hop)
         conditional[s] = float((tat + pf).sum())
 

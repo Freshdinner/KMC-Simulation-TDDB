@@ -19,7 +19,7 @@ M_E = constants.electron_mass
 
 def _band(device, voltage, n):
     z = np.linspace(0.0, device.Lz, n)
-    return z, device.barrier(device.cathode) - constants.elementary_charge * voltage * z / device.Lz
+    return z, device.barrier(device.negative) - constants.elementary_charge * voltage * z / device.Lz
 
 
 def test_trap_path_points_are_converged():

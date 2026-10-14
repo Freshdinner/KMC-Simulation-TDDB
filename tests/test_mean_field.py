@@ -10,7 +10,7 @@
 - Anderson 混合走不动时牛顿法接手（ADR-048）：收敛到同一个不动点；ADR-046 what-if 里 Anderson 不收敛的状态
   （膜体内致密的空位网络）现在收敛；
 - 按机制、按缺陷分解之和 = 总电流；无缺陷时只剩 R1；
-- 电流连续（ADR-038）：强耦合分量被切开的致密体系上，阴极净注入 = 阳极净收集；
+- 电流连续（ADR-038）：强耦合分量被切开的致密体系上，负极净注入 = 正极净收集；
 - 零偏压平衡（ADR-038）：逐陷阱平均场里每一对陷阱的正反向通量相等（KMC 的 −U_ab 口径做不到）；
   簇–孤立边界按簇内组态求速率，零偏压下没有净通量。
 """
@@ -74,16 +74,16 @@ def _per_trap_flux(sim, p):
 
 
 def _electrode_net_flux(sim, p):
-    """各陷阱的 (阴极净注入, 阳极净收集) [1/s]：孤立陷阱按平均占据，簇成员按簇内稳态分布。"""
+    """各陷阱的 (负极净注入, 正极净收集) [1/s]：孤立陷阱按平均占据，簇成员按簇内稳态分布。"""
     rates = mean_field_rates(sim, p)
     b = rates.blocks
-    cathode = (1.0 - p) * (b[_B_R2C] + b[_B_R4C]) - p * (b[_B_R3C] + b[_B_R5C])
-    anode = p * (b[_B_R3A] + b[_B_R5A] + b[_B_R8]) - (1.0 - p) * (b[_B_R2A] + b[_B_R4A])
+    negative = (1.0 - p) * (b[_B_R2C] + b[_B_R4C]) - p * (b[_B_R3C] + b[_B_R5C])
+    positive = p * (b[_B_R3A] + b[_B_R5A] + b[_B_R8]) - (1.0 - p) * (b[_B_R2A] + b[_B_R4A])
     for table, pi in zip(rates.tables, rates.distributions):
         members, n, block = table.cluster.members, table.cluster.states.astype(float), table.block
-        cathode[members] = pi @ ((1.0 - n) * (block[_B_R2C] + block[_B_R4C]) - n * (block[_B_R3C] + block[_B_R5C]))
-        anode[members] = pi @ (n * (block[_B_R3A] + block[_B_R5A] + block[_B_R8]) - (1.0 - n) * (block[_B_R2A] + block[_B_R4A]))
-    return cathode, anode
+        negative[members] = pi @ ((1.0 - n) * (block[_B_R2C] + block[_B_R4C]) - n * (block[_B_R3C] + block[_B_R5C]))
+        positive[members] = pi @ (n * (block[_B_R3A] + block[_B_R5A] + block[_B_R8]) - (1.0 - n) * (block[_B_R2A] + block[_B_R4A]))
+    return negative, positive
 
 
 @pytest.fixture(scope="module")
@@ -286,7 +286,7 @@ def test_empty_device_is_r1_only():
 
 def test_current_is_continuous_across_split_components(split):
     """强耦合分量超过簇大小上限被切开后，簇–簇、簇–孤立边界上的跃迁仍是两侧共用的同一组速率：
-    不动点处每个陷阱粒子数守恒，阴极净注入 = 阳极净收集 = I_陷阱/q（ADR-038）。
+    不动点处每个陷阱粒子数守恒，负极净注入 = 正极净收集 = I_陷阱/q（ADR-038）。
 
     原来簇一侧按组态、簇外一侧按平均占据各算一遍边界通量，Phase 4 终态上两者差 258 倍（ADR-037）。
     """
@@ -298,10 +298,10 @@ def test_current_is_continuous_across_split_components(split):
     a, b = cluster_of[sim._pairs.a], cluster_of[sim._pairs.b]
     assert np.any((a >= 0) & (b >= 0) & (a != b)) and np.any((a >= 0) != (b >= 0))
 
-    cathode, anode = _electrode_net_flux(sim, result.occupancy)
+    negative, positive = _electrode_net_flux(sim, result.occupancy)
     trap_current = result.by_mechanism["tat"] + result.by_mechanism["pf"]
-    assert anode.sum() * Q == pytest.approx(trap_current, rel=1e-12)
-    assert cathode.sum() == pytest.approx(anode.sum(), rel=1e-8)
+    assert positive.sum() * Q == pytest.approx(trap_current, rel=1e-12)
+    assert negative.sum() == pytest.approx(positive.sum(), rel=1e-8)
 
 
 def test_per_trap_mean_field_has_no_circulation_at_zero_bias():
@@ -312,7 +312,7 @@ def test_per_trap_mean_field_has_no_circulation_at_zero_bias():
     陷阱取深能级（E_D ≈ 1.75 eV）：R8 没有反向通道，浅能级陷阱零偏压下占据只有 1e-10、陷阱间通量与
     R8 的伪电流同量级，会盖住这里要看的平衡。
     """
-    sim = _cathode_cluster_with_free_neighbour(0.0)
+    sim = _negative_cluster_with_free_neighbour(0.0)
     sim._clusters = []
     result = solve_mean_field(sim)
     assert result.converged
@@ -333,8 +333,8 @@ def test_per_trap_mean_field_has_no_circulation_at_zero_bias():
     assert np.max(net_over_gross(sim._hop_rates(energy))) > 0.1
 
 
-def _cathode_cluster_with_free_neighbour(voltage):
-    """阴极侧两个强耦合陷阱 #0/#1（0.8 nm）成簇，#2 在 #0 旁 1.0 nm、按耦合阈值留在簇外，三者都是深能级
+def _negative_cluster_with_free_neighbour(voltage):
+    """负极侧两个强耦合陷阱 #0/#1（0.8 nm）成簇，#2 在 #0 旁 1.0 nm、按耦合阈值留在簇外，三者都是深能级
     （E_D ≈ 1.75 eV，零偏压下占据 0.4–0.9），簇–孤立边界跃迁约 3e5 s⁻¹。"""
     material = make_material()
     stack = DielectricStack.single(material, thickness=8e-9)
@@ -354,7 +354,7 @@ def test_cluster_to_free_trap_boundary_is_detailed_balanced_at_zero_bias():
     里面含成员自身的电荷，同一成员的俘获（空、带 +e）与逃逸（占据、中性）走的势垒略有不同，在簇内链里
     留下 1e-3 量级的非平衡——这是引擎原有的口径（KMC 也是），与边界跃迁无关，这里把它单独拿掉。
     """
-    sim = _cathode_cluster_with_free_neighbour(0.0)
+    sim = _negative_cluster_with_free_neighbour(0.0)
     sim.coupling.phi_bar[:] = 0.0
     assert sim.cluster_members[0].tolist() == [0, 1] and len(sim.cluster_members) == 1
     result = solve_mean_field(sim)

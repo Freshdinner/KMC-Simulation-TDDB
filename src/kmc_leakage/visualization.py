@@ -277,9 +277,9 @@ def plot_band_diagram(
         axes.axvline(interface, color=_LAYER_EDGE_COLOR, ls="--", lw=0.8)
     # 电极费米能级画在介质两侧的电极区域内
     margin = 0.12 * lz
-    axes.hlines(profile.E_F_cathode / _EV, -margin, 0.0, color="k", lw=2.0)
+    axes.hlines(profile.E_F_negative / _EV, -margin, 0.0, color="k", lw=2.0)
     axes.hlines(
-        profile.E_F_anode / _EV, lz, lz + margin, color="k", lw=2.0, label=r"electrode $E_F$"
+        profile.E_F_positive / _EV, lz, lz + margin, color="k", lw=2.0, label=r"electrode $E_F$"
     )
     axes.axvline(0.0, color="0.5", lw=0.8)
     axes.axvline(lz, color="0.5", lw=0.8)
@@ -296,7 +296,7 @@ def plot_band_diagram(
 
     axes.set_xlim(-margin, lz + margin)
     axes.set_xlabel("z (nm)")
-    axes.set_ylabel("E (eV), zero at cathode $E_F$")
+    axes.set_ylabel("E (eV), zero at negative-electrode $E_F$")
     axes.set_title("Band diagram (U = {:.2f} V)".format(profile.voltage))
     axes.legend(loc="best", fontsize=9)
     figure.tight_layout()

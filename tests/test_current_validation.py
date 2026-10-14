@@ -39,13 +39,13 @@ def _run(**kwargs):
 # 全局电荷守恒（F04）
 # --------------------------------------------------------------------------
 def test_global_charge_conservation_identity():
-    """(I_C − I_A)·Δt = q·ΔN_inside：阴极净注入 − 阳极净收集 = 器件内电子数变化。
+    """(I_C − I_A)·Δt = q·ΔN_inside：负极净注入 − 正极净收集 = 器件内电子数变化。
 
-    这是逐事件记账的恒等式：只要阴/阳极事件都数全，两边精确相等（整数）。
+    这是逐事件记账的恒等式：只要阴/正极事件都数全，两边精确相等（整数）。
     """
     result = _run(voltage=3.0, n_events=2000, seed=5)
     assert result.elapsed_time > 0.0
-    lhs = (result.current_counts_cathode - result.current_counts) * result.elapsed_time
+    lhs = (result.current_counts_negative - result.current_counts) * result.elapsed_time
     assert lhs == pytest.approx(Q * result.delta_n_inside, rel=1e-9, abs=1e-30)
     # ΔN_inside 也确实是个整数（器件内只有陷阱电子，无导带态）
     assert isinstance(result.delta_n_inside, int)
@@ -100,7 +100,7 @@ def test_batch_inconsistency_fails_validation():
     """批次相对标准误超过上限 → 未通过验证并给出原因；其余判据达标时仅此一条。"""
     args = dict(
         n_defects=10, forward=True, elapsed=1e-6, measured_events=3200,
-        occ_mean_abs_dev=0.0, n_anode_events=0, current=1e-15, current_counts_total=0.0,
+        occ_mean_abs_dev=0.0, n_positive_events=0, current=1e-15, current_counts_total=0.0,
     )
     ok, notes = _validate_result(batch_rel_error=0.5 * _BATCH_REL_TOL, **args)
     assert ok is True and notes == ()
@@ -237,5 +237,5 @@ def test_r8_uses_interface_sided_field():
     # 界面缺陷（index 2,3）单侧 vs 中心差分场不同；体缺陷（0,1）相同
     assert not np.allclose(field_sided[2:], field_central[2:], rtol=1e-6)
     assert np.allclose(field_sided[:2], field_central[:2], rtol=1e-12, atol=0.0)
-    # R8_eff 跟着这份场走：界面缺陷的 R8 随场改变（阳极侧界面1 P_A=1，纯粹是场变）
+    # R8_eff 跟着这份场走：界面缺陷的 R8 随场改变（正极侧界面1 P_A=1，纯粹是场变）
     assert not np.isclose(r8_sided[3], r8_central[3], rtol=1e-6)

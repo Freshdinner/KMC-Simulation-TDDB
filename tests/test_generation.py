@@ -105,12 +105,12 @@ def test_single_electron_capture_rate_matches_engine_r2_plus_r4(voltage):
     barrier_c, barrier_a = sim._path_barriers(conduction_band_edge(device, sim._z_nodes, phi_bar))
     electrodes = (
         CaptureElectrode(
-            sim._path_cathode, barrier_c, sim._m_di_path_cathode,
-            sim._fermi_cathode, sim._band_bottom[0], device.cathode.effective_mass,
+            sim._path_negative, barrier_c, sim._m_di_path_negative,
+            sim._fermi_negative, sim._band_bottom[0], device.negative.effective_mass,
         ),
         CaptureElectrode(
-            sim._path_anode, barrier_a, sim._m_di_path_anode,
-            sim._fermi_anode, sim._band_bottom[1], device.anode.effective_mass,
+            sim._path_positive, barrier_a, sim._m_di_path_positive,
+            sim._fermi_positive, sim._band_bottom[1], device.positive.effective_mass,
         ),
     )
 

@@ -129,7 +129,7 @@ def test_band_on_path_keeps_true_step_not_ramp():
 
 
 def test_r1_barrier_top_sits_in_blocking_layer_at_low_bias():
-    """低偏压下 ZAZ 的 R1 势垒顶落在 Al₂O₃ 内（比阴极 E_B 高一个 ΔE_C）。
+    """低偏压下 ZAZ 的 R1 势垒顶落在 Al₂O₃ 内（比负极 E_B 高一个 ΔE_C）。
 
     分段势垒保留台阶后，np.max(barrier) 自动落到阻挡层顶——阈值切分与 RS 对照式
     同口径（ADR-012）。这里用 R1 的分段势垒直接检查最高点确实抬到了 3.2 eV 附近。
@@ -310,7 +310,7 @@ def test_rates_consume_per_defect_material_params():
     )
     from kmc_leakage.kmc import _B_R8
 
-    # R8_eff = P_A·R8：阴极侧缺陷（层 0，穿 Al₂O₃）P_A<1，阳极侧缺陷（层 2）P_A=1
+    # R8_eff = P_A·R8：负极侧缺陷（层 0，穿 Al₂O₃）P_A<1，正极侧缺陷（层 2）P_A=1
     assert sim._pf_collection[0] < 1.0 and sim._pf_collection[1] == 1.0
     assert np.allclose(blocks[_B_R8], sim._pf_collection * expected, rtol=1e-12, atol=0.0)
     # 两缺陷 ε_opt/ν 不同 -> R8 不同（真的按缺陷取，不是全体一份）

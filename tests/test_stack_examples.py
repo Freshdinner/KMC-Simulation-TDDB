@@ -89,8 +89,8 @@ def test_t2_series_differs_only_in_layer_structure(configs):
         assert config.device.Lx == reference.device.Lx
         assert config.device.Ly == reference.device.Ly
         assert config.device.barrier_height == reference.device.barrier_height
-        assert config.device.cathode == reference.device.cathode
-        assert config.device.anode == reference.device.anode
+        assert config.device.negative == reference.device.negative
+        assert config.device.positive == reference.device.positive
         assert config.simulation.grid == reference.simulation.grid
         assert config.simulation.n_events == reference.simulation.n_events
         assert np.array_equal(config.sweep.voltages, reference.sweep.voltages)
@@ -151,7 +151,7 @@ def test_t2_zero_config_matches_the_single_layer_baseline_config():
     assert t2_zero.stack.layers[0].thickness == baseline.stack.layers[0].thickness
     assert (t2_zero.Lx, t2_zero.Ly) == (baseline.Lx, baseline.Ly)
     assert t2_zero.barrier_height == baseline.barrier_height
-    assert t2_zero.cathode == baseline.cathode and t2_zero.anode == baseline.anode
+    assert t2_zero.negative == baseline.negative and t2_zero.positive == baseline.positive
 
 
 def test_t2_zero_reproduces_the_single_layer_baseline_numerically():
@@ -204,7 +204,7 @@ def test_uniform_three_layer_potential_and_band_edge_match_single_layer():
     """
     reference = _load(2).device
     zro2 = reference.stack.materials["ZrO2"]
-    electrode = reference.cathode
+    electrode = reference.negative
     grid = _DEGENERACY_SIM.grid
 
     single = DeviceConfig(

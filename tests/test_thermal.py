@@ -75,7 +75,7 @@ def test_power_map_conserves_total_power():
     ids=["single-cluster", "per-trap-2V", "per-trap-3V"],
 )
 def test_heat_release_conserves_energy(build):
-    """介质 + 两侧电极的放热 = U·I_陷阱：电子从阴极费米能级走到阳极费米能级，每个放掉 qU。
+    """介质 + 两侧电极的放热 = U·I_陷阱：电子从负极费米能级走到正极费米能级，每个放掉 qU。
 
     逐陷阱平均场里每个陷阱在不动点处粒子数平衡，能级项逐陷阱相消；强耦合簇内由主方程稳态
     分布保证能量平衡。两者都严格成立，剩下的只是平均场收敛残差（相对 1e-10）。
@@ -84,7 +84,7 @@ def test_heat_release_conserves_energy(build):
     assert (len(sim.cluster_members) > 0) == (sim.n_defects == 2)
     result = solve_mean_field(sim)
     heat = heat_release(sim, result.occupancy)
-    total = heat.dielectric + heat.cathode + heat.anode
+    total = heat.dielectric + heat.negative + heat.positive
     assert total == pytest.approx(sim.sim.voltage * _trap_current(result), rel=1e-8)
 
 
@@ -113,7 +113,7 @@ def test_heat_release_with_clusters_and_environment_conserves_energy(build):
     assert len(sim.cluster_members) > 0
     result = solve_mean_field(sim)
     heat = heat_release(sim, result.occupancy)
-    total = heat.dielectric + heat.cathode + heat.anode
+    total = heat.dielectric + heat.negative + heat.positive
     assert total == pytest.approx(sim.sim.voltage * _trap_current(result), rel=1e-8)
 
 

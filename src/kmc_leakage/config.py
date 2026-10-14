@@ -25,7 +25,7 @@ class ElectrodeMaterial:
     fermi_energy: float  # 费米能相对电极导带底的高度 [J]
 
     # fermi_energy 是 R2/R3 的 E1（"电极中电子总能量"）和 R4/R5 的 N_C
-    # （自由电子态密度 ∝ √E）所需的电极侧能量零点：全局能量零点取阴极
+    # （自由电子态密度 ∝ √E）所需的电极侧能量零点：全局能量零点取负极
     # 费米能级，电极导带底则位于 -fermi_energy 处。
 
 
@@ -291,8 +291,8 @@ class DeviceConfig:
 
     Lx: float  # [m]
     Ly: float  # [m]
-    cathode: ElectrodeMaterial
-    anode: ElectrodeMaterial
+    negative: ElectrodeMaterial
+    positive: ElectrodeMaterial
     stack: DielectricStack
     barrier_height: Optional[float] = None  # 显式指定的接触势垒 E_B [J]，None 表示推算
 
@@ -315,20 +315,20 @@ class DeviceConfig:
         """给定电极处的零场接触势垒 E_B [J]。
 
         显式配置的 barrier_height 优先；否则按能带对齐 E_B = Φ_m - χ 推算，χ
-        取该电极所接触那一层的材料（阴极→第一层，阳极→最后一层）。
+        取该电极所接触那一层的材料（负极→第一层，正极→最后一层）。
         """
         if self.barrier_height is not None:
             return self.barrier_height
-        contact_layer = self.stack.layers[0] if electrode is self.cathode else self.stack.layers[-1]
+        contact_layer = self.stack.layers[0] if electrode is self.negative else self.stack.layers[-1]
         return electrode.work_function - self.stack.material_of(contact_layer).electron_affinity
 
     def layer_band_references(self) -> np.ndarray:
-        """各层导带基准 B_ℓ 在全局能标（阴极费米能级为零点）上的位置 [J]。
+        """各层导带基准 B_ℓ 在全局能标（负极费米能级为零点）上的位置 [J]。
 
-        B_0 = 阴极接触势垒；B_ℓ = B_0 + 累积带阶（见 stack.band_offsets）。
+        B_0 = 负极接触势垒；B_ℓ = B_0 + 累积带阶（见 stack.band_offsets）。
         导带底剖面 E_C(z) = B_{ℓ(z)} - e·φ(z)（见 bands.py，review §4.1）。
         """
-        return self.barrier(self.cathode) + self.stack.band_offsets
+        return self.barrier(self.negative) + self.stack.band_offsets
 
     def band_reference_profile(self, z: np.ndarray) -> np.ndarray:
         """各 z 处所属层的导带基准 B_ℓ(z) [J]。
@@ -345,7 +345,7 @@ class DeviceConfig:
     def built_in_potential(self) -> float:
         """内建电势 [V]（加在 z=Lz 边界上），满足 q·V_bi = B_c + ΣΔE_C - B_a。
 
-        B_c/B_a 为阴/阳极接触势垒，ΣΔE_C 为累积带阶（review §4.1）。电子亲和能
+        B_c/B_a 为阴/正极接触势垒，ΣΔE_C 为累积带阶（review §4.1）。电子亲和能
         对齐时退化为 (Φ_c - Φ_a)/q；显式带阶覆盖会进入这个累积关系。单层且
         显式指定同一 E_B 时两界面势垒相同、无带阶，内建电势为 0。
         """
@@ -353,7 +353,7 @@ class DeviceConfig:
 
         total_offset = float(self.stack.band_offsets[-1])
         return (
-            self.barrier(self.cathode) + total_offset - self.barrier(self.anode)
+            self.barrier(self.negative) + total_offset - self.barrier(self.positive)
         ) / constants.elementary_charge
 
 
@@ -375,7 +375,7 @@ class GridConfig:
 class SimulationConfig:
     """单点仿真参数。"""
 
-    voltage: float  # [V]（加在阳极 z=Lz 上）
+    voltage: float  # [V]（加在正极 z=Lz 上）
     temperature: float  # [K]
     n_events: int = 20000
     burn_in_fraction: float = 0.2
@@ -426,7 +426,7 @@ class TDDBConfig:
     stop_time: float  # 应力时间上限 [s]
     # --- 击穿判据与热反馈（Phase 4，ADR-036/054）---
     # r_c：导电通路的连通距离 [m]。O 空位间距 < r_c 连成导电簇，离电极平面 < r_c 的空位接到该电极，接电极的
-    # 导电簇与该电极等电位；阴极侧与阳极侧导电簇连通（贯穿通路）即击穿，这一刻就是 t_BD（§6.3，ADR-054）
+    # 导电簇与该电极等电位；负极侧与正极侧导电簇连通（贯穿通路）即击穿，这一刻就是 t_BD（§6.3，ADR-054）
     percolation_distance: float
     # k_TH：介质热导率 [W/(m·K)]（式 T14）。None = 等温，温度固定为环境值（Phase 3 的口径）
     thermal_conductivity: Optional[float] = None

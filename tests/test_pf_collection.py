@@ -4,7 +4,7 @@
 - P_A 的 WKB 透射在带偏压的 Al₂O₃ 势垒（矩形/梯形/三角）上算，与解析闭式一致；
 - 0 ≤ P_A ≤ 1；
 - 位置感知：只有与收集电极之间隔着阻挡层的陷阱用 P_A，同侧立即收集 P_A=1；
-- 收集方向随偏压定（正向阳极、反偏阴极），非正向工况标"未通过验证"；
+- 收集方向随偏压定（正向正极、反偏负极），非正向工况标"未通过验证"；
 - 单层无阻挡层时 P_A≡1、R8_eff=R8，逐位退回原路径。
 """
 
@@ -96,10 +96,10 @@ def test_blocking_layer_detection():
 
 
 def _zaz_ensemble():
-    """ZAZ 上手搭 4 个缺陷：层0体、层2体、界面0（阴极侧）、界面1（阳极侧）。"""
+    """ZAZ 上手搭 4 个缺陷：层0体、层2体、界面0（负极侧）、界面1（正极侧）。"""
     positions = np.array([
-        [10e-9, 10e-9, 2e-9],   # 层 0 体（阴极侧 ZrO₂）
-        [10e-9, 10e-9, 7e-9],   # 层 2 体（阳极侧 ZrO₂）
+        [10e-9, 10e-9, 2e-9],   # 层 0 体（负极侧 ZrO₂）
+        [10e-9, 10e-9, 7e-9],   # 层 2 体（正极侧 ZrO₂）
         [20e-9, 20e-9, 4e-9],   # 界面 0（z₁），宿主层 0
         [30e-9, 30e-9, 5e-9],   # 界面 1（z₂），宿主层 2
     ])
@@ -127,27 +127,27 @@ def _zaz_sim(voltage):
 
 
 def test_pf_collection_is_position_aware_forward():
-    """正向：阴极侧（层0体 + 界面0）穿 Al₂O₃ → P_A<1；阳极侧（层2体 + 界面1）→ P_A=1。"""
+    """正向：负极侧（层0体 + 界面0）穿 Al₂O₃ → P_A<1；正极侧（层2体 + 界面1）→ P_A=1。"""
     sim = _zaz_sim(voltage=3.0)
     p = sim._pf_collection
-    assert p[0] < 1.0 and p[2] < 1.0  # 阴极侧
-    assert p[1] == 1.0 and p[3] == 1.0  # 阳极侧
+    assert p[0] < 1.0 and p[2] < 1.0  # 负极侧
+    assert p[1] == 1.0 and p[3] == 1.0  # 正极侧
     assert np.all((p >= 0.0) & (p <= 1.0))
     # 宿主层判定正确
     assert list(sim._defect_host_layers()) == [0, 2, 0, 2]
 
 
 def test_pf_collection_flips_under_reverse_bias():
-    """反偏：收集电极换到阴极，阳极侧陷阱改用 P_A、阴极侧立即收集（角色互换）。"""
+    """反偏：收集电极换到负极，正极侧陷阱改用 P_A、负极侧立即收集（角色互换）。"""
     sim = _zaz_sim(voltage=-3.0)  # 对称 ZAZ 下 V_bi=0，驱动电势 <0
     assert sim._pf_forward is False
     p = sim._pf_collection
-    assert p[0] == 1.0 and p[2] == 1.0  # 阴极侧现在立即收集
-    assert p[1] < 1.0 and p[3] < 1.0    # 阳极侧现在要穿 Al₂O₃
+    assert p[0] == 1.0 and p[2] == 1.0  # 负极侧现在立即收集
+    assert p[1] < 1.0 and p[3] < 1.0    # 正极侧现在要穿 Al₂O₃
 
 
 def test_r8_eff_folds_collection_probability():
-    """R8_eff = P_A·R8 折进事件表：阴极侧 R8 被压低，阳极侧不变。"""
+    """R8_eff = P_A·R8 折进事件表：负极侧 R8 被压低，正极侧不变。"""
     from kmc_leakage.kmc import _B_R8
     from kmc_leakage.rates import r8_pf_emission
 
