@@ -4,10 +4,15 @@
 用物理约束（细致平衡、互补占据因子等）。
 """
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 from scipy import constants
+from scipy.integrate import quad
 
+from conftest import make_device
+from kmc_leakage.bands import r1_band_bottom
 from kmc_leakage.rates import (
     barrier_maximum,
     effective_richardson_constant,
@@ -40,6 +45,7 @@ ED = 1.15 * EV
 EPS_OPT = 5.6
 M_DI = 1.2 * M_E
 T = 298.15
+BOTTOM = -5.0 * EV  # R1 的积分下限：费米能 5 eV 的同种电极、U ≥ 0 时就是负极导带底
 
 
 # ----------------------------------------------------------------------
@@ -92,7 +98,7 @@ def test_supply_function_vanishes_at_zero_bias_and_is_positive_otherwise():
 
 def test_r1_vanishes_at_zero_bias():
     z, band = _linear_band(1.74 * EV, 0.0)
-    tunnel, thermionic = r1_electrode_electrode(z, band, 2.5e-15, 0.0, T, M_E, M_DI)
+    tunnel, thermionic = r1_electrode_electrode(z, band, 2.5e-15, 0.0, T, M_E, M_DI, BOTTOM)
     assert tunnel == pytest.approx(0.0, abs=1e-30)
     assert thermionic == pytest.approx(0.0, abs=1e-30)
 
@@ -104,7 +110,7 @@ def test_r1_thermionic_part_matches_boltzmann_limit():
     """
     E_B, area, U = 1.74 * EV, 2.5e-15, 2.0
     z, band = _linear_band(E_B, U)
-    _, thermionic = r1_electrode_electrode(z, band, area, U, T, M_E, M_DI, n_points=512)
+    _, thermionic = r1_electrode_electrode(z, band, area, U, T, M_E, M_DI, BOTTOM, n_points=512)
     kT = KB * T
     expected = (
         area
@@ -119,13 +125,43 @@ def test_r1_thermionic_part_matches_boltzmann_limit():
 
 def test_r1_tunnel_part_grows_with_bias_and_thinner_barrier():
     z, band = _linear_band(1.74 * EV, 2.0)
-    low, _ = r1_electrode_electrode(z, band, 2.5e-15, 2.0, T, M_E, M_DI)
+    low, _ = r1_electrode_electrode(z, band, 2.5e-15, 2.0, T, M_E, M_DI, BOTTOM)
     z4, band4 = _linear_band(1.74 * EV, 4.0)
-    high, _ = r1_electrode_electrode(z4, band4, 2.5e-15, 4.0, T, M_E, M_DI)
+    high, _ = r1_electrode_electrode(z4, band4, 2.5e-15, 4.0, T, M_E, M_DI, BOTTOM)
     assert high > low > 0.0
     z_thin, band_thin = _linear_band(1.74 * EV, 2.0, Lz=4e-9)
-    thin, _ = r1_electrode_electrode(z_thin, band_thin, 2.5e-15, 2.0, T, M_E, M_DI)
+    thin, _ = r1_electrode_electrode(z_thin, band_thin, 2.5e-15, 2.0, T, M_E, M_DI, BOTTOM)
     assert thin > low
+
+
+def test_r1_tunnel_part_counts_electrons_down_to_band_bottom():
+    """低温极限下 R1 的隧穿部分就是完整的 Tsu–Esaki 积分（ADR-061）。
+
+    T → 0 时 k_BT·S(E) 在 E < −eU 为 eU、在 −eU < E < 0 为 −E、在 E > 0 为 0，于是
+    R1 → [A·m_e/(2π²ℏ³)]·[eU·∫_{E_c}^{−eU} P dE + ∫_{−eU}^{0} (−E)·P dE]，费米能级以下直到导带底 E_c 的电子
+    全部计入；原先从费米能级积起时这个极限为 0。矩形势垒 P(E) = exp[−2d√(2m(V₀ − E))/ℏ]，参照值用 quad 求。
+    """
+    d, V0, U, area, temperature = 1.0e-9, 1.0 * EV, 0.5, 1.0e-18, 10.0
+    z = np.linspace(0.0, d, 33)
+    tunnel, _ = r1_electrode_electrode(z, np.full_like(z, V0), area, U, temperature, M_E, M_DI, BOTTOM)
+
+    def transmission(energy):
+        return np.exp(-2.0 * d * np.sqrt(2.0 * M_DI * (V0 - energy)) / HBAR)
+
+    eU = constants.elementary_charge * U
+    deep, _ = quad(transmission, BOTTOM, -eU, epsabs=0.0, epsrel=1e-12)
+    shallow, _ = quad(lambda e: -e * transmission(e), -eU, 0.0, epsabs=0.0, epsrel=1e-12)
+    expected = area * M_E / (2.0 * np.pi ** 2 * HBAR ** 3) * (eU * deep + shallow)
+    assert tunnel == pytest.approx(expected, rel=1e-3)
+
+
+def test_r1_band_bottom_is_the_higher_electrode_band_bottom():
+    """R1 的积分下限取两侧电极导带底中较高的那个：同种电极时是负极导带底，正极费米能小到它的导带底更高时取正极的。"""
+    device = make_device()
+    assert r1_band_bottom(device, 3.6) == pytest.approx(-device.negative.fermi_energy, rel=1e-15)
+    shallow = replace(device, positive=replace(device.positive, fermi_energy=1.0 * EV))
+    assert r1_band_bottom(shallow, 0.5) == pytest.approx(-0.5 * EV - 1.0 * EV, rel=1e-15)
+    assert r1_band_bottom(shallow, 4.5) == pytest.approx(-device.negative.fermi_energy, rel=1e-15)
 
 
 def test_richardson_schottky_independent_comparison():
@@ -142,7 +178,7 @@ def test_richardson_schottky_independent_comparison():
         for U in (1.0, 2.5, 4.0):
             z, band = _linear_band(E_B, U)
             _, thermionic = r1_electrode_electrode(
-                z, band, area, U, temperature, M_E, M_DI, n_points=512
+                z, band, area, U, temperature, M_E, M_DI, BOTTOM, n_points=512
             )
             j_kmc = constants.elementary_charge * thermionic / area
             j_rs = richardson_schottky_current_density(temperature, U, E_B, m_cb)

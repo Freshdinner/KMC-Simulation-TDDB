@@ -66,6 +66,7 @@ from .bands import (
     positive_fermi_level,
     conduction_band_edge,
     electrode_band_bottom,
+    r1_band_bottom,
     top_boundary_potential,
 )
 from .clusters import coupling_strength
@@ -892,9 +893,10 @@ def gap_tunneling(transport: TransportState, temperature: np.ndarray, area: floa
     最近的接负极成员（xy 最小镜像）；两个成员互为最近时这条路径只算一次。平面与平面之间是 R1，在内层输运里。每条路径按
     R1 的能量积分（`r1_electrode_electrode`，直接/FN 隧穿与热发射统一处理）求速率：势垒取路径上的导带底 B − e·φ，φ 是
     输运不动点上含导体电荷的三维电势（`TransportState.phi`），导体尖端前方电势降得快、势垒薄，这一点由它给出；面积取每条
-    路径一份 `area`；温度取成员处的温度（成员之间的路径取两端平均）；发射极电子质量取负极的。成员身后的成员，路径先穿过
-    前面的成员（那里电势等于导体电势），透射自然小。每个电子放出 eU，全部放进导体：成员与平面之间的路径放在这个成员处，
-    成员之间的路径两端各一半。贯穿通路（`sides` = 2）的成员不算，它的电流是细丝电流。`temperature` 是各缺陷处的温度 (N,)。
+    路径一份 `area`；温度取成员处的温度（成员之间的路径取两端平均）；发射极电子质量取负极的，能量从电极导带底积起（导体
+    是电极的延伸，ADR-061）。成员身后的成员，路径先穿过前面的成员（那里电势等于导体电势），透射自然小。每个电子放出 eU，
+    全部放进导体：成员与平面之间的路径放在这个成员处，成员之间的路径两端各一半。贯穿通路（`sides` = 2）的成员不算，它的
+    电流是细丝电流。`temperature` 是各缺陷处的温度 (N,)。
     """
     layout = transport.layout
     members = layout.members
@@ -939,13 +941,14 @@ def gap_tunneling(transport: TransportState, temperature: np.ndarray, area: floa
             paths.append((start, points[b], [a, b], [0.5, 0.5], 0.5 * (member_temperature[a] + member_temperature[b])))
     q = constants.elementary_charge
     s = np.linspace(0.0, 1.0, _GAP_PATH_POINTS)
+    band_bottom = r1_band_bottom(device, voltage)
     rate_total = 0.0
     for start, end, ends, shares, path_temperature in paths:
         line = start + s[:, None] * (end - start)
         band = device.band_reference_profile(line[:, 2]) - q * solver.interpolate(transport.phi, line)
         rate = sum(r1_electrode_electrode(
             s * float(np.linalg.norm(end - start)), band, area, voltage, float(path_temperature),
-            device.negative.effective_mass, device.stack.m_di_at(line[:, 2]),
+            device.negative.effective_mass, device.stack.m_di_at(line[:, 2]), band_bottom,
         ))
         rate_total += rate
         heat[ends] += np.array(shares) * q * voltage * rate

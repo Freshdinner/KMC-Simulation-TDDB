@@ -355,9 +355,9 @@ def _chain(device, x, y, z_from, z_to, spacing=0.28e-9):
 def test_gap_tunneling_follows_the_R1_integral_on_the_gap_path():
     """间隙隧穿（ADR-060）：一列接负极的空位（顶端离正极 1 nm）与一列接正极的空位（底端离负极 1.5 nm、横向离得远）。
     每个接负极成员一条竖直路径到正极平面，每个接正极成员一条从负极平面上来的竖直路径；每条路径的速率等于 R1 的能量积分
-    （`r1_electrode_electrode`）在这条路径上的值，势垒取输运不动点的三维电势，面积取 `gap_tunneling_area`。总电流是各路径
-    之和乘 e，各成员的放热是自己那条路径的 eU 倍；顶端成员的路径最短、尖端前方电势降得快，比身后的成员大得多。间隙从
-    1 nm 拉大到 2 nm 时电流变小。"""
+    （`r1_electrode_electrode`，从负极导带底积起，ADR-061）在这条路径上的值，势垒取输运不动点的三维电势，面积取
+    `gap_tunneling_area`。总电流是各路径之和乘 e，各成员的放热是自己那条路径的 eU 倍；顶端成员的路径最短、尖端前方电势
+    降得快，比身后的成员大得多。间隙从 1 nm 拉大到 2 nm 时电流变小。"""
     config = _config(concentration_cm3=3.0e18, percolation_distance=0.3e-9)
     config = replace(config, simulation=replace(config.simulation, voltage=3.6, grid=replace(config.simulation.grid, nx=80, ny=80, nz=80)))
     device, area, voltage = config.device, config.tddb.gap_tunneling_area, 3.6
@@ -388,7 +388,7 @@ def test_gap_tunneling_follows_the_R1_integral_on_the_gap_path():
             band = device.band_reference_profile(line[:, 2]) - Q * solver.interpolate(transport.phi, line)
             expected[m] = sum(r1_electrode_electrode(
                 s * float(np.linalg.norm(end - start)), band, area, voltage, config.simulation.temperature,
-                device.negative.effective_mass, device.stack.m_di_at(line[:, 2]),
+                device.negative.effective_mass, device.stack.m_di_at(line[:, 2]), -device.negative.fermi_energy,
             ))
         assert current == pytest.approx(Q * expected.sum(), rel=1e-12)
         np.testing.assert_allclose(heat, Q * voltage * expected, rtol=1e-12)
@@ -429,7 +429,7 @@ def test_gap_tunneling_counts_a_mutual_pair_of_tips_once():
         band = device.band_reference_profile(line[:, 2]) - Q * solver.interpolate(transport.phi, line)
         return sum(r1_electrode_electrode(
             s * float(np.linalg.norm(end - start)), band, area, voltage, config.simulation.temperature,
-            device.negative.effective_mass, device.stack.m_di_at(line[:, 2]),
+            device.negative.effective_mass, device.stack.m_di_at(line[:, 2]), -device.negative.fermi_energy,
         ))
 
     heat = np.zeros(points.shape[0])

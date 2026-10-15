@@ -43,7 +43,7 @@ def test_r1_integration_is_converged():
     """R1 的能量点数与路径点数加倍后，两个分量的变化均 < 1%。"""
     device = make_device()
     voltage, temperature = 3.0, 298.15
-    args = (device.area, voltage, temperature, M_E, device.stack.single_material.m_di)
+    args = (device.area, voltage, temperature, M_E, device.stack.single_material.m_di, -device.negative.fermi_energy)
 
     z, band = _band(device, voltage, kmc._R1_PATH_POINTS)
     tunnel, thermionic = r1_electrode_electrode(z, band, *args, n_points=kmc._R1_ENERGY_POINTS)

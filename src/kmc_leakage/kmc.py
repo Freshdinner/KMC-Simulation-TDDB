@@ -95,6 +95,7 @@ from .bands import (
     electrode_band_bottom,
     fermi_dirac,
     free_electron_dos,
+    r1_band_bottom,
     top_boundary_potential,
     trap_levels,
 )
@@ -135,7 +136,7 @@ MECHANISM_LABELS = {
 _N_PHONON = 12  # R4/R5 求和保留的声子数 p = 0..11（p≥7 起贡献 <1e-4）
 _TRAP_PATH_POINTS = 65  # 电极↔陷阱 WKB 路径采样点
 _R1_PATH_POINTS = 129  # R1 全膜厚 WKB 路径采样点
-_R1_ENERGY_POINTS = 128  # R1 能量积分点数（阈值两侧各自）
+_R1_ENERGY_POINTS = 128  # R1 能量积分点数（[0, 阈值] 与阈值以上各自；费米能级以下同间距）
 _PF_BARRIER_POINTS = 257  # F03 阻挡层 PF 收集势垒的 WKB 采样点
 # 强耦合簇（ADR-022，模块文档说明 5）：跃迁速率 ≥ 此比例 × 两端电极交换速率较小者即连边。
 # t2_2nm 叠层三个实现 × 三个工况实测：取 1e-3 时每个实现 10–14 个多陷阱簇、最大 6 个陷阱
@@ -371,6 +372,7 @@ def r1_electrode_current(
         temperature,
         device.negative.effective_mass,
         device.stack.m_di_at(z),
+        r1_band_bottom(device, voltage),
         n_points=_R1_ENERGY_POINTS,
     )
     return constants.elementary_charge * tunnel, constants.elementary_charge * thermionic

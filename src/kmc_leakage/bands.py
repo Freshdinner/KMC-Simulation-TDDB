@@ -140,6 +140,17 @@ def electrode_band_bottom(fermi_level: float, fermi_energy: float) -> float:
     return fermi_level - fermi_energy
 
 
+def r1_band_bottom(device: DeviceConfig, voltage: float) -> float:
+    """R1 能量积分的下限 [J]：两侧电极导带底中较高的那个（ADR-061）。
+
+    隧穿电子沿 z 运动的能量要在发射极（负极）与收集极（正极）的导带里都有态。同种电极、U ≥ 0 时就是负极导带底。
+    """
+    return max(
+        electrode_band_bottom(0.0, device.negative.fermi_energy),
+        electrode_band_bottom(positive_fermi_level(voltage), device.positive.fermi_energy),
+    )
+
+
 def free_electron_dos(energy_above_band_bottom: np.ndarray, mass: float) -> np.ndarray:
     """自由电子态密度 N(E) = (1/2π²)·(2m/ℏ²)^{3/2}·√E [1/(J·m^3)]。
 

@@ -64,6 +64,7 @@ def test_r1_contribution_is_the_ideal_barrier_formula():
         config.simulation.temperature,
         device.negative.effective_mass,
         device.stack.single_material.m_di,
+        -device.negative.fermi_energy,
         n_points=kmc._R1_ENERGY_POINTS,
     )
     q = constants.elementary_charge

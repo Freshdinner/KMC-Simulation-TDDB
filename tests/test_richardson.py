@@ -124,7 +124,7 @@ def test_barrier_bump_suppresses_thermionic_part():
     assert barrier_maximum(flat) == pytest.approx(E_B)  # 平直时势垒顶就在界面
     assert barrier_maximum(bump) > barrier_maximum(flat)  # 鼓包把势垒顶推进体内
 
-    args = (device.area, voltage, 298.15, M_E, device.stack.single_material.m_di)
+    args = (device.area, voltage, 298.15, M_E, device.stack.single_material.m_di, -device.negative.fermi_energy)
     _, thermionic_flat = r1_electrode_electrode(z, flat, *args)
     _, thermionic_bump = r1_electrode_electrode(z, bump, *args)
     kT = constants.Boltzmann * 298.15
