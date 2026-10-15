@@ -104,7 +104,8 @@ def test_tddb_section_is_optional_and_converted():
     """tddb 段缺省为 None（纯漏电流仿真）；三个能量从 eV 换算成 J、必须为正，p₀ 从 e·Å
     换算成 C·m、必须 ≥ 0，P_bb 宏观场的平均窗口从 nm 换算成 m、必须 ≥ 0（ADR-043），空位数上限是正整数，
     应力时间上限必须为正，导电通路的连通距离 r_c 从 nm 换算成 m、必须为正，以上各项都必须给出；
-    k_TH 可省略（等温），给出时必须为正（ADR-024/028/033/036/054）。前驱位点浓度已取消，写了
+    k_TH 可省略（等温），给出时必须为正（ADR-024/028/033/036/054）。间隙隧穿的有效面积可省略（缺省 (0.26 nm)²），
+    从 nm² 换算成 m²、必须为正；击穿后再跑的步数可省略（0），给出时是 ≥ 0 的整数（ADR-060）。前驱位点浓度已取消，写了
     precursor_concentration_cm3 直接报错（ADR-055）。"""
     raw = _base_dict()
     assert config_from_dict(raw).tddb is None
@@ -129,8 +130,16 @@ def test_tddb_section_is_optional_and_converted():
     assert tddb.stop_time == pytest.approx(1.0e4)
     assert tddb.percolation_distance == pytest.approx(1.0e-9)
     assert tddb.thermal_conductivity is None  # 省略 k_TH：等温
+    assert tddb.gap_tunneling_area == pytest.approx((0.26e-9) ** 2) and tddb.post_breakdown_steps == 0
     raw["tddb"] = dict(section, thermal_conductivity_W_mK=1.5)
     assert config_from_dict(raw).tddb.thermal_conductivity == 1.5
+    raw["tddb"] = dict(section, gap_tunneling_area_nm2=0.1, post_breakdown_steps=20)
+    tddb = config_from_dict(raw).tddb
+    assert tddb.gap_tunneling_area == pytest.approx(0.1e-18) and tddb.post_breakdown_steps == 20
+    for key, bad in (("gap_tunneling_area_nm2", 0.0), ("post_breakdown_steps", -1), ("post_breakdown_steps", 2.5)):
+        raw["tddb"] = dict(section, **{key: bad})
+        with pytest.raises(ValueError, match=key):
+            config_from_dict(raw)
     for bad in (0.0, -1.0):
         raw["tddb"] = dict(section, thermal_conductivity_W_mK=bad)
         with pytest.raises(ValueError, match="thermal_conductivity_W_mK"):
@@ -375,7 +384,7 @@ def test_tddb_example_matches_leakage_reference_preset():
     TDDB 取 O–O 间距 0.26 nm，ADR-055），盒子同为 50×50 nm（ADR-051）；横向网格按团簇库仑能收敛取 hx = hy = 0.25 nm、
     hz 不变（ADR-032）；前驱的 E_t1 与 O 空位预设相同（ADR-028）；E_rel1 与材料的 huang_rhys 各自取值
     （ADR-030）；p₀ = 1 eÅ（ADR-035），E_A = 1.30 eV 全部前驱相同（ADR-053），k_TH = 2 W/(m·K)（ADR-040），
-    导电通路的连通距离 r_c = 0.3 nm（ADR-054/055）。"""
+    导电通路的连通距离 r_c = 0.3 nm（ADR-054/055），间隙隧穿面积 (0.26 nm)²、击穿后再跑 20 步（ADR-060）。"""
     root = pathlib.Path(__file__).resolve().parents[1]
     tddb = load_config(str(root / "examples" / "zro2_tddb.yaml"))
     ref = load_config(str(root / "examples" / "single_run.yaml"))
@@ -409,5 +418,7 @@ def test_tddb_example_matches_leakage_reference_preset():
     assert tddb.tddb.field_averaging_width == pytest.approx(0.5e-9)  # ADR-043
     assert tddb.tddb.thermal_conductivity == pytest.approx(2.0)
     assert tddb.tddb.percolation_distance == pytest.approx(0.3e-9)  # r_c（ADR-054/055）
+    assert tddb.tddb.gap_tunneling_area == pytest.approx((0.26e-9) ** 2)  # 一个 O 位点占的面积（ADR-060）
+    assert tddb.tddb.post_breakdown_steps == 20  # 击穿后再跑的步数（ADR-060）
     assert tddb.tddb.max_generated_vacancies >= 1 and tddb.tddb.stop_time > 0.0
     assert ref.tddb is None

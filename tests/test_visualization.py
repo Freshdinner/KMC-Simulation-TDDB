@@ -320,7 +320,7 @@ def test_plot_functions_do_not_touch_the_filesystem(tmp_path, monkeypatch, defec
     plot_iv_curves(VOLTAGES, TEMPERATURES, DENSITY)
     plot_it_curves(VOLTAGES, TEMPERATURES, DENSITY)
     plot_current_transient(TRANSIENT_TIME, TRANSIENT_DENSITY, 2.0)
-    plot_stress_transient(TRANSIENT_TIME, TRANSIENT_DENSITY, TRANSIENT_TEMPERATURE, 2.0, stop="breakdown")
+    plot_stress_transient(TRANSIENT_TIME, TRANSIENT_DENSITY, TRANSIENT_TEMPERATURE, 2.0, breakdown_time=0.1)
     assert not list(tmp_path.iterdir())
 
 
@@ -350,11 +350,11 @@ def test_current_transient_without_generation_shows_only_the_background():
 
 
 def test_stress_transient_marks_breakdown_and_shows_temperature():
-    """TDDB 应力图：上图与 plot_current_transient 相同的双对数 J(t)，击穿时在终点 (end_time, J)
-    画标记并在图例里写出时刻；下图是温度（°C）的阶梯，横轴共用、取对数。"""
+    """TDDB 应力图：上图与 plot_current_transient 相同的双对数 J(t)，在击穿记录 (t_BD, J) 画标记并在图例里写出
+    时刻（击穿后还有记录，ADR-060）；下图是温度（°C）的阶梯，横轴共用、取对数。"""
     times = np.logspace(-2, np.log10(2.0), 11)
     figure = plot_stress_transient(
-        TRANSIENT_TIME, TRANSIENT_DENSITY, TRANSIENT_TEMPERATURE, 2.0, fit=(0.5, 3e-4, times), stop="breakdown"
+        TRANSIENT_TIME, TRANSIENT_DENSITY, TRANSIENT_TEMPERATURE, 2.0, fit=(0.5, 3e-4, times), breakdown_time=0.1
     )
     top, bottom = figure.axes
     reference = plot_current_transient(TRANSIENT_TIME, TRANSIENT_DENSITY, 2.0, fit=(0.5, 3e-4, times)).axes[0]
@@ -363,10 +363,10 @@ def test_stress_transient_marks_breakdown_and_shows_temperature():
         assert np.array_equal(line.get_xdata(), expected.get_xdata())
         assert np.array_equal(line.get_ydata(), expected.get_ydata())
     marker = top.lines[3]
-    assert marker.get_xdata().tolist() == [2.0]
-    assert np.allclose(marker.get_ydata(), TRANSIENT_DENSITY[-1] * PER_CM2)
+    assert marker.get_xdata().tolist() == [0.1]
+    assert np.allclose(marker.get_ydata(), TRANSIENT_DENSITY[2] * PER_CM2)
     labels = [text.get_text() for text in top.get_legend().get_texts()]
-    assert labels[-1] == "breakdown, t = 2 s"
+    assert labels[-1] == "breakdown, t = 0.1 s"
 
     background, steps = bottom.lines
     assert np.allclose(background.get_ydata(), TRANSIENT_TEMPERATURE[0] - constants.zero_Celsius)
@@ -376,10 +376,9 @@ def test_stress_transient_marks_breakdown_and_shows_temperature():
 
 
 def test_stress_transient_marks_only_breakdown():
-    """只有击穿画终点标记；达到空位数或时间上限不画。"""
-    for stop in ("max_generated", "stop_time"):
-        capped = plot_stress_transient(TRANSIENT_TIME, TRANSIENT_DENSITY, TRANSIENT_TEMPERATURE, 2.0, stop=stop)
-        assert len(capped.axes[0].lines) == 2
+    """没有击穿（t_BD 为 None）时不画标记。"""
+    capped = plot_stress_transient(TRANSIENT_TIME, TRANSIENT_DENSITY, TRANSIENT_TEMPERATURE, 2.0)
+    assert len(capped.axes[0].lines) == 2
 
 
 def test_iv_curves_one_curve_per_temperature():

@@ -129,12 +129,12 @@ def mean_field_hop_rates(sim: KMCSimulation, energy: np.ndarray) -> np.ndarray:
     """两端都按平均场处理的陷阱对的跃迁速率（R7），近邻表上各有序对一个值，形状 (P,)。
 
     R6 的几何因子乘 MA 因子，事件能量差取两端平均场能级之差 ΔH = E_b − E_a（`energy` 是
-    平均场能级 E_i(p)），不减 U_ab，理由见模块文档。簇内对与簇–孤立对不用这一项，它们
-    按簇内组态求值（`mean_field_rates`）。
+    平均场能级 E_i(p)），不减 U_ab，理由见模块文档。MA 因子的温度取两端缺陷温度的平均（ADR-060）。
+    簇内对与簇–孤立对不用这一项，它们按簇内组态求值（`mean_field_rates`）。
     """
     pairs = sim._pairs
     return sim._hop_geometric * miller_abrahams_factor(
-        energy[pairs.a], energy[pairs.b], sim.sim.temperature
+        energy[pairs.a], energy[pairs.b], sim._pair_temperature
     )
 
 
@@ -181,7 +181,6 @@ def mean_field_rates(
     """
     p = np.asarray(occupancy, dtype=float)
     n = sim.n_defects
-    temperature = sim.sim.temperature
     energy, field, barrier_c, barrier_a = sim._trap_state(p)
     blocks = sim._electrode_blocks(energy, field, barrier_c, barrier_a)
     weighted = None
@@ -202,18 +201,19 @@ def mean_field_rates(
         c = table.cluster
         members, states, e = c.members, c.states, table.energy
         geometric = sim._hop_geometric[c.pairs]
+        temperature = sim._pair_temperature[c.pairs]
         rate = table.hop.copy()  # 簇内列沿用组态求值（含 −U_ab），边界列下面重写
         source_free = cluster_of[c.in_source] < 0
         target_free = cluster_of[c.out_target] < 0
         cols = c.in_cols
         rate[:, cols] = hop[c.pairs[cols]]
         rate[:, cols[source_free]] = geometric[cols[source_free]] * miller_abrahams_factor(
-            energy[c.in_source[source_free]], e[:, members[c.in_member[source_free]]], temperature
+            energy[c.in_source[source_free]], e[:, members[c.in_member[source_free]]], temperature[cols[source_free]]
         )
         cols = c.out_cols
         rate[:, cols] = hop[c.pairs[cols]]
         rate[:, cols[target_free]] = geometric[cols[target_free]] * miller_abrahams_factor(
-            e[:, members[c.out_member[target_free]]], energy[c.out_target[target_free]], temperature
+            e[:, members[c.out_member[target_free]]], energy[c.out_target[target_free]], temperature[cols[target_free]]
         )
         n_states, k = states.shape
         member_in = np.zeros((n_states, k))

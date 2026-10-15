@@ -1,6 +1,6 @@
 """TDDB 的功率耗散与稳态热流：式 T13（P = ΔE·R）与式 T14（∇²T = −P/k_TH）。
 
-规格见 PROJECT_CONTEXT_TDDB.md §3、§5、§6.6、§8.4，决策记录见 ADR-036。公式编号 T13/T14 是
+规格见 PROJECT_CONTEXT_TDDB.md §3、§5、§6.6、§8.4，决策记录见 ADR-036、ADR-060。公式编号 T13/T14 是
 TDDB 的编号，与 docs/rate_equations.md 的 R1–R8 不对应。
 
 **功率（式 T13）**：`heat_release` 在内层输运稳态上逐事件累加 ΔE·R——ΔE 是一次事件里电子
@@ -32,6 +32,10 @@ TDDB 的编号，与 docs/rate_equations.md 的 R1–R8 不对应。
 
 每个陷阱（每个簇）收到与送出的能量按同一组通量、同一组能级记账，不动点处粒子数守恒，介质 +
 两侧电极的放热就严格等于 U·I_陷阱——强耦合分量被切开时也成立。
+
+接电极的导体（`kmc.Conductors`，ADR-060）：陷阱与导体成员的交换并在电极事件的 R2/R3 块里，按电极事件算出的
+那份放热 (μ − E)·俘获 + (E − μ)·逃逸 不放进电极，放在成员处（`KMCSimulation._conductor_heat`）：导体是介质里的
+团簇，隧穿到它上面的电子在团簇里弛豫。总量不变，能量守恒照样严格成立。
 
 R1 不经过缺陷，电子弹性穿过整个介质，能量全部放进电极，不产生介质内的功率。
 
@@ -70,11 +74,12 @@ class HeatRelease:
     defect: np.ndarray  # (N,) 各缺陷处放给介质晶格的功率
     negative: float  # 负极里放出的功率
     positive: float  # 正极里放出的功率
+    conductor: np.ndarray  # (M,) 接电极导体各成员处放出的功率（陷阱与导体交换电子，ADR-060）；没有导体时为空
 
     @property
     def dielectric(self) -> float:
-        """介质内放出的总功率 [W]，即热方程的总热源。"""
-        return float(self.defect.sum())
+        """介质内放出的总功率 [W]（缺陷处与导体成员处之和）。"""
+        return float(self.defect.sum() + self.conductor.sum())
 
 
 def _electrode_event_heat(
@@ -117,8 +122,9 @@ def heat_release(sim: KMCSimulation, occupancy: np.ndarray) -> HeatRelease:
     占据。记账口径见模块文档。
     """
     n = sim.n_defects
+    n_sites = 0 if sim.conductors is None else sim.conductors.positions.shape[0]
     if n == 0:
-        return HeatRelease(defect=np.zeros(0), negative=0.0, positive=0.0)
+        return HeatRelease(defect=np.zeros(0), negative=0.0, positive=0.0, conductor=np.zeros(n_sites))
     p = np.asarray(occupancy, dtype=float)
     ED = sim.defects.ED
     fermi = (sim._fermi_negative, sim._fermi_positive)
@@ -172,9 +178,25 @@ def heat_release(sim: KMCSimulation, occupancy: np.ndarray) -> HeatRelease:
     a, b = a[shared], b[shared]
     deposit((a, b), rates.hop[shared] * ((1.0 - p[b]) * occupied_energy[a] - p[a] * empty_energy[b]))
 
-    return HeatRelease(
-        defect=trap + hop_heat, negative=float(negative.sum()), positive=float(positive.sum())
-    )
+    negative, positive = float(negative.sum()), float(positive.sum())
+    conductor = np.zeros(n_sites)
+    if n_sites:
+        # 陷阱与导体交换的那份电极放热移到成员处：孤立陷阱按平均场，簇成员按组态与簇内稳态分布
+        free = np.flatnonzero(cluster_of < 0)
+        parts = [sim._conductor_heat(energy[free], p[free], free, np.ones(free.size))]
+        for table, pi in zip(rates.tables, rates.distributions):
+            members, states = table.cluster.members, table.cluster.states
+            k = members.size
+            parts.append(sim._conductor_heat(
+                table.energy[:, members].ravel(), states.astype(float).ravel(), np.tile(members, pi.size),
+                np.repeat(pi, k),
+            ))
+        for sites, sides in parts:
+            conductor += sites
+            negative -= float(sides[0])
+            positive -= float(sides[1])
+
+    return HeatRelease(defect=trap + hop_heat, negative=negative, positive=positive, conductor=conductor)
 
 
 def power_map(solver: PoissonSolver, positions: np.ndarray, heat: np.ndarray) -> np.ndarray:
@@ -194,21 +216,3 @@ def solve_temperature(
     kappa = solver.device.stack.single_material.kappa
     rho = np.asarray(power_density, dtype=float) * kappa * constants.epsilon_0 / thermal_conductivity
     return ambient + solver.solve(rho, 0.0)
-
-
-def transport_temperature(
-    solver: PoissonSolver,
-    temperature: np.ndarray,
-    positions: np.ndarray,
-    heat: np.ndarray,
-    ambient: float,
-) -> float:
-    """内层输运用的全局标量温度 [K]：温度场在缺陷处的值按各缺陷放热加权平均（§6.6）。
-
-    权重只取放热（正值）部分，吸热的缺陷不计。介质内没有放热时返回 `ambient`。
-    """
-    weight = np.clip(np.asarray(heat, dtype=float), 0.0, None)
-    total = float(weight.sum())
-    if not total > 0.0:
-        return float(ambient)
-    return float(weight @ solver.interpolate(temperature, positions) / total)

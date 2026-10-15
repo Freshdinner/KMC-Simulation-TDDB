@@ -445,16 +445,16 @@ def plot_stress_transient(
     temperature: np.ndarray,
     end_time: float,
     fit: Optional[Tuple[float, float, np.ndarray]] = None,
-    stop: Optional[str] = None,
+    breakdown_time: Optional[float] = None,
 ) -> Figure:
     """TDDB 应力下的电流 J(t) 与温度 T(t)，标出击穿点（PROJECT_CONTEXT_TDDB.md §7-8）。
 
     参数
     ----
     time, current_density, end_time, fit : 同 `plot_current_transient`
-    temperature : 各状态的温度 [K]，与 `time` 等长（`TDDBResult.effective_temperature`）
-    stop : 轨迹的终止方式（`TDDBResult.stop_reason`）；"breakdown"（贯穿通路形成，最后一个状态的电流含细丝
-        电流）时在终点 (end_time, J) 画标记并在图例里写出时刻，其余取值不画
+    temperature : 各状态的温度 [K]，与 `time` 等长（`TDDBResult.peak_temperature`）
+    breakdown_time : 贯穿通路形成的时刻 t_BD（`TDDBResult.breakdown_time`）；给出时在击穿记录 (t_BD, J) 画标记并在
+        图例里写出时刻，None 不画
 
     上图是双对数的 J(t)（与 `plot_current_transient` 相同），下图是温度（°C），横轴共用。
     """
@@ -463,10 +463,11 @@ def plot_stress_transient(
     top = figure.add_subplot(2, 1, 1)
     bottom = figure.add_subplot(2, 1, 2, sharex=top)
     density = _draw_current_transient(top, time, current_density, end_time, fit)
-    if stop == "breakdown":
+    if breakdown_time is not None:
+        record = int(np.searchsorted(time, breakdown_time))  # 击穿记录：第一条时刻为 t_BD 的记录
         top.plot(
-            [end_time], [density[-1]], ls="none", marker="X", ms=9, color="k",
-            label="breakdown, t = {:.3g} s".format(end_time),
+            [breakdown_time], [density[record]], ls="none", marker="X", ms=9, color="k",
+            label="breakdown, t = {:.3g} s".format(breakdown_time),
         )
     top.legend(loc="best", fontsize=9)
 

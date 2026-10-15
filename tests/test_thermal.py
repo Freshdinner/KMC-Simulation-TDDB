@@ -6,7 +6,7 @@
   整个体系就是一个强耦合簇（主方程精确稳态）、强耦合簇与簇外陷阱混合、强耦合分量被切开
   四种情形都严格成立（ADR-038）；
 - 零偏压热平衡下没有净放热（细致平衡），只剩 R8 无反向通道的极小项；
-- 输运温度是缺陷处温度按放热加权的平均，没有放热时就是环境温度。
+- 有接电极的导体时（ADR-060）：陷阱与导体交换的放热从电极移到导体成员处，等于逐对直接求和，能量守恒照样严格成立。
 """
 
 import numpy as np
@@ -21,7 +21,7 @@ from kmc_leakage.config import GridConfig
 from kmc_leakage.electrostatics import PoissonSolver
 from kmc_leakage.kmc import _B_R4A, _B_R4C, _B_R8, KMCSimulation
 from kmc_leakage.mean_field import solve_mean_field
-from kmc_leakage.thermal import heat_release, power_map, solve_temperature, transport_temperature
+from kmc_leakage.thermal import heat_release, power_map, solve_temperature
 
 K_TH = 1.0  # W/(m·K)
 T_AMB = 298.15
@@ -141,17 +141,48 @@ def test_no_net_phonon_heat_in_zero_bias_equilibrium():
     np.testing.assert_allclose(heat.defect + pf_absorbed, 0.0, atol=1e-9 * one_way.min())
 
 
-def test_transport_temperature_is_heat_weighted_mean_at_defects():
-    """缺陷处温度按放热加权（只取放热部分），介质里没有放热时就是环境温度。"""
-    solver = _solver()
-    positions = np.array([[5e-9, 5e-9, 2e-9], [15e-9, 12e-9, 6e-9], [9e-9, 3e-9, 4e-9]])
-    field = T_AMB + np.random.default_rng(0).uniform(0.0, 30.0, solver.grid.shape)
-    at_defects = solver.interpolate(field, positions)
-    heat = np.array([2e-12, 1e-12, -5e-12])
-    expected = (2.0 * at_defects[0] + 1.0 * at_defects[1]) / 3.0
-    assert transport_temperature(solver, field, positions, heat, T_AMB) == pytest.approx(expected, rel=1e-14)
-    assert transport_temperature(solver, field, positions, np.array([0.0, 0.0, -1e-12]), T_AMB) == T_AMB
-    assert transport_temperature(solver, field, np.zeros((0, 3)), np.zeros(0), T_AMB) == T_AMB
+def test_conductor_exchange_heat_moves_to_the_members_and_energy_is_conserved():
+    """接电极的导体（ADR-060）：r_c = 1.2 nm、3×10¹⁹ cm⁻³ 时两侧都有接电极的导电簇。陷阱与导体交换电子的放热不再记进电极，
+    放在导体成员处：孤立陷阱的那一份等于逐对直接求和的 (1 − p)·(μ − E)·俘获 + p·(E − μ)·逃逸（不截断）；介质（陷阱 + 导体
+    成员）+ 两侧电极的放热仍严格等于 U·I_陷阱。"""
+    from test_tddb import _config, _transport
+
+    from kmc_leakage.rates import miller_abrahams_factor, r6_elastic_hop
+
+    config = _config(concentration_cm3=3.0e19, percolation_distance=1.2e-9)
+    transport = _transport(config)
+    sim, result, heat = transport.sim, transport.result, transport.heat
+    assert sim.conductors is not None and heat.conductor.size == transport.layout.members.size
+    assert heat.conductor.size > 0 and np.any(heat.conductor != 0.0)
+    total = heat.dielectric + heat.negative + heat.positive
+    assert total == pytest.approx(sim.sim.voltage * _trap_current(result), rel=1e-8)
+
+    # 孤立陷阱的那一份逐对直接求和（簇成员按组态求，这里只核对孤立陷阱）
+    p = result.occupancy
+    energy = sim._trap_state(p)[0]
+    clustered = np.zeros(sim.n_defects, dtype=bool)
+    for members in sim.cluster_members:
+        clustered[members] = True
+    conductors = sim.conductors
+    expected = np.zeros(conductors.positions.shape[0])
+    fermi = (sim._fermi_negative, sim._fermi_positive)
+    delta = conductors.positions[None, :, :] - sim.defects.positions[:, None, :]
+    delta[..., :2] -= np.array([config.device.Lx, config.device.Ly]) * np.round(
+        delta[..., :2] / np.array([config.device.Lx, config.device.Ly])
+    )
+    distance = np.linalg.norm(delta, axis=-1)
+    pair_temperature = 0.5 * (sim._temperature[:, None] + conductors.temperature[None, :])
+    geometric = r6_elastic_hop(sim.defects.attempt_frequency[:, None], distance, sim.defects.r_D[:, None], conductors.r_D[None, :])
+    capture = geometric * miller_abrahams_factor(conductors.fermi_level[None, :], energy[:, None], pair_temperature)
+    escape = geometric * miller_abrahams_factor(energy[:, None], conductors.fermi_level[None, :], pair_temperature)
+    for side, share in ((0, 1.0 - conductors.positive_share), (1, conductors.positive_share)):
+        mu, e = fermi[side], energy[:, None]
+        part = share[None, :] * ((1.0 - p[:, None]) * (mu - e) * capture + p[:, None] * (e - mu) * escape)
+        expected += part[~clustered].sum(axis=0)
+    free = np.flatnonzero(~clustered)
+    isolated = sim._conductor_heat(energy[free], p[free], free, np.ones(free.size))[0]
+    assert np.any(expected != 0.0)
+    np.testing.assert_allclose(isolated, expected, rtol=1e-9, atol=1e-12 * np.abs(expected).max())
 
 
 def test_point_source_heats_its_neighbourhood_and_electrodes_stay_ambient():

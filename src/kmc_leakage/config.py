@@ -403,7 +403,7 @@ class EnsembleConfig:
 
 @dataclass(frozen=True)
 class TDDBConfig:
-    """TDDB 缺陷生成参数（PROJECT_CONTEXT_TDDB.md 第 3 节参数表，ADR-024/028/035/036/052/053/054/055）。
+    """TDDB 缺陷生成参数（PROJECT_CONTEXT_TDDB.md 第 3 节参数表，ADR-024/028/035/036/052/053/054/055/060）。
 
     只收已定取值的参数，每个字段在用到它的 Phase 加入。G 场加速项里的相对介电常数 k 取
     介质材料的静态 κ，前驱俘获线型用的声子能量 ℏω₀ 取宿主介质的值，应力电压与环境温度
@@ -430,6 +430,11 @@ class TDDBConfig:
     percolation_distance: float
     # k_TH：介质热导率 [W/(m·K)]（式 T14）。None = 等温，温度固定为环境值（Phase 3 的口径）
     thermal_conductivity: Optional[float] = None
+    # 接电极导体与对面电极（或对面导体）之间间隙隧穿的有效发射面积 [m^2]，每个导体成员一份（ADR-060）。
+    # 缺省 (0.26 nm)²：一个 O 位点占的面积
+    gap_tunneling_area: float = (0.26e-9) ** 2
+    # 贯穿通路形成（击穿判据触发）之后再跑的生成步数，看击穿之后的趋势（ADR-060）。0 = 击穿即停
+    post_breakdown_steps: int = 0
 
 
 @dataclass(frozen=True)

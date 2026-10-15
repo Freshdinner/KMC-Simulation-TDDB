@@ -73,6 +73,13 @@
 统计口径按"电子抵达收集电极（或进入导带后被收集）的最后一步事件类型"
 归类，见 docs/rate_equations.md 的机制对照表。R8 发射到导带的电子按
 "立即被正极收集"处理（U>0 时导带电子向正极漂移）。
+
+TDDB 用到的两个可选输入（ADR-060），都不给时与漏电流侧逐位相同：
+
+- **逐缺陷温度** `temperature`：缺陷 i 的电极速率（声子线型、费米分布、R5 的玻尔兹曼因子、R8）取 T_i，
+  陷阱间跃迁的 MA 因子取两端温度的平均；R1 与 PF 收集概率仍取工作点温度（电极温度）。
+- **接电极的导体** `conductors`（`Conductors`）：成员是电极的延伸，不在缺陷集合里；近旁陷阱与成员交换电子的速率
+  并进对应电极侧的 R2/R3 块。
 """
 
 from dataclasses import dataclass, field
@@ -80,6 +87,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from scipy import constants
+from scipy.spatial import cKDTree
 
 from .bands import (
     positive_fermi_level,
@@ -482,8 +490,38 @@ class _ClusterTable:
     hop_out: np.ndarray  # (S, k) 成员跳往簇外的总速率（已乘目标空的环境概率）
 
 
+@dataclass(frozen=True)
+class Conductors:
+    """接电极的导体（TDDB 的导电簇，ADR-060）：成员是电极的延伸，不在输运的缺陷集合里。
+
+    - **与陷阱交换电子**：成员是它费米能级 μ 处的电子库。近旁陷阱 i 与成员 m 之间走陷阱间通道的形式
+      （docs/rate_equations.md 的 R6/R7）：几何因子 ν_i·exp[−r·(1/r_D,i + 1/r_D,m)]，成员 → 陷阱乘 Θ(μ, E_i)，
+      陷阱 → 成员乘 Θ(E_i, μ)，成员送出电子时按占满、接收时按全空计。两者之比是 exp[−(E_i − μ)/k_BT]，只与这个
+      电子库交换的陷阱平衡在费米分布 f(E_i − μ)。MA 因子的温度取两端温度的平均。
+    - **记账**：交换速率按 `positive_share` 记进正极侧的 R2A/R3A 块，其余记进负极侧的 R2C/R3C 块，电流沿用电极事件
+      的记账；放热按电极事件算出后由 `thermal.heat_release` 移到成员处（`KMCSimulation._conductor_heat`）。
+    - **静电**：成员电势固定，成员电荷随环境变。调用方把这一点折进传给 `KMCSimulation` 的耦合矩阵（消去成员后的
+      等效耦合）与这里的背景项：外加偏压与固定电荷在成员上感应的电荷、成员上离开成员位置的固定电荷，在各陷阱处的
+      电势、电场与横向平均剖面。
+
+    单一材料的闭式几何因子（TDDB 本阶段只做单层）。
+    """
+
+    positions: np.ndarray  # (M, 3) 成员坐标 [m]
+    fermi_level: np.ndarray  # (M,) 成员处的费米能级 [J]（全局零点 = 负极费米能级）
+    positive_share: np.ndarray  # (M,) 与陷阱交换的电子记到正极侧的份额：接负极 0、接正极 1
+    r_D: np.ndarray  # (M,) 成员的局域化半径 [m]
+    temperature: np.ndarray  # (M,) 成员处的温度 [K]
+    phi_at: np.ndarray  # (N,) 背景在各陷阱处的电势 [V]
+    field_at: np.ndarray  # (3, N) 背景在各陷阱处的电场矢量 [V/m]（读场侧同耦合矩阵）
+    phi_bar: np.ndarray  # (nz+1,) 背景的横向平均电势剖面 [V]
+
+
 class KMCSimulation:
-    """单个偏压/温度点的 KMC 仿真。"""
+    """单个偏压/温度点的 KMC 仿真。
+
+    `temperature` 是逐缺陷温度 (N,) [K]，缺省全部取工作点温度；`conductors` 是接电极的导体（ADR-060），缺省没有。
+    """
 
     def __init__(
         self,
@@ -491,6 +529,8 @@ class KMCSimulation:
         defects: Optional[DefectEnsemble] = None,
         coupling: Optional[ElectrostaticCoupling] = None,
         solver: Optional[PoissonSolver] = None,
+        temperature: Optional[np.ndarray] = None,
+        conductors: Optional[Conductors] = None,
     ) -> None:
         self.config = config
         self.device = config.device
@@ -503,6 +543,11 @@ class KMCSimulation:
         self.coupling = coupling if coupling is not None else ElectrostaticCoupling(
             self.solver, self.defects.positions, self.defects.field_side
         )
+        n = len(self.defects)
+        self._temperature = (
+            np.full(n, self.sim.temperature) if temperature is None else np.asarray(temperature, dtype=float)
+        )
+        self.conductors = conductors
         self._prepare()
 
     # ------------------------------------------------------------------
@@ -524,8 +569,13 @@ class KMCSimulation:
             phi_applied, positions, self.defects.field_side
         )
         self._phi_bar_applied = self.solver.lateral_average(phi_applied)
-        # 固定电荷（TDDB 生成空位带的 O_i⁻，ADR-048）不随占据变，与外加偏压一起作为每个组态共用的静电背景
+        # 固定电荷（TDDB 生成空位带的 O_i⁻，ADR-048）不随占据变，与外加偏压一起作为每个组态共用的静电背景；
+        # 接电极的导体（ADR-060）带来的背景并在这里
         self._phi_fixed_at, self._field_fixed_at, self._phi_bar_fixed = self._fixed_charge_background()
+        if self.conductors is not None:
+            self._phi_fixed_at = self._phi_fixed_at + self.conductors.phi_at
+            self._field_fixed_at = self._field_fixed_at + self.conductors.field_at
+            self._phi_bar_fixed = self._phi_bar_fixed + self.conductors.phi_bar
         # R8 的 β 取电子发射后缺陷所在位置留下的电荷（以 e 为单位）：Z 加上与缺陷重合的固定电荷
         self._emission_charge = defects.charge_state + defects.colocated_fixed_charge / constants.elementary_charge
 
@@ -557,13 +607,13 @@ class KMCSimulation:
             device, sim.voltage, sim.temperature, self._z_nodes, self._phi_bar_applied
         )
 
-        # 声子相关量（逐缺陷：ℏω、S 随材料/物种变）。形状 (N, _N_PHONON)。
+        # 声子相关量（逐缺陷：ℏω、S 随材料/物种变，温度取缺陷处的值）。形状 (N, _N_PHONON)。
         self._phonon_index = np.arange(_N_PHONON)
         self._phonon_weights = phonon_transition_probability(
             self._phonon_index[None, :],
             defects.huang_rhys[:, None],
             defects.phonon_energy[:, None],
-            sim.temperature,
+            self._temperature[:, None],
         )
         self._phonon_offsets = self._phonon_index[None, :] * defects.phonon_energy[:, None]
 
@@ -573,6 +623,9 @@ class KMCSimulation:
         r_cut = self._hop_cutoff_radius() if self.n_defects >= 2 else 1.0
         self._pairs = neighbor_pairs(positions, device.Lx, device.Ly, r_cut)
         self._hop_geometric = self._geometric_overlap(self._pairs)
+        # MA 因子的温度：两端缺陷温度的平均，a→b 与 b→a 相同，细致平衡不受影响
+        self._pair_temperature = 0.5 * (self._temperature[self._pairs.a] + self._temperature[self._pairs.b])
+        self._prepare_conductor_pairs()
 
         # R7 的事件能量差要减去 a、b 两处电子的库仑互作用能 U_ab = q²·G_ab：
         # 耦合矩阵存的是一个 −q 电子在对方处的电势 (−q)·G_ab，故 U_ab = −q·phi_ab。
@@ -760,7 +813,6 @@ class KMCSimulation:
         """
         defects = self.defects
         device = self.device
-        kT = constants.Boltzmann * self.sim.temperature
 
         trap_energy = defects.band_reference - defects.ED  # (N,) 零场陷阱能级
         band_refs = device.layer_band_references()  # (n_layers,)
@@ -773,12 +825,85 @@ class KMCSimulation:
             return float(np.hypot(np.hypot(device.Lx, device.Ly), device.Lz))
         alpha_min = float(alpha[positive].min())
 
-        # 机制表最小速率取零场 R8 = ν·exp(−E_D/k_BT) 里最小的那个（最深陷阱）
-        r8_min = float(np.min(defects.attempt_frequency * np.exp(-defects.ED / kT)))
         nu_max = float(np.max(defects.attempt_frequency))
         n_out = self.n_defects * (self.n_defects - 1)  # 截断外有序对数的保守上界
-        tolerance = r8_min / (n_out * nu_max)  # N_out·ν_max·tol = R8_min，恒落在 (0,1)
+        tolerance = self._slowest_pf_rate() / (n_out * nu_max)  # N_out·ν_max·tol = R8_min，恒落在 (0,1)
         return hop_cutoff_radius(alpha_min, tolerance)
+
+    def _slowest_pf_rate(self) -> float:
+        """机制表最小速率：零场 R8 = ν·exp(−E_D/k_BT_i) 里最小的那个（最深、最冷的陷阱）[1/s]。"""
+        defects = self.defects
+        kT = constants.Boltzmann * self._temperature
+        return float(np.min(defects.attempt_frequency * np.exp(-defects.ED / kT)))
+
+    def _prepare_conductor_pairs(self) -> None:
+        """近旁陷阱与接电极导体成员的交换对（`Conductors`，ADR-060），按陷阱编号排好，第 i 个陷阱的对是
+        `_conductor_ptr[i]:_conductor_ptr[i+1]`。每对存成员编号、几何因子 ν_i·exp[−r·(1/r_D,i + 1/r_D,m)] 与两端温度的平均。
+
+        截断判据同陷阱间通道（ADR-013）：截断外的对数上界 N·M 乘 ν_max·exp(−α_min·r_cut) 不超过零场 R8 的最小值，
+        α_min = 1/max r_D,陷阱 + 1/max r_D,成员；距离取 xy 最小镜像。
+        """
+        n = self.n_defects
+        conductors = self.conductors
+        m = 0 if conductors is None else conductors.positions.shape[0]
+        self._conductor_ptr = np.zeros(n + 1, dtype=int)
+        self._conductor_site = np.zeros(0, dtype=int)
+        self._conductor_geometric = np.zeros(0)
+        self._conductor_pair_temperature = np.zeros(0)
+        if n == 0 or m == 0:
+            return
+        defects, device = self.defects, self.device
+        nu_max = float(np.max(defects.attempt_frequency))
+        alpha_min = 1.0 / float(defects.r_D.max()) + 1.0 / float(conductors.r_D.max())
+        reach = np.log(n * m * nu_max / self._slowest_pf_rate()) / alpha_min
+        box = np.array([device.Lx, device.Ly, 4.0 * device.Lz])  # xy 周期；z 盒长取 4·Lz，不会回绕
+        pairs = cKDTree(np.mod(self.defects.positions, box), boxsize=box).sparse_distance_matrix(
+            cKDTree(np.mod(conductors.positions, box), boxsize=box), reach, output_type="ndarray"
+        )
+        order = np.lexsort((pairs["j"], pairs["i"]))
+        trap, site, r = pairs["i"][order], pairs["j"][order], pairs["v"][order]
+        self._conductor_ptr = np.searchsorted(trap, np.arange(n + 1))
+        self._conductor_site = site
+        self._conductor_geometric = r6_elastic_hop(defects.attempt_frequency[trap], r, defects.r_D[trap], conductors.r_D[site])
+        self._conductor_pair_temperature = 0.5 * (self._temperature[trap] + conductors.temperature[site])
+
+    def _conductor_terms(
+        self, energy: np.ndarray, idx: Optional[np.ndarray] = None
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """各行与导体成员的交换（`Conductors`）：第 r 行是缺陷 idx[r]（缺省为全部缺陷、按编号）能级为 energy[r] 的一个组态。
+
+        返回 (行号, 交换对编号, 成员 → 陷阱的速率, 陷阱 → 成员的速率)，每个 (行, 交换对) 一项；速率不含占据屏蔽。
+        """
+        defect = np.arange(self.n_defects) if idx is None else np.asarray(idx)
+        start = self._conductor_ptr[defect]
+        count = self._conductor_ptr[defect + 1] - start
+        row = np.repeat(np.arange(defect.size), count)
+        pair = np.arange(int(count.sum())) - np.repeat(np.cumsum(count) - count, count) + np.repeat(start, count)
+        fermi = self.conductors.fermi_level[self._conductor_site[pair]]
+        geometric, temperature = self._conductor_geometric[pair], self._conductor_pair_temperature[pair]
+        capture = geometric * miller_abrahams_factor(fermi, energy[row], temperature)
+        escape = geometric * miller_abrahams_factor(energy[row], fermi, temperature)
+        return row, pair, capture, escape
+
+    def _conductor_heat(
+        self, energy: np.ndarray, occupied: np.ndarray, idx: np.ndarray, weight: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """导体交换通道的放热按成员分开（`thermal.heat_release`，ADR-060）。
+
+        第 r 行是缺陷 idx[r] 的一个组态：能级 energy[r]、占据 occupied[r]、权重 weight[r]（孤立陷阱取 1，簇成员取
+        簇内稳态分布）。记进电极侧 s（费米能级 μ_s）的那部分交换放出 (μ_s − E)·俘获 + (E − μ_s)·逃逸，与电极事件的
+        记账相同。返回 (各成员处的放热 (M,), 负极侧与正极侧移走的放热 (2,)) [W]。
+        """
+        row, pair, capture, escape = self._conductor_terms(energy, idx)
+        site = self._conductor_site[pair]
+        share = self.conductors.positive_share[site]
+        e, o, w = energy[row], occupied[row], weight[row]
+        sides = [
+            w * part * ((1.0 - o) * (fermi - e) * capture + o * (e - fermi) * escape)
+            for fermi, part in ((self._fermi_negative, 1.0 - share), (self._fermi_positive, share))
+        ]
+        sites = np.bincount(site, sides[0] + sides[1], self.conductors.positions.shape[0])
+        return sites, np.array([sides[0].sum(), sides[1].sum()])
 
     # ------------------------------------------------------------------
     # 每步：由占据组态构造全部速率
@@ -862,13 +987,16 @@ class KMCSimulation:
         它）。传 L_p·p·ℏω 时 R4/R5 四块给出的是单位时间随俘获放给晶格、随逃逸从晶格
         吸收的声子能量 [J/s]，TDDB 的功率 ΔE·R（式 T13，`thermal.heat_release`）由此与
         速率走同一套公式；其余五块不受影响。
+
+        温度逐行取缺陷处的值。有接电极的导体时（`Conductors`），陷阱与导体成员的交换按成员所在电极侧并进 R2/R3 块。
         """
-        device, sim = self.device, self.sim
+        device = self.device
         defects = self.defects
 
         def pick(values: np.ndarray) -> np.ndarray:
             return values if idx is None else values[idx]
 
+        temperature = pick(self._temperature)
         ED = pick(defects.ED)
         m_di = pick(defects.m_di)
         phonon_weights = pick(self._phonon_weights if weights is None else weights)
@@ -885,7 +1013,7 @@ class KMCSimulation:
         ):
             # --- R2 / R3：弹性隧穿（陷阱能级处的单一能量） ---
             transmission = wkb_transmission(path, barrier, energy, m_di_path)
-            f_electrode = fermi_dirac(energy, fermi, sim.temperature)
+            f_electrode = fermi_dirac(energy, fermi, temperature)
             E1 = energy - bottom
             blocks[_B_R2C + side] = r2_elastic_capture(
                 E1, ED, electrode.effective_mass, m_di, f_electrode, transmission
@@ -899,7 +1027,7 @@ class KMCSimulation:
             transmission_p = wkb_transmission(
                 path[:, None, :], barrier[:, None, :], energies_p, m_di_path[:, None, :]
             )
-            f_p = fermi_dirac(energies_p, fermi, sim.temperature)
+            f_p = fermi_dirac(energies_p, fermi, temperature[:, None])
             dos_p = free_electron_dos(energies_p - bottom, electrode.effective_mass)
             blocks[_B_R4C + side] = r4_multiphonon_capture(
                 coupling, dos_p, f_p, transmission_p, phonon_weights
@@ -912,7 +1040,7 @@ class KMCSimulation:
                 phonon_weights,
                 self._phonon_index,
                 pick(defects.phonon_energy)[:, None],
-                sim.temperature,
+                temperature[:, None],
             )
 
         # --- R8：PF 热发射（折进 F03 收集概率 → R8_eff = P_A·R8） ---
@@ -926,8 +1054,16 @@ class KMCSimulation:
             field,
             pick(self._emission_charge),
             pick(defects.eps_opt),
-            sim.temperature,
+            temperature,
         )
+        if self._conductor_site.size:
+            rows = energy.shape[0]
+            row, pair, capture, escape = self._conductor_terms(energy, idx)
+            share = self.conductors.positive_share[self._conductor_site[pair]]
+            blocks[_B_R2C] += np.bincount(row, capture * (1.0 - share), rows)
+            blocks[_B_R2A] += np.bincount(row, capture * share, rows)
+            blocks[_B_R3C] += np.bincount(row, escape * (1.0 - share), rows)
+            blocks[_B_R3A] += np.bincount(row, escape * share, rows)
         return blocks
 
     def _rates(self, occ: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -969,7 +1105,7 @@ class KMCSimulation:
         """
         pairs = self._pairs
         return self._hop_geometric * miller_abrahams_factor(
-            energy[pairs.a], energy[pairs.b] - self._hop_U_ab, self.sim.temperature
+            energy[pairs.a], energy[pairs.b] - self._hop_U_ab, self._pair_temperature
         )
 
     def _hop_sums(
@@ -1057,7 +1193,7 @@ class KMCSimulation:
         电极速率计算，省掉逐簇调用的开销。`weights` 给出时另按它再算一遍电极速率块
         （`_electrode_blocks` 的同名参数），放进 `weighted`。
         """
-        sim, defects = self.sim, self.defects
+        defects = self.defects
         clusters = self._clusters
         if not clusters:
             return []
@@ -1108,7 +1244,7 @@ class KMCSimulation:
             sel = c.pairs
             e = energy[start:stop]
             hop = self._hop_geometric[sel] * miller_abrahams_factor(
-                e[:, self._pairs.a[sel]], e[:, self._pairs.b[sel]] - self._hop_U_ab[sel], sim.temperature
+                e[:, self._pairs.a[sel]], e[:, self._pairs.b[sel]] - self._hop_U_ab[sel], self._pair_temperature[sel]
             )  # (S, P)
             hop_in = np.zeros((n_states, k))
             hop_out = np.zeros((n_states, k))

@@ -296,12 +296,13 @@ def _positive_int(value: Any, where: str) -> int:
 
 
 def _tddb(raw: Optional[Dict[str, Any]]) -> Optional[TDDBConfig]:
-    """TDDB 缺陷生成参数（ADR-024/028/033/036/052/053/054/055）；整段省略返回 None，即纯漏电流仿真。
+    """TDDB 缺陷生成参数（ADR-024/028/033/036/052/053/054/055/060）；整段省略返回 None，即纯漏电流仿真。
 
     三个能量（E_A、E_t1、E_rel1）必须为正；p₀ 必须 ≥ 0，取 0 即关掉场加速；P_bb 宏观场的平均窗口宽度
     必须 ≥ 0，取 0 即用局域场（ADR-043）。空位数上限是正整数，应力时间上限、导电通路的连通距离 r_c 必须为正。
-    热导率 k_TH 可省略（等温），给出时必须为正。前驱位点不设浓度（按缺陷配置的 min_separation_nm 做最大随机
-    堆积，ADR-055），写了 `precursor_concentration_cm3` 直接报错。
+    热导率 k_TH 可省略（等温），给出时必须为正。间隙隧穿的有效面积可省略（取 `TDDBConfig` 的缺省值），给出时必须
+    为正；击穿后再跑的步数可省略（0），给出时是 ≥ 0 的整数（ADR-060）。前驱位点不设浓度（按缺陷配置的
+    min_separation_nm 做最大随机堆积，ADR-055），写了 `precursor_concentration_cm3` 直接报错。
     """
     if raw is None:
         return None
@@ -329,6 +330,14 @@ def _tddb(raw: Optional[Dict[str, Any]]) -> Optional[TDDBConfig]:
     thermal_conductivity = None
     if raw.get("thermal_conductivity_W_mK") is not None:
         thermal_conductivity = positive("thermal_conductivity_W_mK", "W/(m·K)")
+    optional = {}
+    if raw.get("gap_tunneling_area_nm2") is not None:
+        optional["gap_tunneling_area"] = positive("gap_tunneling_area_nm2", "nm²") * NM ** 2
+    if raw.get("post_breakdown_steps") is not None:
+        steps = raw["post_breakdown_steps"]
+        if isinstance(steps, bool) or not isinstance(steps, int) or steps < 0:
+            raise ValueError("tddb.post_breakdown_steps 必须是 >= 0 的整数，收到 {!r}".format(steps))
+        optional["post_breakdown_steps"] = steps
     return TDDBConfig(
         activation_energy=energy("activation_energy_eV"),
         precursor_ionization_energy=energy("precursor_ionization_energy_eV"),
@@ -341,6 +350,7 @@ def _tddb(raw: Optional[Dict[str, Any]]) -> Optional[TDDBConfig]:
         stop_time=positive("stop_time_s", "s"),
         percolation_distance=positive("percolation_distance_nm", "nm") * NM,
         thermal_conductivity=thermal_conductivity,
+        **optional,
     )
 
 

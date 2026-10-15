@@ -13,11 +13,15 @@
   电荷），插值表与逐点求值的差别在表的精度内（ADR-055）；陷阱项等于对全部已占据陷阱的直接求和（截断误差
   ≤ `_TRAP_TERM_FLOOR`），P_bb 取配置的 E_A（全部位点相同，ADR-053）与 Gaussian 平均场；三项都按位点处的局域温度求值；
 - P_bb 未饱和时 E_A 整体平移只改时间标尺；Gillespie 按速率选位点；
-- 热反馈（§6.6、§8.4）：每步的输运温度是上一步功率给出的缺陷处加权温度，生成率取同一步的温度场；
-- 导电簇与击穿判据（§6.3，ADR-054/056）：间距 < r_c 的空位连成导电簇，离电极 < r_c 的接到该电极；接电极的导电簇
-  在生成率的电势里与该电极等电位，并作为电极费米能级处占满的电子源进陷阱项；悬空导电簇自身等电位、总电荷守恒；
-  轨迹停在第一条出现贯穿通路的记录上，
-  这条记录的电流加上细丝的 G₀·V；
+- 局域温度（§6.6，ADR-060）：逐缺陷温度全取工作点温度时引擎逐位不变；不均匀时每个缺陷的电极速率取它自己的温度，
+  陷阱间跃迁的 MA 因子取两端平均；
+- 热反馈（§6.6、§8.4，ADR-060）：输运按缺陷处的局域温度求值，与热方程迭代到缺陷处温度的变化 ≤ 0.01 K；生成率取同一份
+  温度场，下一步从这份温度场起；
+- 导电簇与击穿判据（§6.3，ADR-054/056/060）：间距 < r_c 的空位连成导电簇，离电极 < r_c 的接到该电极；接电极的导电簇
+  在输运里是导体：陷阱之间的等效耦合与背景让陷阱处电势等于直接解泊松方程的结果，导体与近旁陷阱按陷阱间通道的形式
+  交换电子、细致平衡；导体与对面电极之间的间隙隧穿按 R1 的能量积分；生成率的电势里接电极的导体保持导体电势、并作为
+  所在处费米能级占满的电子源进陷阱项，悬空导电簇自身等电位、总电荷守恒；第一条出现贯穿通路的记录给出 t_BD，
+  电流加上细丝的 G₀·V，功率 G₀·V² 平分到通路的空位上，之后再跑 `post_breakdown_steps` 步；
 - 续跑（ADR-057）：每步开始时的状态存盘后逐位还原，从中途状态续跑与不停跑的同一条轨迹只差舍入误差；
 - 致密团簇标志：间距 < 截断的缺陷连边，xy 取最小镜像；
 - I-t 幂律拟合对纯幂律精确还原 n，对带噪声的幂律给出合理的拟合优度。
@@ -43,9 +47,26 @@ from kmc_leakage.defects import (
     minimum_image_delta,
 )
 from kmc_leakage.electrostatics import PoissonSolver
-from kmc_leakage.kmc import _B_R2A, _B_R2C, _B_R4A, _B_R4C, _N_PHONON, MECHANISMS, ElectrostaticCoupling, KMCSimulation
+from kmc_leakage.kmc import (
+    _B_R2A,
+    _B_R2C,
+    _B_R3A,
+    _B_R3C,
+    _B_R4A,
+    _B_R4C,
+    _N_PHONON,
+    MECHANISMS,
+    ElectrostaticCoupling,
+    KMCSimulation,
+)
 from kmc_leakage.mean_field import solve_mean_field
-from kmc_leakage.rates import bond_break_probability, trap_precursor_capture_rate
+from kmc_leakage.rates import (
+    bond_break_probability,
+    miller_abrahams_factor,
+    r1_electrode_electrode,
+    r6_elastic_hop,
+    trap_precursor_capture_rate,
+)
 from kmc_leakage.tddb import (
     _QUANTUM_CONDUCTANCE,
     GenerationRates,
@@ -54,18 +75,22 @@ from kmc_leakage.tddb import (
     _draw_generation,
     conducting_clusters,
     conductor_gap,
+    conductor_layout,
     distance_clusters,
+    filament,
     fit_power_law,
     fit_transient,
+    gap_tunneling,
     generation_rates,
     initial_state,
     load_state,
     place_precursors,
     run_tddb,
     save_state,
+    solve_transport,
     write_tddb_csv,
 )
-from kmc_leakage.thermal import heat_release, power_map, solve_temperature, transport_temperature
+from kmc_leakage.thermal import power_map, solve_temperature
 
 EV = constants.electron_volt
 Q = constants.elementary_charge
@@ -99,6 +124,18 @@ def _subset(defects: DefectEnsemble, n: int) -> DefectEnsemble:
     return DefectEnsemble(**{item.name: getattr(defects, item.name)[:n] for item in fields(DefectEnsemble)})
 
 
+def _transport(config, defects=None, temperature=None):
+    """`defects`（缺省为 `KMCSimulation(config)` 的初始缺陷）上的内层输运稳态（`solve_transport`），缺陷处温度缺省取工作点
+    温度。没有接电极的导体时 `sim` 就是全体缺陷上的引擎。"""
+    defects = KMCSimulation(config).defects if defects is None else defects
+    solver = PoissonSolver(config.device, config.simulation.grid)
+    coupling = IncrementalCoupling.build(solver, defects.positions, defects.field_side)
+    layout = conductor_layout(defects, coupling, solver, config.simulation.voltage, config.tddb.percolation_distance)
+    if temperature is None:
+        temperature = np.full(len(defects), config.simulation.temperature)
+    return solve_transport(config, layout, defects, coupling, solver, temperature)
+
+
 @pytest.fixture(scope="module")
 def trajectory():
     """4 次生成的短轨迹，并记下每步交给平均场的缺陷实现与初值、交给生成率的前驱位点表与算出的速率。
@@ -114,8 +151,8 @@ def trajectory():
         calls.append((sim, None if occupancy is None else occupancy.copy(), result))
         return result
 
-    def recording_rates(inner, occupancy, tddb, precursors, temperature_field=None):
-        result = original_rates(inner, occupancy, tddb, precursors, temperature_field)
+    def recording_rates(transport, tddb, precursors, temperature_field=None):
+        result = original_rates(transport, tddb, precursors, temperature_field)
         generations.append((precursors, result))
         return result
 
@@ -164,6 +201,260 @@ def _field_vectors(sim, occupancy):
         sim._field_applied_at + sim._field_fixed_at
         + weight @ sim.coupling.field_matrix - weight * sim.coupling.field_self
     )
+
+
+def test_uniform_defect_temperature_reproduces_the_scalar_engine_bitwise():
+    """逐缺陷温度（ADR-060）全部取工作点温度时，引擎的近邻表、强耦合簇、全部速率与平均场不动点与不传温度时逐位相同。"""
+    config = make_config(voltage=3.0, seed=1, device=make_device(defects=make_defect_config(concentration_cm3=3.0e19)))
+    plain = KMCSimulation(config)
+    uniform = KMCSimulation(
+        config, defects=plain.defects, coupling=plain.coupling, temperature=np.full(plain.n_defects, config.simulation.temperature)
+    )
+    assert np.array_equal(plain._pairs.a, uniform._pairs.a) and np.array_equal(plain._pairs.b, uniform._pairs.b)
+    assert [m.tolist() for m in plain.cluster_members] == [m.tolist() for m in uniform.cluster_members]
+    reference = solve_mean_field(plain)
+    occupied = reference.occupancy > 0.5
+    for expected, got in zip(plain._rates(occupied), uniform._rates(occupied)):
+        assert np.array_equal(expected, got)
+    result = solve_mean_field(uniform)
+    assert result.current == reference.current and np.array_equal(result.occupancy, reference.occupancy)
+
+
+def test_local_temperature_enters_each_defect_and_each_pair():
+    """逐缺陷温度不均匀时（ADR-060）：缺陷 i 的 9 块电极速率等于整个引擎取温度 T_i 时第 i 行的值（声子线型、费米分布、R5 的
+    玻尔兹曼因子、R8 都取 T_i）；陷阱间跃迁的 MA 因子取两端温度的平均，引擎（KMC 组态）与平均场两种跃迁速率都是。"""
+    from kmc_leakage.mean_field import mean_field_hop_rates
+
+    config = make_config(voltage=3.0, seed=1, device=make_device(defects=make_defect_config(concentration_cm3=3.0e19)))
+    plain = KMCSimulation(config)
+    temperature = config.simulation.temperature + np.random.default_rng(3).uniform(0.0, 400.0, plain.n_defects)
+    hot = KMCSimulation(config, defects=plain.defects, coupling=plain.coupling, temperature=temperature)
+    occupancy = solve_mean_field(plain).occupancy
+    energy, field, barrier_c, barrier_a = hot._trap_state(occupancy)
+    blocks = hot._electrode_blocks(energy, field, barrier_c, barrier_a)
+    for i in (0, 7, 31, plain.n_defects - 1):
+        single = KMCSimulation(
+            replace(config, simulation=replace(config.simulation, temperature=float(temperature[i]))),
+            defects=plain.defects, coupling=plain.coupling,
+        )
+        expected = single._electrode_blocks(energy, field, barrier_c, barrier_a)[:, i]
+        np.testing.assert_allclose(blocks[:, i], expected, rtol=1e-12)
+    a, b = hot._pairs.a, hot._pairs.b
+    pair_temperature = 0.5 * (temperature[a] + temperature[b])
+    np.testing.assert_allclose(
+        hot._hop_rates(energy),
+        hot._hop_geometric * miller_abrahams_factor(energy[a], energy[b] - hot._hop_U_ab, pair_temperature),
+        rtol=1e-14,
+    )
+    np.testing.assert_allclose(
+        mean_field_hop_rates(hot, energy),
+        hot._hop_geometric * miller_abrahams_factor(energy[a], energy[b], pair_temperature),
+        rtol=1e-14,
+    )
+    assert not np.allclose(blocks, plain._electrode_blocks(energy, field, barrier_c, barrier_a))
+
+
+def _conductor_config():
+    """r_c = 1.2 nm、3×10¹⁹ cm⁻³：两侧都有接电极的导电簇。三分之一的缺陷带与之重合的固定电荷 −e，一个接电极导体的成员带
+    离开它 0.6 nm 的固定电荷 −e（导体背景里单独补上的那部分）。"""
+    config = _config(concentration_cm3=3.0e19, percolation_distance=1.2e-9)
+    defects = KMCSimulation(config).defects
+    sides = conducting_clusters(defects.positions, config.device, config.tddb.percolation_distance)
+    member = int(np.flatnonzero(sides == 0)[0])
+    fixed = np.where(np.arange(len(defects)) % 3 == 0, -Q, 0.0)
+    offset = np.zeros((len(defects), 3))
+    fixed[member] = -Q
+    offset[member, 2] = 0.6e-9
+    return config, replace(defects, fixed_charge=fixed, fixed_charge_offset=offset)
+
+
+def test_conductor_coupling_reproduces_the_poisson_potential_at_traps():
+    """接电极的导体在输运里是导体（ADR-060）：输运不动点上，成员处的电势等于导体电势（负极 0、正极 U）；陷阱处的引擎电势、
+    电场矢量与横向平均剖面，等于把陷阱电荷、固定电荷、导体电荷与外加偏压一起直接解泊松方程的结果扣掉陷阱自身电荷的贡献
+    （等效耦合的对角元，含导体对它的像）。导体电荷由耦合矩阵在成员上解出（`ConductorLayout`），成员上离开成员位置的固定电荷
+    照常计入。"""
+    config, defects = _conductor_config()
+    transport = _transport(config, defects)
+    layout, sim, solver = transport.layout, transport.sim, transport.sim.solver
+    sides, members, traps = layout.sides, layout.members, layout.traps
+    assert np.any(sides == 0) and np.any(sides == 1) and sim.n_defects == traps.size
+    assert np.any(defects.fixed_charge[members] != defects.colocated_fixed_charge[members])
+    top = tddb_module.top_boundary_potential(config.device, config.simulation.voltage)
+    phi = transport.phi
+    np.testing.assert_allclose(solver.interpolate(phi, defects.positions[members]), np.where(sides[members] == 0, 0.0, top),
+                               rtol=0.0, atol=1e-12)
+    p = transport.result.occupancy
+    own = p - defects.charge_state[traps] - defects.colocated_fixed_charge[traps] / Q
+    engine, _, engine_bar = sim._electrostatics(p)
+    np.testing.assert_allclose(
+        solver.interpolate(phi, defects.positions[traps]) - own * sim.coupling.phi_self, engine, rtol=0.0, atol=1e-12
+    )
+    np.testing.assert_allclose(solver.lateral_average(phi), engine_bar, rtol=0.0, atol=1e-12)
+    field = solver.field_vectors_at(phi, defects.positions[traps], defects.field_side[traps]) - own * sim.coupling.field_self
+    np.testing.assert_allclose(field, _field_vectors(sim, p), rtol=1e-9, atol=1e-3)
+    # 占据等价：q·(Z − 占据) + q_fix,重合 在成员上就是导体电荷
+    rest = solver.solve(
+        solver.deposit(defects.positions[traps], Q * (defects.charge_state[traps] - p))
+        + solver.deposit(defects.fixed_charge_positions,
+                         np.where(np.isin(np.arange(len(defects)), members), defects.fixed_charge - defects.colocated_fixed_charge,
+                                  defects.fixed_charge)),
+        top,
+    )
+    green = transport.coupling.phi_matrix[np.ix_(members, members)]
+    carried = np.linalg.solve(green, solver.interpolate(phi, defects.positions[members]) - solver.interpolate(rest, defects.positions[members]))
+    equivalent = transport.occupancy[members] - defects.charge_state[members] - defects.colocated_fixed_charge[members] / Q
+    np.testing.assert_allclose(equivalent, carried, rtol=1e-9, atol=1e-9)
+
+
+def test_conductor_exchange_enters_the_electrode_blocks_with_detailed_balance():
+    """陷阱与接电极导体成员交换电子（`kmc.Conductors`，ADR-060）：引擎的 R2/R3 块比去掉交换通道（成员表置空、背景不变）
+    多出的部分，等于逐对直接求和的 ν·exp[−r·(1/r_D,陷阱 + 1/r_D,成员)]·Θ（成员 → 陷阱取 Θ(μ, E)、陷阱 → 成员取 Θ(E, μ)），
+    接负极的记进 R2C/R3C、接正极的记进 R2A/R3A，其余块不变。每个陷阱与负极侧导体的俘获与逃逸之比是 exp[−(E − 0)/k_BT]，
+    只与这个电子库交换时平衡在费米分布。"""
+    config, defects = _conductor_config()
+    transport = _transport(config, defects)
+    sim = transport.sim
+    conductors = sim.conductors
+    bare = KMCSimulation(
+        config, defects=sim.defects, coupling=sim.coupling, solver=sim.solver, temperature=sim._temperature,
+        conductors=replace(conductors, positions=np.zeros((0, 3)), fermi_level=np.zeros(0), positive_share=np.zeros(0),
+                           r_D=np.zeros(0), temperature=np.zeros(0)),
+    )
+    p = transport.result.occupancy
+    state = sim._trap_state(p)
+    blocks, reference = sim._electrode_blocks(*state), bare._electrode_blocks(*state)
+    energy = state[0]
+    distance = np.linalg.norm(minimum_image_delta(
+        conductors.positions[None, :, :] - sim.defects.positions[:, None, :], config.device.Lx, config.device.Ly
+    ), axis=-1)
+    geometric = r6_elastic_hop(sim.defects.attempt_frequency[:, None], distance, sim.defects.r_D[:, None], conductors.r_D[None, :])
+    temperature = config.simulation.temperature
+    capture = geometric * miller_abrahams_factor(conductors.fermi_level[None, :], energy[:, None], temperature)
+    escape = geometric * miller_abrahams_factor(energy[:, None], conductors.fermi_level[None, :], temperature)
+    share = conductors.positive_share[None, :]
+    floor = 1e-12 * np.abs(blocks[[_B_R2C, _B_R2A, _B_R3C, _B_R3A]]).max()
+    for block, expected in (
+        (_B_R2C, (capture * (1.0 - share)).sum(axis=1)), (_B_R2A, (capture * share).sum(axis=1)),
+        (_B_R3C, (escape * (1.0 - share)).sum(axis=1)), (_B_R3A, (escape * share).sum(axis=1)),
+    ):
+        np.testing.assert_allclose(blocks[block] - reference[block], expected, rtol=1e-9, atol=floor)
+    untouched = [b for b in range(9) if b not in (_B_R2C, _B_R2A, _B_R3C, _B_R3A)]
+    assert np.array_equal(blocks[untouched], reference[untouched])
+    exchanged = (blocks[_B_R2C] - reference[_B_R2C]) > 1e3
+    assert np.any(exchanged)
+    ratio = (blocks[_B_R2C] - reference[_B_R2C])[exchanged] / (blocks[_B_R3C] - reference[_B_R3C])[exchanged]
+    np.testing.assert_allclose(ratio, np.exp(-energy[exchanged] / (constants.Boltzmann * temperature)), rtol=1e-9)
+
+
+def _chain(device, x, y, z_from, z_to, spacing=0.28e-9):
+    """(x, y) 处从 z_from 到 z_to 的一列 O 空位，间距不超过 `spacing`。"""
+    n = int(np.ceil(abs(z_to - z_from) / spacing)) + 1
+    return np.column_stack([np.full(n, x), np.full(n, y), np.linspace(z_from, z_to, n)])
+
+
+def test_gap_tunneling_follows_the_R1_integral_on_the_gap_path():
+    """间隙隧穿（ADR-060）：一列接负极的空位（顶端离正极 1 nm）与一列接正极的空位（底端离负极 1.5 nm、横向离得远）。
+    每个接负极成员一条竖直路径到正极平面，每个接正极成员一条从负极平面上来的竖直路径；每条路径的速率等于 R1 的能量积分
+    （`r1_electrode_electrode`）在这条路径上的值，势垒取输运不动点的三维电势，面积取 `gap_tunneling_area`。总电流是各路径
+    之和乘 e，各成员的放热是自己那条路径的 eU 倍；顶端成员的路径最短、尖端前方电势降得快，比身后的成员大得多。间隙从
+    1 nm 拉大到 2 nm 时电流变小。"""
+    config = _config(concentration_cm3=3.0e18, percolation_distance=0.3e-9)
+    config = replace(config, simulation=replace(config.simulation, voltage=3.6, grid=replace(config.simulation.grid, nx=80, ny=80, nz=80)))
+    device, area, voltage = config.device, config.tddb.gap_tunneling_area, 3.6
+    material = device.stack.single_material
+    solver = PoissonSolver(device, config.simulation.grid)
+    currents = []
+    for gap in (1.0e-9, 2.0e-9):
+        positions = np.vstack([
+            _chain(device, 10.03e-9, 10.07e-9, 0.2e-9, device.Lz - gap),
+            _chain(device, 2.03e-9, 2.07e-9, device.Lz - 0.2e-9, 1.5e-9),
+        ])
+        defects = DefectEnsemble.uniform(
+            positions, np.full(len(positions), 1.15 * EV), material,
+            band_reference=float(device.layer_band_references()[0]), charge_state=1.0,
+        )
+        temperature = np.full(len(defects), config.simulation.temperature)
+        transport = _transport(config, defects, temperature)
+        layout = transport.layout
+        assert set(layout.sides.tolist()) == {0, 1} and layout.traps.size == 0
+        current, heat = gap_tunneling(transport, temperature, area)
+        points = positions[layout.members]
+        sides = layout.sides[layout.members]
+        s = np.linspace(0.0, 1.0, tddb_module._GAP_PATH_POINTS)
+        expected = np.zeros(points.shape[0])
+        for m, point in enumerate(points):
+            start, end = (point, np.append(point[:2], device.Lz)) if sides[m] == 0 else (np.append(point[:2], 0.0), point)
+            line = start + s[:, None] * (end - start)
+            band = device.band_reference_profile(line[:, 2]) - Q * solver.interpolate(transport.phi, line)
+            expected[m] = sum(r1_electrode_electrode(
+                s * float(np.linalg.norm(end - start)), band, area, voltage, config.simulation.temperature,
+                device.negative.effective_mass, device.stack.m_di_at(line[:, 2]),
+            ))
+        assert current == pytest.approx(Q * expected.sum(), rel=1e-12)
+        np.testing.assert_allclose(heat, Q * voltage * expected, rtol=1e-12)
+        negative = np.flatnonzero(sides == 0)
+        tip = negative[np.argmax(points[negative, 2])]
+        assert expected[tip] > 10.0 * np.sort(expected[negative])[-2]
+        currents.append(current)
+    assert currents[0] > currents[1] > 0.0
+
+
+def test_gap_tunneling_counts_a_mutual_pair_of_tips_once():
+    """接负极与接正极的两列空位上下相对、间隙 1 nm：顶端两个成员互为最近，这条路径只算一次、放热两端各一半；接负极的其余
+    成员连到对面最近的接正极成员（底端），接正极的其余成员从对面最近的接负极成员（顶端）连上来（ADR-060）。"""
+    config = _config(concentration_cm3=3.0e18, percolation_distance=0.3e-9)
+    config = replace(config, simulation=replace(config.simulation, voltage=3.6, grid=replace(config.simulation.grid, nx=80, ny=80, nz=80)))
+    device, area, voltage = config.device, config.tddb.gap_tunneling_area, 3.6
+    material = device.stack.single_material
+    solver = PoissonSolver(device, config.simulation.grid)
+    positions = np.vstack([
+        _chain(device, 10.03e-9, 10.07e-9, 0.2e-9, 3.5e-9),
+        _chain(device, 10.04e-9, 10.06e-9, device.Lz - 0.2e-9, 4.5e-9),
+    ])
+    defects = DefectEnsemble.uniform(
+        positions, np.full(len(positions), 1.15 * EV), material,
+        band_reference=float(device.layer_band_references()[0]), charge_state=1.0,
+    )
+    temperature = np.full(len(defects), config.simulation.temperature)
+    transport = _transport(config, defects, temperature)
+    layout = transport.layout
+    points = positions[layout.members]
+    sides = layout.sides[layout.members]
+    negative, positive = np.flatnonzero(sides == 0), np.flatnonzero(sides == 1)
+    tip, bottom = negative[np.argmax(points[negative, 2])], positive[np.argmin(points[positive, 2])]
+    s = np.linspace(0.0, 1.0, tddb_module._GAP_PATH_POINTS)
+
+    def rate(start, end):
+        line = start + s[:, None] * (end - start)
+        band = device.band_reference_profile(line[:, 2]) - Q * solver.interpolate(transport.phi, line)
+        return sum(r1_electrode_electrode(
+            s * float(np.linalg.norm(end - start)), band, area, voltage, config.simulation.temperature,
+            device.negative.effective_mass, device.stack.m_di_at(line[:, 2]),
+        ))
+
+    heat = np.zeros(points.shape[0])
+    total = 0.0
+    for a in negative:
+        r = rate(points[a], points[bottom])
+        total += r
+        heat[[a, bottom]] += 0.5 * Q * voltage * r
+    for b in positive:
+        if b != bottom:
+            r = rate(points[tip], points[b])
+            total += r
+            heat[[tip, b]] += 0.5 * Q * voltage * r
+    current, got = gap_tunneling(transport, temperature, area)
+    assert current == pytest.approx(Q * total, rel=1e-12)
+    np.testing.assert_allclose(got, heat, rtol=1e-12)
+
+
+def test_thermal_iteration_that_does_not_converge_is_flagged(monkeypatch):
+    """输运与热的迭代次数用满仍不收敛时记为热失控（ADR-060）：上限设为 1、k_TH 取得很小（升温到开尔文量级）时，
+    记录的迭代次数是 1、不收敛。"""
+    monkeypatch.setattr(tddb_module, "_THERMAL_MAX_ITERATIONS", 1)
+    config = _config(seed=1, concentration_cm3=3.0e19, thermal_conductivity=1.0e-6, max_generated_vacancies=1)
+    result = run_tddb(config)
+    assert np.all(result.thermal_iterations == 1) and not np.any(result.thermal_converged)
 
 
 def test_new_vacancy_is_born_occupied_with_its_interstitial_charge(trajectory):
@@ -219,13 +510,16 @@ def test_generation_conserves_charge(trajectory):
 @pytest.mark.parametrize("thermal_conductivity", [None, 1.0])
 def test_zero_generation_reproduces_steady_state_bitwise(thermal_conductivity):
     """G = 0（E_A 取 10³ eV，P_bb 下溢为 0）：没有生成事件，I(t) 在 [0, stop_time] 上恒定，且逐位等于同一初始实现下的
-    稳态平均场结果。开热反馈时第一条记录的输运仍取环境温度，结论不变。"""
+    稳态平均场结果。开热反馈时升温不到 0.01 K，输运与热迭代一次即收敛，输运仍按环境温度求值，结论不变。"""
     config = _config(activation_energy=1.0e3 * EV, thermal_conductivity=thermal_conductivity)
     result = run_tddb(config)
     steady = solve_mean_field(KMCSimulation(config))
-    assert result.stop_reason == "no_generation"
+    assert result.stop_reason == "no_generation" and result.breakdown_time is None
     assert result.end_time == config.tddb.stop_time
     assert result.time.tolist() == [0.0] and result.generation_rate.tolist() == [0.0]
+    assert result.thermal_iterations.tolist() == [1] and result.thermal_converged.tolist() == [True]
+    assert np.all(result.temperature_at_defects == config.simulation.temperature)
+    assert result.gap_current[0] == 0.0 and result.filament_current[0] == 0.0
     assert result.current[0] == steady.current
     for name in MECHANISMS:
         assert result.by_mechanism[name][0] == steady.by_mechanism[name]
@@ -271,7 +565,8 @@ def test_trajectory_bookkeeping(trajectory):
 
     total = sum(result.by_mechanism[name] for name in MECHANISMS)
     np.testing.assert_allclose(total, result.current, rtol=1e-12)
-    assert np.all(result.filament_current == 0.0) and np.array_equal(result.transport_current, result.current)
+    assert np.all(result.filament_current == 0.0) and np.all(result.gap_current == 0.0)
+    assert np.array_equal(result.transport_current, result.current)
     assert np.all(result.conductor_gap == device.Lz)  # r_c < min_separation：没有导电簇
     assert np.all(result.generation_rate > 0.0)
     assert np.all(np.diff(result.n_precursors) == -1)  # 每次出生用掉一个前驱位点
@@ -281,11 +576,12 @@ def test_trajectory_bookkeeping(trajectory):
     assert result.empty_generated[-1] == pytest.approx(np.sum(1.0 - result.occupancy[n_initial:]), rel=1e-12)
     assert result.empty_generated[0] == 0.0
 
-    # 等温：温度全是环境值；没有导电簇，不会击穿
+    # 等温：温度全是环境值，输运只求一次；没有导电簇，不会击穿
     ambient = config.simulation.temperature
     assert not result.thermal
-    for name in ("transport_temperature", "effective_temperature", "peak_temperature"):
+    for name in ("defect_temperature", "peak_temperature"):
         assert np.all(getattr(result, name) == ambient), name
+    assert np.all(result.thermal_iterations == 1) and np.all(result.thermal_converged)
     assert result.breakdown_time is None and result.stop_reason == "max_generated"
     for k, size in enumerate(result.dense_cluster_size):
         assert size == np.bincount(distance_clusters(positions[: n_initial + k], device, 0.6e-9)).max()
@@ -356,13 +652,13 @@ def _admissible(device, positions, point):
     return bool(distance.min() >= standoff)
 
 
-def _sites_near_sources(inner, occupancy, rng, n_near=40, n_uniform=40, sources=None):
-    """前驱位点：前 `n_near` 个放在 `sources`（缺省为占据 ≥ 0.5 的缺陷）旁 0.5–0.8 nm 处（陷阱项显著），其余 `n_uniform`
-    个在可采样窗口里均匀撒；都在窗口内且离全部缺陷 ≥ min_separation。"""
-    device = inner.device
-    positions = inner.defects.positions
+def _sites_near_sources(transport, rng, n_near=40, n_uniform=40, sources=None):
+    """前驱位点：前 `n_near` 个放在 `sources`（缺省为占据 ≥ 0.5 的缺陷，编号取全体缺陷）旁 0.5–0.8 nm 处（陷阱项显著），
+    其余 `n_uniform` 个在可采样窗口里均匀撒；都在窗口内且离全部缺陷 ≥ min_separation。"""
+    device = transport.sim.device
+    positions = transport.defects.positions
     standoff = _global_standoff(device)
-    sources = np.flatnonzero(occupancy >= 0.5) if sources is None else sources
+    sources = np.flatnonzero(transport.occupancy >= 0.5) if sources is None else sources
     assert sources.size > 0
     points = []
     while len(points) < n_near:
@@ -412,13 +708,13 @@ def test_electrode_term_and_bond_breaking_match_engine_probe(monkeypatch, width)
     offset = np.zeros((len(defects), 3))
     fixed[1] = -Q
     offset[1, 2] = 0.6e-9 if defects.positions[1, 2] < 0.5 * config.device.Lz else -0.6e-9
-    inner = KMCSimulation(config, defects=replace(defects, fixed_charge=fixed, fixed_charge_offset=offset))
-    occupancy = solve_mean_field(inner).occupancy
+    transport = _transport(config, replace(defects, fixed_charge=fixed, fixed_charge_offset=offset))
+    inner, occupancy = transport.sim, transport.occupancy
     # 铺满窗口的位点每 60 个取一个，约 290 个
     precursors = Precursors(place_precursors(config.device, inner.defects.positions, np.random.default_rng(5)).positions[::60])
-    rates = generation_rates(inner, occupancy, tddb, precursors)
+    rates = generation_rates(transport, tddb, precursors)
     single = np.array([
-        generation_rates(inner, occupancy, tddb, Precursors(point[None, :])).electrode[0] for point in precursors.positions
+        generation_rates(transport, tddb, Precursors(point[None, :])).electrode[0] for point in precursors.positions
     ])
 
     extended, occ, probe = _probe(config, inner, occupancy, precursors.positions)
@@ -454,10 +750,10 @@ def test_trap_term_is_the_direct_sum_over_occupied_traps():
     源陷阱能级取平均场能级（ADR-038）。源陷阱全空时陷阱项为 0。"""
     config = _config(concentration_cm3=3.0e19)
     tddb, device = config.tddb, config.device
-    inner = KMCSimulation(config)
-    occupancy = solve_mean_field(inner).occupancy
-    precursors = _sites_near_sources(inner, occupancy, np.random.default_rng(9))
-    rates = generation_rates(inner, occupancy, tddb, precursors)
+    transport = _transport(config)
+    inner, occupancy = transport.sim, transport.occupancy
+    precursors = _sites_near_sources(transport, np.random.default_rng(9))
+    rates = generation_rates(transport, tddb, precursors)
 
     extended, occ, probe = _probe(config, inner, occupancy, precursors.positions)
     precursor_energy = extended._trap_state(occ)[0][probe]
@@ -476,7 +772,8 @@ def test_trap_term_is_the_direct_sum_over_occupied_traps():
     ).sum(axis=1)
     assert np.all(expected[:40] > 1.0)
     np.testing.assert_allclose(rates.trap, expected, rtol=1e-9, atol=tddb_module._TRAP_TERM_FLOOR)
-    assert np.all(generation_rates(inner, np.zeros(inner.n_defects), tddb, precursors).trap == 0.0)
+    empty = replace(transport, occupancy=np.zeros(inner.n_defects))
+    assert np.all(generation_rates(empty, tddb, precursors).trap == 0.0)
 
 
 def test_generation_rates_follow_local_temperature():
@@ -485,25 +782,25 @@ def test_generation_rates_follow_local_temperature():
     相同，电极项的差别在插值表的精度内（ADR-055）。"""
     config = _config(concentration_cm3=3.0e19)
     tddb = config.tddb
-    inner = KMCSimulation(config)
-    occupancy = solve_mean_field(inner).occupancy
-    precursors = _sites_near_sources(inner, occupancy, np.random.default_rng(4))
+    transport = _transport(config)
+    inner, occupancy = transport.sim, transport.occupancy
+    precursors = _sites_near_sources(transport, np.random.default_rng(4))
     ambient = config.simulation.temperature
     shape = inner.solver.grid.shape
-    base = generation_rates(inner, occupancy, tddb, precursors)
-    flat = generation_rates(inner, occupancy, tddb, precursors, np.full(shape, ambient))
+    base = generation_rates(transport, tddb, precursors)
+    flat = generation_rates(transport, tddb, precursors, np.full(shape, ambient))
     assert np.all(base.trap[:40] > 0.0)
     for name in GenerationRates._fields:
         np.testing.assert_allclose(getattr(flat, name), getattr(base, name), rtol=1e-12)
 
     field = ambient + np.random.default_rng(4).uniform(0.0, 80.0, shape)
-    local = generation_rates(inner, occupancy, tddb, precursors, field)
+    local = generation_rates(transport, tddb, precursors, field)
     temperature = inner.solver.interpolate(field, precursors.positions)
     assert not np.allclose(local.rates, base.rates)
     for i in (0, 17, 39, 40, len(precursors) - 1):
         single = Precursors(precursors.positions[i:i + 1])
-        alone = generation_rates(inner, occupancy, tddb, single, field)
-        uniform = generation_rates(inner, occupancy, tddb, single, np.full(shape, temperature[i]))
+        alone = generation_rates(transport, tddb, single, field)
+        uniform = generation_rates(transport, tddb, single, np.full(shape, temperature[i]))
         for name in GenerationRates._fields:
             assert getattr(alone, name)[0] == pytest.approx(getattr(uniform, name)[0], rel=1e-10), name
         # 一组位点一起求值：陷阱项与 P_bb 与单个位点相同，电极项走插值表（ADR-055）
@@ -518,8 +815,8 @@ def test_activation_energy_shift_only_rescales_time(monkeypatch):
     saturated = []
     original = tddb_module.generation_rates
 
-    def recording(inner, occupancy, tddb, precursors, temperature_field=None):
-        result = original(inner, occupancy, tddb, precursors, temperature_field)
+    def recording(transport, tddb, precursors, temperature_field=None):
+        result = original(transport, tddb, precursors, temperature_field)
         saturated.append(bool(np.any(result.bond_breaking >= 1.0)))
         return result
 
@@ -538,44 +835,57 @@ def test_activation_energy_shift_only_rescales_time(monkeypatch):
     np.testing.assert_allclose(shifted.generation_rate, base.generation_rate / factor, rtol=1e-9)
 
 
-def test_thermal_feedback_feeds_previous_power_into_transport_and_generation(monkeypatch):
-    """开热反馈（§6.6、§8.4）：第 k 步的内层输运用第 k−1 步功率给出的缺陷处加权温度（第 0 步取
-    环境温度）；每步记录的功率、加权温度与温度场最高值就是该步稳态的 ΔE·R 解热方程的结果；
-    生成率取同一步的温度场。k_TH 取得很小，升温到开尔文量级，数值上看得出来。"""
+def test_thermal_feedback_iterates_local_temperature_to_self_consistency(monkeypatch):
+    """开热反馈（§6.6、§8.4，ADR-060）：内层输运按缺陷处的局域温度求值（引擎的逐缺陷温度就是传进去的温度）。每一步里
+    "输运 → 放热 → 温度场 → 缺陷处温度"迭代：下一次输运的温度就是上一次温度场在缺陷处的值，最后一次与它给出的温度场
+    在缺陷处相差 ≤ 0.01 K（收敛）。记录的功率、缺陷处最高温度与温度场最高值都取最后一次，生成率取同一份温度场；
+    下一步从这份温度场在新缺陷集合处的值起（第 0 步取环境温度）。k_TH 取得很小，升温到开尔文量级，第 0 步迭代不止一次。"""
     k_th = 1.0e-6
     config = _config(seed=1, concentration_cm3=3.0e19, thermal_conductivity=k_th, max_generated_vacancies=3)
     calls, temperature_fields = [], []
-    original_mf, original_rates = tddb_module.solve_mean_field, tddb_module.generation_rates
+    original_transport, original_rates = tddb_module.solve_transport, tddb_module.generation_rates
 
-    def recording_mf(sim, occupancy=None):
-        result = original_mf(sim, occupancy)
-        calls.append((sim, result))
+    def recording_transport(config, layout, defects, coupling, solver, temperature, occupancy=None):
+        result = original_transport(config, layout, defects, coupling, solver, temperature, occupancy)
+        calls.append((defects, temperature.copy(), result))
         return result
 
-    def recording_rates(inner, occupancy, tddb, precursors, temperature_field=None):
+    def recording_rates(transport, tddb, precursors, temperature_field=None):
         temperature_fields.append(temperature_field)
-        return original_rates(inner, occupancy, tddb, precursors, temperature_field)
+        return original_rates(transport, tddb, precursors, temperature_field)
 
-    monkeypatch.setattr(tddb_module, "solve_mean_field", recording_mf)
+    monkeypatch.setattr(tddb_module, "solve_transport", recording_transport)
     monkeypatch.setattr(tddb_module, "generation_rates", recording_rates)
     result = run_tddb(config)
 
     ambient = config.simulation.temperature
     assert result.thermal and result.stop_reason == "max_generated"
-    assert result.transport_temperature[0] == ambient
-    assert np.array_equal(result.transport_temperature[1:], result.effective_temperature[:-1])
-    assert np.all(result.effective_temperature > ambient + 1.0)
-    assert np.all(result.peak_temperature >= result.effective_temperature)
-    for k, ((sim, mf), temperature_field) in enumerate(zip(calls, temperature_fields)):
-        assert sim.sim.temperature == result.transport_temperature[k]
-        heat = heat_release(sim, mf.occupancy)
-        field = solve_temperature(sim.solver, power_map(sim.solver, sim.defects.positions, heat.defect), k_th, ambient)
-        assert result.power[k] == heat.dielectric
-        assert result.effective_temperature[k] == transport_temperature(
-            sim.solver, field, sim.defects.positions, heat.defect, ambient
-        )
-        assert result.peak_temperature[k] == field.max()
-        assert np.array_equal(temperature_field, field)
+    assert np.all(result.thermal_converged) and result.thermal_iterations[0] >= 2
+    assert len(calls) == result.thermal_iterations.sum() and len(temperature_fields) == result.time.size
+    assert np.all(calls[0][1] == ambient)
+    assert np.all(result.defect_temperature > ambient + 1.0)
+    solver = PoissonSolver(config.device, config.simulation.grid)
+
+    def field_of(defects, transport):
+        heat = np.zeros(len(defects))
+        heat[transport.layout.traps] = transport.heat.defect
+        return solve_temperature(solver, power_map(solver, defects.positions, heat), k_th, ambient)
+
+    last = np.cumsum(result.thermal_iterations) - 1
+    for j, (defects, temperature, transport) in enumerate(calls):
+        assert np.array_equal(transport.sim._temperature, temperature)
+        field = field_of(defects, transport)
+        updated = solver.interpolate(field, defects.positions)
+        if j in last:
+            k = int(np.flatnonzero(last == j)[0])
+            assert np.max(np.abs(updated - temperature)) <= 0.01
+            assert result.power[k] == pytest.approx(transport.heat.dielectric, rel=1e-12)
+            assert result.defect_temperature[k] == temperature.max()
+            assert result.peak_temperature[k] == pytest.approx(field.max(), rel=1e-12)
+            np.testing.assert_allclose(temperature_fields[k], field, rtol=1e-12)
+        if j + 1 < len(calls):
+            next_defects, next_temperature, _ = calls[j + 1]
+            np.testing.assert_allclose(next_temperature, solver.interpolate(field, next_defects.positions), rtol=1e-12)
 
 
 def test_distance_clusters_link_defects_closer_than_the_cutoff():
@@ -619,12 +929,12 @@ def test_conducting_clusters_join_vacancies_and_electrodes_closer_than_r_c():
 
 
 def test_conductors_are_equipotential_and_electrode_conductors_supply_electrons_at_the_fermi_level():
-    """导电簇是等电位的导体（ADR-054/056）。生成率的电势里：接电极的导电簇成员处的电势等于所接电极的边界值（负极 0、
-    正极 U）；悬空导电簇（≥ 2 个空位）成员处的电势彼此相同，导体电荷之和等于这些成员在引擎里的电荷之和；成员的能级取
-    导体电势；其余缺陷处的电势扣掉自身电荷的贡献，等于引擎的电势加上导电簇带来的改变。陷阱项把接电极的成员当作所接
-    电极费米能级处占满（p = 1）的电子源，其余陷阱（含悬空导电簇的成员）按平均场占据、能级取同一份电势；P_bb 的场取
-    这份电势的 Gaussian 平均。没有导电簇时电势就是只放缺陷电荷的解。三分之一的缺陷带与之重合的固定电荷 −e，另有一个
-    离开缺陷 0.6 nm。"""
+    """导电簇是等电位的导体（ADR-054/056/060）。生成率的电势里：接电极的导体成员处的电势等于导体电势（负极 0、正极 U）；
+    悬空导电簇（≥ 2 个空位）成员处的电势彼此相同，导体电荷之和等于这些成员在输运里的电荷之和；成员的能级取导体电势；
+    其余陷阱处的电势扣掉自身电荷的贡献（等效耦合的对角元，含接电极导体对自身电荷的像），等于输运的电势加上悬空导电簇带来的
+    改变。陷阱项把接电极的成员当作所在处费米能级（负极 0、正极 −eU）占满（p = 1）的电子源，其余陷阱（含悬空导电簇的成员）
+    按平均场占据、能级取同一份电势；P_bb 的场取这份电势的 Gaussian 平均。没有导电簇时电势就是只放缺陷电荷的解。三分之一的
+    缺陷带与之重合的固定电荷 −e，另有一个离开缺陷 0.6 nm。"""
     config = _config(concentration_cm3=3.0e19, percolation_distance=1.2e-9)
     tddb, device = config.tddb, config.device
     material = device.stack.single_material
@@ -633,83 +943,84 @@ def test_conductors_are_equipotential_and_electrode_conductors_supply_electrons_
     offset = np.zeros((len(defects), 3))
     fixed[1] = -Q
     offset[1, 2] = 0.6e-9 if defects.positions[1, 2] < 0.5 * device.Lz else -0.6e-9
-    inner = KMCSimulation(config, defects=replace(defects, fixed_charge=fixed, fixed_charge_offset=offset))
-    occupancy = solve_mean_field(inner).occupancy
-    positions = inner.defects.positions
-    labels = distance_clusters(positions, device, tddb.percolation_distance)
-    sides = conducting_clusters(positions, device, tddb.percolation_distance)
+    defects = replace(defects, fixed_charge=fixed, fixed_charge_offset=offset)
+    transport = _transport(config, defects)
+    layout, occupancy, positions = transport.layout, transport.occupancy, defects.positions
+    labels, sides, members = layout.labels, layout.sides, layout.members
     floating = (np.bincount(labels)[labels] >= 2) & (sides < 0)
-    members = np.flatnonzero(sides >= 0)
     conductor = np.flatnonzero((sides >= 0) | floating)
     free = np.flatnonzero((sides < 0) & ~floating)
     groups = np.unique(labels[floating])
     assert np.any(sides == 0) and np.any(sides == 1) and not np.any(sides == 2)
     assert groups.size >= 2 and np.any(fixed[members] != 0.0) and np.any(fixed[floating] != 0.0)
 
-    solver = inner.solver
+    solver = transport.sim.solver
     top = tddb_module.top_boundary_potential(device, config.simulation.voltage)
-    phi, shift = tddb_module._conductor_potential(inner, occupancy, sides, labels)
+    phi, shift = tddb_module._conductor_potential(transport)
     at = solver.interpolate(phi, positions)
     np.testing.assert_allclose(at[members], np.where(sides[members] == 0, 0.0, top), rtol=0.0, atol=1e-10)
     for group in groups:
         assert np.ptp(at[labels == group]) < 1e-10
-    electrons = occupancy - inner.defects.charge_state - inner.defects.colocated_fixed_charge / Q
-    engine = inner._electrostatics(occupancy)[0]
+    electrons = occupancy - defects.charge_state - defects.colocated_fixed_charge / Q
+    self_term = transport.sim.coupling.phi_self[np.searchsorted(layout.traps, free)]
     np.testing.assert_allclose(
-        (at - electrons * inner.coupling.phi_self)[free], (engine + shift)[free], rtol=1e-9, atol=1e-12
+        (at[free] - electrons[free] * self_term), (transport.potential + shift)[free], rtol=1e-9, atol=1e-12
     )
-    np.testing.assert_allclose((engine + shift)[conductor], at[conductor], rtol=0.0, atol=1e-12)
-    assert np.abs(shift[free]).max() > 1e-3
+    np.testing.assert_allclose((transport.potential + shift)[conductor], at[conductor], rtol=0.0, atol=1e-12)
+    assert np.abs(shift[free]).max() > 1e-4
     # 导体电荷：从电势里扣掉其余电荷的解，在成员上解耦合矩阵即得；悬空导电簇的总电子数守恒
     outside = np.setdiff1d(np.arange(len(positions)), conductor)
     rest = solver.solve(
-        solver.deposit(positions[outside], Q * (inner.defects.charge_state - occupancy)[outside])
+        solver.deposit(positions[outside], Q * (defects.charge_state - occupancy)[outside])
         + solver.deposit(
-            inner.defects.fixed_charge_positions,
-            np.where(np.isin(np.arange(len(positions)), conductor), fixed - inner.defects.colocated_fixed_charge, fixed),
+            defects.fixed_charge_positions,
+            np.where(np.isin(np.arange(len(positions)), conductor), fixed - defects.colocated_fixed_charge, fixed),
         ),
         top,
     )
-    green = inner.coupling.phi_matrix[np.ix_(conductor, conductor)]
+    green = transport.coupling.phi_matrix[np.ix_(conductor, conductor)]
     carried = np.linalg.solve(green, at[conductor] - solver.interpolate(rest, positions[conductor]))
     for group in groups:
         inside = labels[conductor] == group
         assert carried[inside].sum() == pytest.approx(electrons[conductor][inside].sum(), rel=1e-8, abs=1e-8)
         assert not np.allclose(carried[inside], electrons[conductor][inside], atol=1e-3)
 
-    no_clusters = np.arange(len(positions))
-    plain, zero = tddb_module._conductor_potential(inner, occupancy, np.full(len(sides), -1), no_clusters)
+    plain_config = replace(config, tddb=replace(tddb, percolation_distance=0.1e-9))
+    plain = _transport(plain_config, defects)
+    assert plain.layout.members.size == 0
+    plain_phi, zero = tddb_module._conductor_potential(plain)
     reference = solver.solve(
-        solver.deposit(positions, Q * (inner.defects.charge_state - occupancy))
-        + solver.deposit(inner.defects.fixed_charge_positions, inner.defects.fixed_charge),
+        solver.deposit(positions, Q * (defects.charge_state - plain.occupancy))
+        + solver.deposit(defects.fixed_charge_positions, defects.fixed_charge),
         top,
     )
-    np.testing.assert_allclose(plain, reference, rtol=1e-12, atol=1e-14)
+    np.testing.assert_allclose(plain_phi, reference, rtol=1e-12, atol=1e-14)
     assert np.all(zero == 0.0)
 
-    precursors = _sites_near_sources(inner, occupancy, np.random.default_rng(9), sources=members)
-    rates = generation_rates(inner, occupancy, tddb, precursors)
+    precursors = _sites_near_sources(transport, np.random.default_rng(9), sources=members)
+    rates = generation_rates(transport, tddb, precursors)
     points = precursors.positions
     precursor_energy = (
         device.band_reference_profile(points[:, 2]) - Q * solver.interpolate(phi, points) - tddb.precursor_ionization_energy
     )
     distance = np.linalg.norm(
-        minimum_image_delta(points[:, None, :] - inner.defects.positions[None, :, :], device.Lx, device.Ly), axis=-1
+        minimum_image_delta(points[:, None, :] - positions[None, :, :], device.Lx, device.Ly), axis=-1
     )
 
     def direct_sum(source_energy, source_occupancy):
         return trap_precursor_capture_rate(
-            inner.defects.attempt_frequency[None, :], distance, inner.defects.r_D[None, :],
+            defects.attempt_frequency[None, :], distance, defects.r_D[None, :],
             localization_radius(tddb.precursor_ionization_energy, material.m_di),
             source_energy[None, :], precursor_energy[:, None], source_occupancy[None, :], config.simulation.temperature,
         ).sum(axis=1)
 
-    trap_energy = inner._trap_state(occupancy)[0] - Q * shift
     fermi = np.where(sides == 0, 0.0, -Q * config.simulation.voltage)
-    expected = direct_sum(np.where(sides >= 0, fermi, trap_energy), np.where(sides >= 0, 1.0, occupancy))
+    np.testing.assert_allclose(transport.energy[members], fermi[members], rtol=0.0, atol=1e-30)
+    source = np.where(sides >= 0, fermi, transport.energy - Q * shift)
+    expected = direct_sum(source, np.where(sides >= 0, 1.0, occupancy))
     np.testing.assert_allclose(rates.trap, expected, rtol=1e-9, atol=tddb_module._TRAP_TERM_FLOOR)
-    # 成员若仍按平均场能级与占据计入，紧挨成员的位点陷阱项明显不同
-    assert not np.allclose(direct_sum(trap_energy, occupancy)[:40], expected[:40], rtol=0.1)
+    # 接电极成员不作电子源时，紧挨成员的位点陷阱项明显不同
+    assert not np.allclose(direct_sum(source, np.where(sides >= 0, 0.0, occupancy))[:40], expected[:40], rtol=0.1)
 
     mean = solver.gaussian_average(np.stack(solver.electric_field(phi), axis=-1), tddb.field_averaging_width)
     p_bb = bond_break_probability(
@@ -720,90 +1031,113 @@ def test_conductors_are_equipotential_and_electrode_conductors_supply_electrons_
 
 
 def test_breakdown_at_start_when_the_initial_defects_already_span_the_film():
-    """初始缺陷已经连成贯穿通路（r_c = 4 nm）：轨迹停在 t = 0，t_BD = 0；这条记录的电流 = 同一实现的稳态内层输运电流 +
-    细丝的 G₀·V（G₀ = 2e²/h ≈ 77.5 µS），不求生成率（NaN），导体间隙为 0（ADR-054）。"""
+    """初始缺陷已经连成贯穿通路（r_c = 4 nm）：t_BD = 0，击穿后不再跑（post_breakdown_steps = 0）时轨迹停在 t = 0。这条记录
+    的电流 = 同一实现的内层输运电流 + 间隙隧穿 + 细丝的 G₀·V（G₀ = 2e²/h ≈ 77.5 µS），细丝功率 G₀·V² 平分到贯穿通路的
+    空位上、记进介质功率，不求生成率（NaN），导体间隙为 0（ADR-054/060）。"""
     config = _config(concentration_cm3=3.0e19, percolation_distance=4.0e-9)
     result = run_tddb(config)
-    steady = solve_mean_field(KMCSimulation(config))
+    steady = _transport(config)
+    voltage = config.simulation.voltage
+    gap, gap_heat = gap_tunneling(steady, np.full(len(steady.defects), config.simulation.temperature),
+                                  config.tddb.gap_tunneling_area)
+    current, heat = filament(steady.layout, voltage)
+    spanning = steady.layout.sides[steady.layout.members] == 2
+    assert np.any(spanning)
+    assert current == _QUANTUM_CONDUCTANCE * voltage and _QUANTUM_CONDUCTANCE == pytest.approx(7.748091729e-5, rel=1e-9)
+    np.testing.assert_allclose(heat[spanning], current * voltage / np.count_nonzero(spanning), rtol=1e-15)
+    assert np.all(heat[~spanning] == 0.0)
+
     assert result.stop_reason == "breakdown" and result.breakdown_time == 0.0 and result.time.tolist() == [0.0]
-    assert _QUANTUM_CONDUCTANCE == pytest.approx(7.748091729e-5, rel=1e-9)
-    assert result.filament_current[0] == _QUANTUM_CONDUCTANCE * config.simulation.voltage
-    assert result.current[0] == steady.current + result.filament_current[0]
-    assert result.transport_current[0] == steady.current
+    assert result.filament_current[0] == current and result.gap_current[0] == gap
+    assert result.transport_current[0] == steady.result.current
+    assert result.current[0] == steady.result.current + gap + current
+    assert result.power[0] == pytest.approx(steady.heat.dielectric + gap_heat.sum() + current * voltage, rel=1e-12)
     assert np.isnan(result.generation_rate[0]) and result.conductor_gap[0] == 0.0
 
 
-def test_trajectory_stops_at_the_first_spanning_path(monkeypatch):
-    """击穿判据（§6.3，ADR-054）：每条记录按当时的缺陷集合找导电簇；没有贯穿通路的记录细丝电流为 0，记录的导体间隙就是
-    `conductor_gap`、不小于 r_c；轨迹停在第一条出现贯穿通路的记录上，t_BD 就是它的时刻，电流 = 内层输运电流 + G₀·V，
-    间隙为 0、不求生成率。进度回调拿到的是总电流密度；I-t 拟合只用内层输运电流。r_c = 1.95 nm 时初始缺陷还没连通
-    （阈值 2.017 nm），第 4 次生成接通。"""
-    config = _config(seed=1, concentration_cm3=3.0e19, percolation_distance=1.95e-9, max_generated_vacancies=12)
+def test_breakdown_time_and_steps_after_breakdown(monkeypatch):
+    """击穿判据（§6.3，ADR-054/060）：每条记录按当时的缺陷集合找导电簇；第一条出现贯穿通路的记录给出 t_BD，之后再跑
+    `post_breakdown_steps` = 2 步生成，第 2 步之后停（stop_reason = "breakdown"，终点是最后一条记录）。贯穿通路形成之前的
+    记录细丝电流为 0、导体间隙就是 `conductor_gap` 且不小于 r_c；之后每条记录的电流都含 G₀·V、间隙为 0。电流 = 内层输运 +
+    间隙隧穿 + 细丝，进度回调拿到的是总电流密度；只有最后一条不求生成率。I-t 拟合的缺省窗口到 t_BD 为止、只用内层输运
+    电流。r_c = 1.95 nm 时初始缺陷还没连通（阈值 2.017 nm），第 3 次生成接通。"""
+    config = _config(
+        seed=1, concentration_cm3=3.0e19, percolation_distance=1.95e-9, max_generated_vacancies=12, post_breakdown_steps=2
+    )
     device, r_c = config.device, config.tddb.percolation_distance
     calls, reported = [], []
-    original = tddb_module.solve_mean_field
+    original = tddb_module.solve_transport
 
-    def recording(sim, occupancy=None):
-        result = original(sim, occupancy)
-        calls.append((sim, result))
+    def recording(config, layout, defects, coupling, solver, temperature, occupancy=None):
+        result = original(config, layout, defects, coupling, solver, temperature, occupancy)
+        calls.append((defects, result))
         return result
 
-    monkeypatch.setattr(tddb_module, "solve_mean_field", recording)
+    monkeypatch.setattr(tddb_module, "solve_transport", recording)
     result = run_tddb(config, progress=lambda n, t, density: reported.append(density))
 
-    assert result.stop_reason == "breakdown" and result.breakdown_time == result.end_time == result.time[-1]
-    assert result.n_generated[-1] == 4 and len(calls) == len(reported) == result.time.size
-    for k, (sim, mf) in enumerate(calls):
-        sides = conducting_clusters(sim.defects.positions, device, r_c)
-        last = k == len(calls) - 1
-        assert bool(np.any(sides == 2)) == last
-        assert result.conductor_gap[k] == conductor_gap(sim.defects.positions, sides, device)
-        assert result.filament_current[k] == (_QUANTUM_CONDUCTANCE * config.simulation.voltage if last else 0.0)
-        assert result.transport_current[k] == mf.current
-        assert result.current[k] == mf.current + result.filament_current[k]
+    assert result.stop_reason == "breakdown" and result.end_time == result.time[-1]
+    assert len(calls) == len(reported) == result.time.size
+    spanning = np.array([np.any(conducting_clusters(d.positions, device, r_c) == 2) for d, _ in calls])
+    first = int(np.argmax(spanning))
+    assert result.n_generated[first] == 3 and result.breakdown_time == result.time[first]
+    assert np.array_equal(spanning, np.arange(len(calls)) >= first) and len(calls) == first + 3
+    for k, (defects, transport) in enumerate(calls):
+        sides = conducting_clusters(defects.positions, device, r_c)
+        assert result.conductor_gap[k] == conductor_gap(defects.positions, sides, device)
+        assert result.filament_current[k] == (_QUANTUM_CONDUCTANCE * config.simulation.voltage if spanning[k] else 0.0)
+        assert result.transport_current[k] == transport.result.current
+        assert result.current[k] == transport.result.current + result.gap_current[k] + result.filament_current[k]
         assert reported[k] == pytest.approx(result.current[k] / result.area, rel=1e-15)
-        if not last:
-            assert result.conductor_gap[k] >= r_c and result.generation_rate[k] > 0.0
-    assert result.conductor_gap[-1] == 0.0 and np.isnan(result.generation_rate[-1])
-    assert result.current[-1] > 1.0e3 * result.transport_current[-1]
+        if not spanning[k]:
+            assert result.conductor_gap[k] >= r_c
+    assert np.all(result.conductor_gap[first:] == 0.0)
+    assert np.all(result.generation_rate[:-1] > 0.0) and np.isnan(result.generation_rate[-1])
+    assert result.current[first] > 1.0e3 * result.transport_current[first]
     fit, times = fit_transient(result)
+    assert times[-1] == pytest.approx(result.breakdown_time, rel=1e-12)
     index = np.searchsorted(result.time, times, side="right") - 1
     assert fit == fit_power_law(times, result.transport_current[index] / result.area)
 
 
 def test_resuming_from_a_checkpoint_continues_the_same_trajectory(tmp_path):
     """续跑（ADR-057）：`checkpoint` 每步开始时拿到一次状态，第 0 个就是 `initial_state`；状态经 `save_state` / `load_state`
-    逐位还原（含 t = 0 时没有占据的情形与随机数流）。从第 2 步的状态续跑（开热反馈），记录与不停跑的同一条轨迹从这一步起
-    一致：新空位落在同样的位置，时刻、电流与输运温度只差舍入误差（静电耦合从头算，与逐个追加相对差约 10⁻¹⁰）；
-    `n_initial` 与出生时刻接着原轨迹，交给 `start` 的状态不被改动。"""
+    逐位还原（含 t = 0 时没有占据的情形、击穿之后的状态与随机数流）。从第 2 步的状态续跑（开热反馈），记录与不停跑的同一条
+    轨迹从这一步起一致：新空位落在同样的位置，时刻、电流与缺陷处温度只差舍入误差（静电耦合从头算，与逐个追加相对差约
+    10⁻¹⁰）；`n_initial` 与出生时刻接着原轨迹，交给 `start` 的状态不被改动。"""
     config = _config(seed=1, concentration_cm3=3.0e19, max_generated_vacancies=5, thermal_conductivity=2.0)
+    ambient = config.simulation.temperature
     states = []
     full = run_tddb(config, checkpoint=states.append)
     assert full.stop_reason == "max_generated" and len(states) == full.time.size == 6
     first = initial_state(config)
     assert np.array_equal(states[0].defects.positions, first.defects.positions)
     assert np.array_equal(states[0].precursors.positions, first.precursors.positions)
-    assert states[0].occupancy is None and states[0].transport_temperature == config.simulation.temperature
+    assert states[0].occupancy is None and np.all(states[0].temperature == ambient)
+    assert all(state.breakdown_time is None and state.steps_after_breakdown == 0 for state in states)
 
-    for k in (0, 2):
+    broken = replace(states[2], breakdown_time=1.5e-3, steps_after_breakdown=3)
+    for k, state in ((0, states[0]), (2, states[2]), (3, broken)):
         path = str(tmp_path / "state_{}.npz".format(k))
-        save_state(states[k], path)
+        save_state(state, path)
         loaded = load_state(path)
         for item in fields(DefectEnsemble):
-            assert np.array_equal(getattr(loaded.defects, item.name), getattr(states[k].defects, item.name)), item.name
-        assert loaded.n_initial == states[k].n_initial and loaded.time == states[k].time
-        assert np.array_equal(loaded.birth_time, states[k].birth_time)
+            assert np.array_equal(getattr(loaded.defects, item.name), getattr(state.defects, item.name)), item.name
+        assert loaded.n_initial == state.n_initial and loaded.time == state.time
+        assert np.array_equal(loaded.birth_time, state.birth_time)
         assert (loaded.occupancy is None) == (k == 0)
         if k:
-            assert np.array_equal(loaded.occupancy, states[k].occupancy)
-        assert np.array_equal(loaded.precursors.positions, states[k].precursors.positions)
-        assert loaded.transport_temperature == states[k].transport_temperature
-        assert np.array_equal(copy.deepcopy(loaded.rng).random(4), copy.deepcopy(states[k].rng).random(4))
+            assert np.array_equal(loaded.occupancy, state.occupancy)
+        assert np.array_equal(loaded.precursors.positions, state.precursors.positions)
+        assert np.array_equal(loaded.temperature, state.temperature)
+        assert loaded.breakdown_time == state.breakdown_time
+        assert loaded.steps_after_breakdown == state.steps_after_breakdown
+        assert np.array_equal(copy.deepcopy(loaded.rng).random(4), copy.deepcopy(state.rng).random(4))
 
     start = load_state(str(tmp_path / "state_2.npz"))
     before = start.rng.bit_generator.state
     assert start.time == full.time[2] and len(start.defects) == full.n_defects[2]
-    assert start.transport_temperature != config.simulation.temperature
+    assert np.all(start.temperature != ambient)
     resumed = run_tddb(config, start=start)
     assert start.rng.bit_generator.state == before and len(start.defects) == full.n_defects[2]
     assert resumed.stop_reason == full.stop_reason and resumed.n_initial == full.n_initial
@@ -813,7 +1147,8 @@ def test_resuming_from_a_checkpoint_continues_the_same_trajectory(tmp_path):
     np.testing.assert_allclose(resumed.time, full.time[2:], rtol=1e-9)
     np.testing.assert_allclose(resumed.current, full.current[2:], rtol=1e-8)
     np.testing.assert_allclose(resumed.generation_rate, full.generation_rate[2:], rtol=1e-8)
-    np.testing.assert_allclose(resumed.transport_temperature, full.transport_temperature[2:], rtol=1e-12)
+    np.testing.assert_allclose(resumed.defect_temperature, full.defect_temperature[2:], rtol=1e-12)
+    np.testing.assert_allclose(resumed.temperature_at_defects, full.temperature_at_defects, rtol=1e-12)
 
 
 def test_draw_generation_picks_sites_by_rate():
@@ -869,11 +1204,14 @@ def test_write_tddb_csv(tmp_path, trajectory):
     per_cm2 = constants.centi ** 2
     for k, (row, density) in enumerate(zip(rows, result.current_density)):
         assert float(row["J_total_A_cm2"]) == pytest.approx(density * per_cm2, rel=1e-5)
-        parts = sum(float(row["J_{}_A_cm2".format(name)]) for name in MECHANISMS) + float(row["J_filament_A_cm2"])
+        parts = sum(float(row["J_{}_A_cm2".format(name)]) for name in MECHANISMS)
+        parts += float(row["J_gap_A_cm2"]) + float(row["J_filament_A_cm2"])
         assert parts == pytest.approx(float(row["J_total_A_cm2"]), rel=1e-5)
         assert float(row["conductor_gap_nm"]) == pytest.approx(result.conductor_gap[k] / constants.nano, abs=1e-6)
         assert float(row["power_W"]) == pytest.approx(result.power[k], rel=1e-5)
-        assert float(row["T_effective_K"]) == pytest.approx(result.effective_temperature[k], abs=1e-6)
+        assert float(row["T_defect_max_K"]) == pytest.approx(result.defect_temperature[k], abs=1e-6)
+        assert int(row["thermal_iterations"]) == result.thermal_iterations[k]
+        assert int(row["thermal_converged"]) == int(result.thermal_converged[k])
         assert int(row["dense_cluster_size"]) == result.dense_cluster_size[k]
         assert int(row["mf_newton_steps"]) == result.newton_steps[k]
         assert int(row["n_precursors"]) == result.n_precursors[k]

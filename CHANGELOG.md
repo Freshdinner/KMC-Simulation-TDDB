@@ -9,6 +9,23 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。实测数据与方案对�
 
 #### TDDB 阶段
 
+- **热点由模型自己算**（ADR-060，`kmc.py`、`mean_field.py`、`thermal.py`、`tddb.py`、`config.py`/`io.py`、CLI 与绘图）。四处改动：
+  1. 接电极的导电簇在内层输运里是导体（电极的延伸）：陷阱之间的静电耦合在耦合矩阵上消去成员，近旁陷阱与成员按 R6/R7 的形式交换电子，
+     速率并进对应电极侧的 R2/R3 块（`kmc.Conductors`）；悬空导电簇在输运里仍是 TAT 陷阱。导体与对面电极（或对面导体）之间按 R1 的
+     能量积分算间隙隧穿（`gap_tunneling`，新配置项 `gap_tunneling_area_nm2`，缺省 (0.26 nm)²）。
+  2. 隧穿到导体上的电子的能量放在导体里：陷阱与导体交换、间隙隧穿与细丝（G₀·V² 平分到通路的空位上）的功率都进热源。
+  3. 内层输运改用缺陷处的局域温度（逐缺陷温度进 `KMCSimulation`，MA 因子取两端平均），与热方程迭代到缺陷处温度变化 ≤ 0.01 K，
+     不收敛记为热失控；去掉全局标量温度与 `thermal.transport_temperature`。生成率电极项插值表的温度方向改为 1/T 等距。
+  4. 击穿判据触发后再跑 `post_breakdown_steps` 步（新配置项，示例配置 20）；`TDDBResult.breakdown_time` 改为字段，I-t 拟合到 t_BD 为止。
+  记录新增 `gap_current`、`defect_temperature`、`thermal_iterations`、`thermal_converged`、`temperature_at_defects`，去掉 `transport_temperature`、
+  `effective_temperature`，CSV 相应改列；`TDDBState` 改存缺陷处温度、击穿时刻与击穿后步数（旧存档不能续跑）；`plot_stress_transient` 的
+  `stop` 参数改为 `breakdown_time`。
+  **为什么**：用户要求热点由模型自己算出来。原来导电簇只进生成率、输运用全局标量温度且不迭代、击穿即停、细丝功率不进热源，热点算不出来。
+  20×20 nm 测试体系（`results/10.15/hotspot/`）：间隙 0.4 nm 时间隙电流 1.8 nA、缺陷处升温 2 K；接通后 1 mW 的细丝功率给出温度场最高
+  4.1×10⁴ K（没有限流）。R1 的能量积分下限取发射极费米能级，间隙 0.5–2 nm 上比完整的 Tsu–Esaki 积分低 21–317 倍，取法待用户定。
+  **测试**：新增逐缺陷温度（均匀时逐位不变、不均匀时逐缺陷与逐对取值）、等效耦合与直接解泊松方程对拍、导体交换与细致平衡、导体交换的放热、
+  间隙隧穿的路径规则与 R1 积分、热迭代不收敛的标记、击穿后再跑；改写热反馈、导电簇、击穿、续跑、CSV 与绘图测试。`pytest tests/ -v` 313 passed。
+
 - **热反馈的作用阶段改为击穿开始之后**（ADR-059，只改文档）。PROJECT_CONTEXT_TDDB.md（§0、§1 目标、§3 因果链与 I-t 预期图像、§6.6、§8.4）
   与 README 的热反馈段改写：击穿前缺陷累积的幂律阶段温度基本不变，`temperature.md` 报道的急剧升温（> 1000 K）发生在击穿开始之后；
   热反馈不驱动击穿前的 I-t 斜率与 t_BD，电流突变由贯穿通路给出。ADR-037 补后续状态。

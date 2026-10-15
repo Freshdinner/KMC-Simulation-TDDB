@@ -332,11 +332,17 @@ def plot(
     typer.echo("已写入 {}（seed = {} 的缺陷实现）".format(path, seed))
 
 
+def _has_fit_window(result: TDDBResult) -> bool:
+    """击穿前（没有击穿时到终点）有生成事件，可以做 I-t 幂律拟合（`fit_transient` 的缺省窗口）。"""
+    stop = result.end_time if result.breakdown_time is None else result.breakdown_time
+    return result.time.size > 1 and result.time[1] < stop
+
+
 def _report_tddb(result: TDDBResult) -> None:
     """打印一条 TDDB 瞬态轨迹的摘要。"""
     density = result.current_density * _PER_CM2
     reasons = {
-        "breakdown": "击穿（负极侧与正极侧导电簇连通，形成贯穿通路），t_end 即 t_BD",
+        "breakdown": "击穿（负极侧与正极侧导电簇连通，形成贯穿通路）之后再跑的步数用完",
         "max_generated": "生成空位数达到上限",
         "stop_time": "应力时间达到上限",
         "no_generation": "总生成率为 0（前驱用完或 N_T = 0），电流保持最后一条记录的值",
@@ -347,6 +353,9 @@ def _report_tddb(result: TDDBResult) -> None:
             int(result.n_generated[-1]), result.n_initial,
         )
     )
+    if result.breakdown_time is not None:
+        after = int(np.count_nonzero(result.time > result.breakdown_time))
+        typer.echo("  t_BD = {:.4e} s，击穿后又跑了 {} 步".format(result.breakdown_time, after))
     typer.echo(
         "  前驱位点：t = 0 有 {} 个，终态剩 {} 个".format(int(result.n_precursors[0]), int(result.n_precursors[-1]))
     )
@@ -357,12 +366,12 @@ def _report_tddb(result: TDDBResult) -> None:
             result.conductor_gap[0] / nano, result.conductor_gap[-1] / nano
         )
     )
-    if result.stop_reason == "breakdown":
-        typer.echo(
-            "  击穿前内层输运电流 {:.4e} A，细丝电流 G₀·V = {:.4e} A".format(
-                result.transport_current[-1], result.filament_current[-1]
-            )
+    typer.echo(
+        "  终态电流：内层输运 {:.4e} A，间隙隧穿 {:.4e} A（全程最高 {:.4e} A），细丝 G₀·V = {:.4e} A".format(
+            result.transport_current[-1], result.gap_current[-1], float(result.gap_current.max()),
+            result.filament_current[-1],
         )
+    )
     dense_time = result.dense_cluster_time
     typer.echo(
         "  致密团簇（间距 < 6 Å）最大 {} 个，{}".format(
@@ -372,18 +381,20 @@ def _report_tddb(result: TDDBResult) -> None:
     )
     if result.thermal:
         typer.echo(
-            "  热反馈：介质功率最高 {:.3e} W，缺陷处加权温度最高 {:.2f} °C，温度场最高 {:.2f} °C".format(
+            "  热反馈：介质功率最高 {:.3e} W，缺陷处温度最高 {:.2f} °C，温度场最高 {:.2f} °C；"
+            "输运与热最多迭代 {} 次，{} 条记录不收敛（热失控）".format(
                 float(result.power.max()),
-                float(result.effective_temperature.max()) - constants.zero_Celsius,
+                float(result.defect_temperature.max()) - constants.zero_Celsius,
                 float(result.peak_temperature.max()) - constants.zero_Celsius,
+                int(result.thermal_iterations.max()), int(np.count_nonzero(~result.thermal_converged)),
             )
         )
     else:
         typer.echo("  等温（未配置 tddb.thermal_conductivity_W_mK）")
-    if result.time.size > 1:
+    if _has_fit_window(result):
         fit, _ = fit_transient(result)
         typer.echo(
-            "  双对数拟合（第一次生成到 t_end，按 log t 等间距取样）：n = {:.3f}，R² = {:.3f}".format(
+            "  双对数拟合（第一次生成到击穿或 t_end，按 log t 等间距取样）：n = {:.3f}，R² = {:.3f}".format(
                 fit.exponent, fit.r_squared
             )
         )
@@ -431,12 +442,12 @@ def tddb(
         from .visualization import plot_stress_transient
 
         fit = None
-        if result.time.size > 1:
+        if _has_fit_window(result):
             power_law, times = fit_transient(result)
             fit = (power_law.exponent, power_law.prefactor, times)
         plot_stress_transient(
-            result.time, result.current_density, result.effective_temperature, result.end_time,
-            fit, result.stop_reason,
+            result.time, result.current_density, result.peak_temperature, result.end_time,
+            fit, result.breakdown_time,
         ).savefig(plot, dpi=150)
         typer.echo("已写入 {}".format(plot))
 
