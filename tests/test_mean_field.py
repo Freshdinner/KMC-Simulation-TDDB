@@ -9,6 +9,8 @@
 - 不动点与初值无关，从不动点热启动一次求值即收敛；未收敛时如实标出；
 - Anderson 混合走不动时牛顿法接手（ADR-048）：收敛到同一个不动点；ADR-046 what-if 里 Anderson 不收敛的状态
   （膜体内致密的空位网络）现在收敛；
+- 分组有限差分 Jacobian（ADR-058）：同一组的缺陷两两间距 > 1.25·L_z，全部缺陷各属一组；与逐列有限差分相对差 ≤ 5%，
+  作牛顿迭代矩阵时线性收敛因子 ≤ 0.1；
 - 按机制、按缺陷分解之和 = 总电流；无缺陷时只剩 R1；
 - 电流连续（ADR-038）：强耦合分量被切开的致密体系上，负极净注入 = 正极净收集；
 - 零偏压平衡（ADR-038）：逐陷阱平均场里每一对陷阱的正反向通量相等（KMC 的 −U_ab 口径做不到）；
@@ -27,7 +29,7 @@ from test_fast_traps import _three_trap_sim
 from test_master_equation import _two_trap_sim
 from kmc_leakage import mean_field
 from kmc_leakage.config import DeviceConfig, DielectricStack, ElectrodeMaterial
-from kmc_leakage.defects import DefectEnsemble, layer_bulk_defects, localization_radius
+from kmc_leakage.defects import DefectEnsemble, layer_bulk_defects, localization_radius, minimum_image_delta
 from kmc_leakage.io import load_config
 from kmc_leakage.kmc import (
     _B_R2A,
@@ -247,16 +249,37 @@ def test_state_that_defeated_anderson_converges_with_newton(monkeypatch):
 
 
 def test_newton_takes_over_when_anderson_stops(clustered, monkeypatch):
-    """Anderson 只给 2 次时牛顿法接手（有限差分 Jacobian + Broyden 更新，ADR-048），收敛到同一个不动点；
+    """Anderson 只给 2 次时牛顿法接手（分组有限差分 Jacobian + Broyden 更新，ADR-048/058），收敛到同一个不动点；
     Anderson 自己收敛时不走牛顿法。"""
     sim, reference = clustered
     assert reference.converged and reference.newton_steps == 0
     monkeypatch.setattr(mean_field, "_ANDERSON_MAX_ITER", 2)
     result = solve_mean_field(sim)
     assert result.converged and result.newton_steps > 0
-    assert result.iterations > sim.n_defects  # 至少求过一次有限差分 Jacobian
+    assert result.iterations > len(mean_field._jacobian_groups(sim))  # 至少求过一次有限差分 Jacobian
     assert result.occupancy == pytest.approx(reference.occupancy, rel=1e-8, abs=1e-14)
     assert result.current == pytest.approx(reference.current, rel=1e-8)
+
+
+def test_grouped_jacobian_is_close_enough_for_newton(clustered):
+    """分组有限差分（ADR-058）：同一组的缺陷两两间距 > 1.25·L_z（xy 最小镜像），全部缺陷各属一组，组数少于缺陷数；
+    在不动点处与逐列有限差分（每组一个缺陷）的相对差 ≤ 5%（实测 2.6%），作牛顿迭代矩阵时 I − J_组⁻¹·J_逐列 的谱半径
+    ≤ 0.1（实测 0.038），牛顿法照样收敛。"""
+    sim, reference = clustered
+    device, positions, n = sim.device, sim.defects.positions, sim.n_defects
+    groups = mean_field._jacobian_groups(sim)
+    assert sorted(np.concatenate(groups).tolist()) == list(range(n)) and len(groups) < n
+    for members in groups:
+        distance = np.linalg.norm(
+            minimum_image_delta(positions[members, None, :] - positions[None, members, :], device.Lx, device.Ly), axis=-1
+        )
+        assert np.all(distance[~np.eye(members.size, dtype=bool)] > mean_field._JACOBIAN_GROUP_SEPARATION * device.Lz)
+
+    current = mean_field._evaluate(sim, mean_field._log_occupancy(reference.occupancy))
+    grouped = mean_field._jacobian(sim, current, groups)
+    column = mean_field._jacobian(sim, current, [np.array([j]) for j in range(n)])
+    assert np.linalg.norm(grouped - column) / np.linalg.norm(column) <= 0.05
+    assert np.max(np.abs(np.linalg.eigvals(np.eye(n) - np.linalg.solve(grouped, column)))) <= 0.1
 
 
 def test_decompositions_sum_to_total_current(clustered):

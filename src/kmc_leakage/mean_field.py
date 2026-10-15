@@ -47,8 +47,10 @@ ln 空间放不下），所以第一步直接取 p̂(p₀)，之后在 ln p 上�
 相距 0.5–1 nm、分数占据的陷阱之间既有快跃迁供给、又有几个 k_BT 的库仑排斥，簇大小上限把它们切开后按平均场
 处理，不动点映射 F 的 Jacobian 有大于 1 的特征值（实测 1.17），而且 ln p 在迭代之间成 O(1) 地变，Anderson
 用 5 步历史拟合的割线模型跟不上，在不动点附近来回游走。不动点本身良态（G = ln F − ln p 的 Jacobian 最小
-特征值模 0.15），牛顿法按完整 Jacobian 走，不稳定方向也能一步解掉。Jacobian 用有限差分（每列一次 F），之后
-各步做 Broyden 秩一更新；沿牛顿方向回溯线搜索，‖G‖₂ 下降才接受。起点先取传入的初值，停住了（重求 Jacobian
+特征值模 0.15），牛顿法按完整 Jacobian 走，不稳定方向也能一步解掉。Jacobian 用分组有限差分（`_jacobian`，ADR-058）：
+两两相距超过膜厚 1.25 倍的缺陷编成一组、一次 F 求一整组列，第 i 行的变化记到组内离缺陷 i 最近的那一列上。两电极之间
+点电荷的电势横向按 exp(−πρ/L_z) 衰减，相距这么远的缺陷对彼此的影响只剩约 2%，混进别的列里的部分可以忽略；收敛仍按精确的
+残差判，近似只影响牛顿方向，不影响不动点。之后各步做 Broyden 秩一更新；沿牛顿方向回溯线搜索，‖G‖₂ 下降才接受。起点先取传入的初值，停住了（重求 Jacobian
 后线搜索仍不下降）再从 p̂(0)（全空环境下的条件占据）重来：Anderson 游走过的迭代值上 ‖G‖₂ 有不为 0 的局部
 极小，从那里出发的牛顿法会停在极小处。
 
@@ -62,6 +64,7 @@ import numpy as np
 from scipy import constants
 
 from .clusters import cluster_flux, cluster_generator, stationary_distribution_gth
+from .defects import minimum_image_delta, neighbor_pairs
 from .kmc import (
     _B_R2A,
     _B_R2C,
@@ -87,6 +90,10 @@ _HISTORY = 5  # Anderson 混合保留的历史步数
 _NEWTON_MAX_STEPS = 100
 _NEWTON_JACOBIANS = 2
 _JACOBIAN_STEP = 1e-7
+# 分组有限差分（ADR-058）：同一组的缺陷两两间距 > 膜厚的这个倍数。ADR-056 验收里 r_c = 0.4 nm、第 300 个空位的状态
+# （360 个缺陷，50×50×8 nm）上分 64 组，与逐列有限差分的相对差 1.5%，作牛顿迭代矩阵时线性收敛因子 0.03；取 1.0 倍时
+# 58 组、0.03，0.75 倍时 51 组、收敛因子 32（发散）
+_JACOBIAN_GROUP_SEPARATION = 1.25
 _MIN_STEP_FRACTION = 2.0 ** -10
 # ln p 的下限：p̂ 下溢成 0 时取最小正规格化浮点数，ln 空间里仍是有限值
 _LOG_FLOOR = float(np.log(np.finfo(float).tiny))
@@ -284,14 +291,35 @@ def _evaluate(sim: KMCSimulation, x: np.ndarray) -> _Iterate:
     return _Iterate(x, _log_occupancy(p_hat) - x, tat, pf)
 
 
-def _jacobian(sim: KMCSimulation, current: _Iterate) -> np.ndarray:
-    """∂G/∂x 的有限差分（每列一次 F）；差分向 x 减小的方向取，p 不越过 1。"""
-    n = sim.n_defects
-    jacobian = np.empty((n, n))
+def _jacobian_groups(sim: KMCSimulation) -> List[np.ndarray]:
+    """分组有限差分的列分组：同一组的缺陷两两间距 > `_JACOBIAN_GROUP_SEPARATION`·L_z（xy 取最小镜像）。按编号顺序
+    贪心分组，每个缺陷放进第一个没有它近邻的组。"""
+    n, device = sim.n_defects, sim.device
+    pairs = neighbor_pairs(sim.defects.positions, device.Lx, device.Ly, _JACOBIAN_GROUP_SEPARATION * device.Lz)
+    order = np.argsort(pairs.a, kind="stable")
+    neighbours = np.split(pairs.b[order], np.searchsorted(pairs.a[order], np.arange(1, n)))
+    group = np.full(n, -1)
     for j in range(n):
+        taken = group[neighbours[j]]
+        free = np.ones(n, dtype=bool)
+        free[taken[taken >= 0]] = False
+        group[j] = int(np.argmax(free))
+    return [np.flatnonzero(group == g) for g in range(group.max() + 1)] if n else []
+
+
+def _jacobian(sim: KMCSimulation, current: _Iterate, groups: List[np.ndarray]) -> np.ndarray:
+    """∂G/∂x 的分组有限差分（每组一次 F，`_jacobian_groups`）：一组的 x 同时减一个步长，第 i 行的变化记到组内离缺陷 i
+    最近的那一列上。差分向 x 减小的方向取，p 不越过 1。每组只有一个缺陷时就是逐列有限差分。"""
+    n, device = sim.n_defects, sim.device
+    positions = sim.defects.positions
+    jacobian = np.zeros((n, n))
+    rows = np.arange(n)
+    for members in groups:
         shifted = current.x.copy()
-        shifted[j] -= _JACOBIAN_STEP
-        jacobian[:, j] = (_evaluate(sim, shifted).gap - current.gap) / -_JACOBIAN_STEP
+        shifted[members] -= _JACOBIAN_STEP
+        change = (_evaluate(sim, shifted).gap - current.gap) / -_JACOBIAN_STEP
+        delta = minimum_image_delta(positions[:, None, :] - positions[None, members, :], device.Lx, device.Ly)
+        jacobian[rows, members[np.argmin(np.einsum("ijk,ijk->ij", delta, delta), axis=1)]] = change
     return jacobian
 
 
@@ -304,6 +332,7 @@ def _newton(sim: KMCSimulation, starts: List[np.ndarray]) -> Tuple[_Iterate, int
     """
     evaluations = steps = 0
     best: Optional[_Iterate] = None
+    groups = _jacobian_groups(sim)
     for start in starts:
         current = _evaluate(sim, start)
         evaluations += 1
@@ -316,8 +345,8 @@ def _newton(sim: KMCSimulation, starts: List[np.ndarray]) -> Tuple[_Iterate, int
             if jacobian is None:
                 if jacobians == _NEWTON_JACOBIANS:
                     break
-                jacobian = _jacobian(sim, current)
-                evaluations += sim.n_defects
+                jacobian = _jacobian(sim, current, groups)
+                evaluations += len(groups)
                 jacobians += 1
                 fresh = True
             direction = np.linalg.solve(jacobian, -current.gap)
