@@ -521,7 +521,7 @@ TDDB 阶段（规格见 `PROJECT_CONTEXT_TDDB.md`，决策记录见 `docs/adr/td
 
 ```yaml
 tddb:
-  activation_energy_eV: 1.30             # E_A：无场下形成 Frenkel 对的激活能，全部前驱位点相同（式 T2，必须为正，ADR-053）
+  activation_energy_eV: 1.6              # E_A：无场下形成 Frenkel 对的激活能，全部前驱位点相同（式 T2，必须为正，ADR-053）
   precursor_ionization_energy_eV: 1.15   # E_t1：前驱能级相对局部导带底的深度（必须为正）
   precursor_relaxation_energy_eV: 1.0    # E_rel1：第一次电子俘获导致键断裂、O 空位形成的弛豫能（必须为正）
   dipole_moment_eA: 1.0                  # p₀：前驱有效偶极矩均值 [e·Å]（必须 ≥ 0，取 0 即关掉场加速）
@@ -531,7 +531,7 @@ tddb:
   gap_tunneling_area_nm2: 0.0676         # 导体与对面电极间隙隧穿的有效面积，每个导体成员一份（必须为正，缺省 (0.26 nm)²，ADR-060）
   post_breakdown_steps: 20               # 击穿判据触发后再跑的生成步数（≥ 0 的整数，缺省 0 = 击穿即停，ADR-060）
   max_generated_vacancies: 3000          # 生成空位数达到此值即停（机时上限）
-  stop_time_s: 1.0e4                     # 应力时间上限 [s]
+  stop_time_s: 1.0e9                     # 应力时间上限 [s]
 ```
 
 恒压应力取 `simulation` 段的 `voltage_V`，环境温度取 `temperature_C`，不另设字段（ADR-033）。
@@ -540,7 +540,7 @@ E_t1 取与 O 空位预设相同的值。E_rel1 是第一次电子俘获导致 O
 弛豫能（论文 SiO₂ 里对应 Si-O 键，取 1.5 eV），只用于空位生成的计算——E_rel1/ℏω₀ 作为 R_1e
 多声子线型的参数——与电子输运用的材料 `huang_rhys_S` 无关，现在暂取 1.0 eV（ADR-030）。p₀ = 1 eÅ 时
 3.6 V / 8 nm 下场加速项 p₀·(2+κ)/3·E 压低 0.6 eV，有效势垒对电压的斜率 0.167 eV/V（25 °C 下 P_bb 每伏约 2.8 个数量级），
-只由 p₀ 定。E_A = 1.30 eV（全部前驱相同，ADR-053）是初值，标定待定。k_TH 取 2 W/(m·K)（ADR-040）。前驱位点不设浓度：按缺陷段的
+只由 p₀ 定。E_A = 1.6 eV（全部前驱相同，ADR-053、ADR-062），有效势垒 1.0 eV，标定待定；应力时间上限放到 10⁹ s，由空位数或机时上限决定停在哪里。k_TH 取 2 W/(m·K)（ADR-040）。前驱位点不设浓度：按缺陷段的
 `min_separation_nm`（0.26 nm）在可采样窗口里铺满，约 4.3×10²² cm⁻³，50 × 50 nm 盒子约 80 万个（ADR-055）。r_c 取 0.3 nm（ADR-054/055），
 只有紧挨着的空位连通。
 生成率场加速项里的相对介电常数 k 直接取材料的 `kappa`，前驱的 ℏω₀ 取材料的 `phonon_energy_eV`，都不另设
@@ -840,7 +840,7 @@ pytest tests/ -v      # 268 个测试，约 110 s
 | `test_stack_physics.py` | **变 κ 泊松 + 分段能带 + 界面单侧场**（Phase 3）：无电荷解析分压、串联电容 C/A=ε0/S_κ、面电荷电位移跳变 = σ、变系数离散残差、界面对齐校验、同材料多层退回单层求解器、响应互易；E_C 真实台阶与显式 ΔE_C 覆盖、V_bi = (B_c+ΣΔE_C−B_a)/q；界面单侧场按 κ 比跳变、`field_vectors_at` 按 field_side 选侧、体缺陷回归锚点 |
 | `test_kmc_consistency.py` | **各分量之和 = 总电流**（机制分解、缺陷分解两条）、可复现性、三个估计量互相印证、零偏压电流可忽略、跃迁通道只走 R7、**近邻表在保留对上与稠密 (N,N) 矩阵逐位相同且截掉的总速率在双精度噪声以下**、**R1 两项等于理想梯形势垒上的公式值且与 seed / 事件数无关** |
 | `test_defects.py` | 缺陷数 = 浓度×体积、最小距离（含到界面）、r_D 公式、高斯能级统计、界面富集轮廓与解析积分对比、近邻表与"稠密矩阵+掩码"逐位一致（强制走多块路径）、截断半径命中给定容差 |
-| `test_config_io.py` | 单位换算逐项核对、两种有效质量保持独立、势垒显式优先于推算、内建电势、默认扫描范围、两个示例配置的缺陷段同构；**新 schema 结构校验**（材料引用存在、层厚为正、interfaces 数量 = 层数-1）与**旧键拒绝**（顶层 `dielectric` / `defects`、`device.Lz_nm` 各自报错提示新写法）；**`tddb` 段**可省略、E_A / E_t1 / E_rel1 / p₀ / P_bb 平均窗口 σ / 空位数上限 / 应力时间上限 / r_c / k_TH（可省略即等温）的换算、取值检查与缺项报错，写了已取消的 `precursor_concentration_cm3` 报错，**`zro2_tddb.yaml` 与 `single_run.yaml` 的材料/缺陷/电极逐项相同**（缺陷的 min_separation 取 0.26 nm 除外）、横向网格 0.25 nm、前驱 E_t1 与 O 空位预设相同、E_rel1 单独取值、p₀ = 1 eÅ / E_A = 1.30 eV / k_TH = 2 W/(m·K) / r_c = 0.3 nm（ADR-024/028/030/032/035/040/053/054/055） |
+| `test_config_io.py` | 单位换算逐项核对、两种有效质量保持独立、势垒显式优先于推算、内建电势、默认扫描范围、两个示例配置的缺陷段同构；**新 schema 结构校验**（材料引用存在、层厚为正、interfaces 数量 = 层数-1）与**旧键拒绝**（顶层 `dielectric` / `defects`、`device.Lz_nm` 各自报错提示新写法）；**`tddb` 段**可省略、E_A / E_t1 / E_rel1 / p₀ / P_bb 平均窗口 σ / 空位数上限 / 应力时间上限 / r_c / k_TH（可省略即等温）的换算、取值检查与缺项报错，写了已取消的 `precursor_concentration_cm3` 报错，**`zro2_tddb.yaml` 与 `single_run.yaml` 的材料/缺陷/电极逐项相同**（缺陷的 min_separation 取 0.26 nm 除外）、横向网格 0.25 nm、前驱 E_t1 与 O 空位预设相同、E_rel1 单独取值、p₀ = 1 eÅ / E_A = 1.6 eV / k_TH = 2 W/(m·K) / r_c = 0.3 nm（ADR-024/028/030/032/035/040/053/054/055/062） |
 | `test_stack_schema.py` | `DielectricStack` 统一查询接口（`Lz` 求和、`single_material` / `bulk_defects` 在多材料/多层时抛错）、**单元素 layers 退化用例**（YAML 解析与直接构造的单层叠层逐位相同：确定性量 rtol ≤ 1e-12、同种子轨迹 rtol ≤ 1e-9）、ZAZ 三层 schema 完整解析、**ZAZ 端到端跑通并给出机制分解**（Phase 4 打通，各分量之和 = 总电流、按缺陷分解 + R1 = 总电流） |
 | `test_stack_rates.py` | **分段 WKB + 按材料取速率参数 + 分段 G_ab + 截断重推**（Phase 4）：WKB 逐段 m_di、界面双值台阶不插斜坡、R1 势垒顶落在 Al₂O₃、分段 G_ab 同质退回闭式且跨层用 Al₂O₃ 低质量（路径传播质量，F08）、ZAZ 里 R7 正反细致平衡（F02 事件能量差不变）、截断半径按最慢材料推（ADR-013/F05）、R8 逐缺陷取 ε_opt/ν、**三层同材料 + ΔE_C=0 的速率表（rtol ≤ 1e-12）与轨迹（rtol ≤ 1e-9）退回单层**（ADR-018） |
 | `test_pf_collection.py` | **F03 PF 收集概率**（Phase 5）：带偏压 Al₂O₃ 势垒（矩形/梯形/三角）的 WKB 与解析闭式一致、0≤P_A≤1 且随偏压单调、阻挡层检测、**位置感知**（负极侧穿层 P_A<1、正极侧立即收集 P_A=1，界面缺陷按宿主侧判定）、反偏收集电极翻转、R8_eff=P_A·R8 折进事件表、单层 P_A≡1 逐位退回 |

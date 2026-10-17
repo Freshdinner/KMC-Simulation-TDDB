@@ -383,7 +383,7 @@ def test_tddb_example_matches_leakage_reference_preset():
     """zro2_tddb.yaml 的材料、缺陷、电极与默认盒子 single_run.yaml 逐项相同（材料名与缺陷的 min_separation 之外：
     TDDB 取 O–O 间距 0.26 nm，ADR-055），盒子同为 50×50 nm（ADR-051）；横向网格按团簇库仑能收敛取 hx = hy = 0.25 nm、
     hz 不变（ADR-032）；前驱的 E_t1 与 O 空位预设相同（ADR-028）；E_rel1 与材料的 huang_rhys 各自取值
-    （ADR-030）；p₀ = 1 eÅ（ADR-035），E_A = 1.30 eV 全部前驱相同（ADR-053），k_TH = 2 W/(m·K)（ADR-040），
+    （ADR-030）；p₀ = 1 eÅ（ADR-035），E_A = 1.6 eV 全部前驱相同（ADR-053、ADR-062），k_TH = 2 W/(m·K)（ADR-040），
     导电通路的连通距离 r_c = 0.3 nm（ADR-054/055），间隙隧穿面积 (0.26 nm)²、击穿后再跑 20 步（ADR-060）。"""
     root = pathlib.Path(__file__).resolve().parents[1]
     tddb = load_config(str(root / "examples" / "zro2_tddb.yaml"))
@@ -411,7 +411,7 @@ def test_tddb_example_matches_leakage_reference_preset():
     assert tddb.simulation.n_events == ref.simulation.n_events
 
     assert len(tddb.seeds) == 30  # 系综个数（ADR-026、ADR-051）
-    assert tddb.tddb.activation_energy == pytest.approx(1.30 * EV)
+    assert tddb.tddb.activation_energy == pytest.approx(1.6 * EV)
     assert tddb.tddb.precursor_ionization_energy == pytest.approx(tddb.defects.level.ED)
     assert tddb.tddb.precursor_relaxation_energy == pytest.approx(1.0 * EV)
     assert tddb.tddb.dipole_moment == pytest.approx(1.0 * constants.elementary_charge * 1e-10)
