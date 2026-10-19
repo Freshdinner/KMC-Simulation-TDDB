@@ -296,10 +296,12 @@ def _positive_int(value: Any, where: str) -> int:
 
 
 def _tddb(raw: Optional[Dict[str, Any]]) -> Optional[TDDBConfig]:
-    """TDDB 缺陷生成参数（ADR-024/028/033/036/052/053/054/055/060）；整段省略返回 None，即纯漏电流仿真。
+    """TDDB 缺陷生成参数（ADR-024/028/033/036/054/055/060/063/064）；整段省略返回 None，即纯漏电流仿真。
 
-    三个能量（E_A、E_t1、E_rel1）必须为正；p₀ 必须 ≥ 0，取 0 即关掉场加速；P_bb 宏观场的平均窗口宽度
-    必须 ≥ 0，取 0 即用局域场（ADR-043）。空位数上限是正整数，应力时间上限、导电通路的连通距离 r_c 必须为正。
+    三个能量（E_A 上限、E_t1、E_rel1）必须为正；E_A 指数尾的宽度 E₀ 必须 ≥ 0，取 0 即全部位点取 E_A（ADR-063）；
+    p₀ 必须 ≥ 0，取 0 即关掉场加速；P_bb 宏观场的平均窗口宽度必须 ≥ 0，取 0 即用局域场（ADR-043）。空位数上限是
+    正整数，应力时间上限、空位间转移积分的前因子 t₀ 必须为正（ADR-064）；写了已取消的 `percolation_distance_nm`
+    直接报错。
     热导率 k_TH 可省略（等温），给出时必须为正。间隙隧穿的有效面积可省略（取 `TDDBConfig` 的缺省值），给出时必须
     为正；击穿后再跑的步数可省略（0），给出时是 ≥ 0 的整数（ADR-060）。前驱位点不设浓度（按缺陷配置的
     min_separation_nm 做最大随机堆积，ADR-055），写了 `precursor_concentration_cm3` 直接报错。
@@ -311,6 +313,10 @@ def _tddb(raw: Optional[Dict[str, Any]]) -> Optional[TDDBConfig]:
             "tddb.precursor_concentration_cm3 已取消（ADR-055）：前驱位点按缺陷配置的 min_separation_nm 做最大随机堆积，"
             "浓度由间隔决定，删去这一项"
         )
+    if "percolation_distance_nm" in raw:
+        raise ValueError(
+            "tddb.percolation_distance_nm 已取消（ADR-064）：导电簇改按电子离域判据连边，改写 transfer_integral_eV（t₀）"
+        )
 
     def positive(key: str, unit: str) -> float:
         value = float(_require(raw, key, "tddb"))
@@ -321,6 +327,9 @@ def _tddb(raw: Optional[Dict[str, Any]]) -> Optional[TDDBConfig]:
     def energy(key: str) -> float:
         return positive(key, "eV") * EV
 
+    tail = float(_require(raw, "activation_energy_tail_eV", "tddb"))
+    if not tail >= 0.0:
+        raise ValueError("tddb.activation_energy_tail_eV 必须 ≥ 0（单位 eV），收到 {!r}".format(tail))
     dipole = float(_require(raw, "dipole_moment_eA", "tddb"))
     if not dipole >= 0.0:
         raise ValueError("tddb.dipole_moment_eA 必须 ≥ 0（单位 e·Å），收到 {!r}".format(dipole))
@@ -340,6 +349,7 @@ def _tddb(raw: Optional[Dict[str, Any]]) -> Optional[TDDBConfig]:
         optional["post_breakdown_steps"] = steps
     return TDDBConfig(
         activation_energy=energy("activation_energy_eV"),
+        activation_energy_tail=tail * EV,
         precursor_ionization_energy=energy("precursor_ionization_energy_eV"),
         precursor_relaxation_energy=energy("precursor_relaxation_energy_eV"),
         dipole_moment=dipole * E_ANGSTROM,
@@ -348,7 +358,7 @@ def _tddb(raw: Optional[Dict[str, Any]]) -> Optional[TDDBConfig]:
             _require(raw, "max_generated_vacancies", "tddb"), "tddb.max_generated_vacancies"
         ),
         stop_time=positive("stop_time_s", "s"),
-        percolation_distance=positive("percolation_distance_nm", "nm") * NM,
+        transfer_integral=energy("transfer_integral_eV"),
         thermal_conductivity=thermal_conductivity,
         **optional,
     )

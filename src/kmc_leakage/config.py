@@ -403,7 +403,7 @@ class EnsembleConfig:
 
 @dataclass(frozen=True)
 class TDDBConfig:
-    """TDDB 缺陷生成参数（PROJECT_CONTEXT_TDDB.md 第 3 节参数表，ADR-024/028/035/036/052/053/054/055/060）。
+    """TDDB 缺陷生成参数（PROJECT_CONTEXT_TDDB.md 第 3 节参数表，ADR-024/028/035/036/054/055/060/063/064）。
 
     只收已定取值的参数，每个字段在用到它的 Phase 加入。G 场加速项里的相对介电常数 k 取
     介质材料的静态 κ，前驱俘获线型用的声子能量 ℏω₀ 取宿主介质的值，应力电压与环境温度
@@ -411,8 +411,11 @@ class TDDBConfig:
     （ADR-055）。
     """
 
-    # E_A：无场下形成 Frenkel 对的激活能 [J]，全部前驱位点取同一个值（式 T2；双电子机制下即 E_A,2e；ADR-053）
+    # E_A：无场下形成 Frenkel 对的激活能分布的上限 [J]（式 T2；双电子机制下即 E_A,2e；ADR-063）
     activation_energy: float
+    # E₀：E_A 指数尾的宽度 [J]。每个前驱位点 E_A,i = E_A − E₀·X_i，X_i 服从单位指数分布；位点铺满时
+    # 生成数 N ∝ t^(k_BT/E₀)（§6.1，ADR-063）。0 = 全部位点取 E_A
+    activation_energy_tail: float
     precursor_ionization_energy: float  # E_t1：前驱能级相对局部导带底的深度 [J]（式 T4/T9）
     # E_rel1：第一次电子俘获导致 O-Zr-O 键断裂、O 空位形成的弛豫能 [J]。只进 R_1e 的多声子
     # 线型（E_rel1/ℏω₀ 作为式 T10 的参数），与输运用的材料 Huang-Rhys 因子 huang_rhys 无关（ADR-030）
@@ -425,9 +428,10 @@ class TDDBConfig:
     max_generated_vacancies: int  # 生成的空位数达到此值即停（机时上限）
     stop_time: float  # 应力时间上限 [s]
     # --- 击穿判据与热反馈（Phase 4，ADR-036/054）---
-    # r_c：导电通路的连通距离 [m]。O 空位间距 < r_c 连成导电簇，离电极平面 < r_c 的空位接到该电极，接电极的
-    # 导电簇与该电极等电位；负极侧与正极侧导电簇连通（贯穿通路）即击穿，这一刻就是 t_BD（§6.3，ADR-054）
-    percolation_distance: float
+    # t₀：两个 O 空位之间电子转移积分的前因子 [J]，转移积分 t₀·exp(−r·(1/r_D,a + 1/r_D,b)/2)。转移积分的两倍大于重组能
+    # (S_a + S_b)·ℏω₀ 时电子离域，两个空位连成导电簇；空位离电极平面小于它自身的离域距离 r_D·ln[t₀/(S·ℏω₀)] 时接到该电极。
+    # 接电极的导电簇与该电极等电位；负极侧与正极侧导电簇连通（贯穿通路）即击穿，这一刻就是 t_BD（§6.3，ADR-054/064）
+    transfer_integral: float
     # k_TH：介质热导率 [W/(m·K)]（式 T14）。None = 等温，温度固定为环境值（Phase 3 的口径）
     thermal_conductivity: Optional[float] = None
     # 接电极导体与对面电极（或对面导体）之间间隙隧穿的有效发射面积 [m^2]，每个导体成员一份（ADR-060）。

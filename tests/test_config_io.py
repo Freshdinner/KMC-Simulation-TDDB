@@ -103,21 +103,23 @@ def test_fast_trap_rate_is_optional_and_positive():
 def test_tddb_section_is_optional_and_converted():
     """tddb 段缺省为 None（纯漏电流仿真）；三个能量从 eV 换算成 J、必须为正，p₀ 从 e·Å
     换算成 C·m、必须 ≥ 0，P_bb 宏观场的平均窗口从 nm 换算成 m、必须 ≥ 0（ADR-043），空位数上限是正整数，
-    应力时间上限必须为正，导电通路的连通距离 r_c 从 nm 换算成 m、必须为正，以上各项都必须给出；
+    应力时间上限必须为正，E_A 指数尾的宽度 E₀ 从 eV 换算成 J、必须 ≥ 0（ADR-063），空位间转移积分的前因子 t₀ 从 eV 换算成 J、
+    必须为正（ADR-064），以上各项都必须给出；
     k_TH 可省略（等温），给出时必须为正（ADR-024/028/033/036/054）。间隙隧穿的有效面积可省略（缺省 (0.26 nm)²），
     从 nm² 换算成 m²、必须为正；击穿后再跑的步数可省略（0），给出时是 ≥ 0 的整数（ADR-060）。前驱位点浓度已取消，写了
-    precursor_concentration_cm3 直接报错（ADR-055）。"""
+    precursor_concentration_cm3 直接报错（ADR-055），连通距离已改为离域判据，写了 percolation_distance_nm 直接报错（ADR-064）。"""
     raw = _base_dict()
     assert config_from_dict(raw).tddb is None
     section = {
         "activation_energy_eV": 4.0,
+        "activation_energy_tail_eV": 0.086,
         "precursor_ionization_energy_eV": 1.15,
         "precursor_relaxation_energy_eV": 0.04,
         "dipole_moment_eA": 7.1,
         "field_averaging_width_nm": 0.5,
         "max_generated_vacancies": 300,
         "stop_time_s": 1.0e4,
-        "percolation_distance_nm": 1.0,
+        "transfer_integral_eV": 0.5,
     }
     raw["tddb"] = dict(section)
     tddb = config_from_dict(raw).tddb
@@ -128,7 +130,8 @@ def test_tddb_section_is_optional_and_converted():
     assert tddb.field_averaging_width == pytest.approx(0.5e-9)
     assert tddb.max_generated_vacancies == 300
     assert tddb.stop_time == pytest.approx(1.0e4)
-    assert tddb.percolation_distance == pytest.approx(1.0e-9)
+    assert tddb.activation_energy_tail == pytest.approx(0.086 * EV)
+    assert tddb.transfer_integral == pytest.approx(0.5 * EV)
     assert tddb.thermal_conductivity is None  # 省略 k_TH：等温
     assert tddb.gap_tunneling_area == pytest.approx((0.26e-9) ** 2) and tddb.post_breakdown_steps == 0
     raw["tddb"] = dict(section, thermal_conductivity_W_mK=1.5)
@@ -152,17 +155,21 @@ def test_tddb_section_is_optional_and_converted():
     assert config_from_dict(raw).tddb.dipole_moment == 0.0  # p₀ = 0：关掉场加速
     raw["tddb"] = dict(section, field_averaging_width_nm=0.0)
     assert config_from_dict(raw).tddb.field_averaging_width == 0.0  # 0：P_bb 用局域场
-    raw["tddb"] = dict(section, precursor_concentration_cm3=1.0e20)
-    with pytest.raises(ValueError, match="precursor_concentration_cm3"):
-        config_from_dict(raw)
+    raw["tddb"] = dict(section, activation_energy_tail_eV=0.0)
+    assert config_from_dict(raw).tddb.activation_energy_tail == 0.0  # E₀ = 0：全部位点取 E_A
+    for key, value in (("precursor_concentration_cm3", 1.0e20), ("percolation_distance_nm", 0.3)):
+        raw["tddb"] = dict(section, **{key: value})
+        with pytest.raises(ValueError, match=key):
+            config_from_dict(raw)
     for key, bad in (
         ("dipole_moment_eA", -1.0),
         ("field_averaging_width_nm", -0.1),
         ("max_generated_vacancies", 0),
         ("max_generated_vacancies", 2.5),
         ("stop_time_s", 0.0),
-        ("percolation_distance_nm", 0.0),
-        ("percolation_distance_nm", -1.0),
+        ("activation_energy_tail_eV", -0.01),
+        ("transfer_integral_eV", 0.0),
+        ("transfer_integral_eV", -1.0),
     ):
         raw["tddb"] = dict(section, **{key: bad})
         with pytest.raises(ValueError, match=key):
@@ -383,8 +390,8 @@ def test_tddb_example_matches_leakage_reference_preset():
     """zro2_tddb.yaml 的材料、缺陷、电极与默认盒子 single_run.yaml 逐项相同（材料名与缺陷的 min_separation 之外：
     TDDB 取 O–O 间距 0.26 nm，ADR-055），盒子同为 50×50 nm（ADR-051）；横向网格按团簇库仑能收敛取 hx = hy = 0.25 nm、
     hz 不变（ADR-032）；前驱的 E_t1 与 O 空位预设相同（ADR-028）；E_rel1 与材料的 huang_rhys 各自取值
-    （ADR-030）；p₀ = 1 eÅ（ADR-035），E_A = 1.6 eV 全部前驱相同（ADR-053、ADR-062），k_TH = 2 W/(m·K)（ADR-040），
-    导电通路的连通距离 r_c = 0.3 nm（ADR-054/055），间隙隧穿面积 (0.26 nm)²、击穿后再跑 20 步（ADR-060）。"""
+    （ADR-030）；p₀ = 1 eÅ（ADR-035），E_A 上限 1.6 eV（ADR-062）、指数尾宽度 E₀ = 0.086 eV（ADR-063），k_TH = 2 W/(m·K)
+    （ADR-040），空位间转移积分前因子 t₀ = 0.5 eV（ADR-064），间隙隧穿面积 (0.26 nm)²、击穿后再跑 20 步（ADR-060）。"""
     root = pathlib.Path(__file__).resolve().parents[1]
     tddb = load_config(str(root / "examples" / "zro2_tddb.yaml"))
     ref = load_config(str(root / "examples" / "single_run.yaml"))
@@ -417,7 +424,8 @@ def test_tddb_example_matches_leakage_reference_preset():
     assert tddb.tddb.dipole_moment == pytest.approx(1.0 * constants.elementary_charge * 1e-10)
     assert tddb.tddb.field_averaging_width == pytest.approx(0.5e-9)  # ADR-043
     assert tddb.tddb.thermal_conductivity == pytest.approx(2.0)
-    assert tddb.tddb.percolation_distance == pytest.approx(0.3e-9)  # r_c（ADR-054/055）
+    assert tddb.tddb.activation_energy_tail == pytest.approx(0.086 * EV)  # E₀（ADR-063）
+    assert tddb.tddb.transfer_integral == pytest.approx(0.5 * EV)  # t₀（ADR-064）
     assert tddb.tddb.gap_tunneling_area == pytest.approx((0.26e-9) ** 2)  # 一个 O 位点占的面积（ADR-060）
     assert tddb.tddb.post_breakdown_steps == 20  # 击穿后再跑的步数（ADR-060）
     assert tddb.tddb.max_generated_vacancies >= 1 and tddb.tddb.stop_time > 0.0

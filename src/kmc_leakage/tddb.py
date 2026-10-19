@@ -5,11 +5,11 @@
 
 电子输运事件的时间尺度（~10⁻¹³…10⁻⁶ s）比缺陷生成（秒以上）短十几个数量级，所以输运相对
 生成瞬间达到稳态（§5）。t = 0 在初始缺陷之外铺离散前驱位点（§6.1，ADR-052/055）：可采样窗口里按最小间隔
-min_separation 做最大随机堆积，直到再也放不下一个位点，浓度由间隔决定；全部位点的无场断键激活能取同一个
-E_A（ADR-053）。外层是缺陷生成的 Gillespie 循环，每步：
+min_separation 做最大随机堆积，直到再也放不下一个位点，浓度由间隔决定；每个位点的无场断键激活能从上限 E_A 往下
+按指数尾抽取，E_A,i = E_A − E₀·X_i（ADR-063）。外层是缺陷生成的 Gillespie 循环，每步：
 
-1. **导体划分**（§6.3，ADR-054/060，`conductor_layout`）：O 空位间距 < r_c 连成导电簇，离电极平面 < r_c 的空位接到该
-   电极（`conducting_clusters`）。接电极的导电簇是导体、电极的延伸：接负极的电势 0、费米能级 0，接正极的电势 U、费米能级
+1. **导体划分**（§6.3，ADR-054/060/064，`conductor_layout`）：两个 O 空位之间转移积分的两倍大于重组能时电子离域，连成导电簇；
+   离电极平面小于自身离域距离的空位接到该电极（`conducting_clusters`）。接电极的导电簇是导体、电极的延伸：接负极的电势 0、费米能级 0，接正极的电势 U、费米能级
    −eU；贯穿通路按均匀电阻处理，电势与费米能级沿 z 从负极线性变到正极。其余缺陷（含悬空导电簇的成员）是 TAT 陷阱。
 2. **内层稳态与热迭代**（§6.2、§6.6、§8.4，ADR-060，`_steady_state`）：在陷阱上建 `KMCSimulation`（`solve_transport`）：
    静电耦合在全体缺陷的耦合矩阵（`IncrementalCoupling` 逐个追加的那份）上消去导体成员（`ConductorCoupling`），导体作为
@@ -29,7 +29,7 @@ E_A（ADR-053）。外层是缺陷生成的 Gillespie 循环，每步：
      送来的电子，ADR-039；接电极导体的空位按所在处费米能级占满的电子源计入）。前驱能级、R4 的局域场与
      温度取位点处含空间电荷的局域值，取法同引擎处理真实陷阱；电极项在 (z, 前驱能级, 1/温度) 的插值表上
      求值（ADR-055/060）；
-   - P_bb,i 的场取泊松解在 Gaussian 窗口上的平均（宏观场，ADR-043）。导电簇尖端前方的场被抬高，生成
+   - P_bb,i 用位点自己的 E_A,i，场取泊松解在 Gaussian 窗口上的平均（宏观场，ADR-043）。导电簇尖端前方的场被抬高，生成
      向尖端集中，导电簇越长尖端场越强，这是贯穿通路最后一段迅速形成的机制。
 5. **抽事件**：Δt = −ln(r)/ΣG，按 G_i 选一个前驱位点断键，新空位就落在这个位点上。这个位点用掉，
    其余位点离它本来就 ≥ min_separation，原样保留。
@@ -226,11 +226,12 @@ class Precursors:
     """还没断键的离散前驱位点（§6.1，ADR-052/055）。
 
     前驱是 O-Zr-O 键上的一个位置，俘获一个电子后可能断键、原地变成 O 空位（式 T1），断一次就用掉。
-    位点是最小间隔 min_separation 的最大随机堆积（`place_precursors`），位置连续（§6.8）；无场断键激活能
-    全部取 `tddb.activation_energy`（ADR-053）。
+    位点是最小间隔 min_separation 的最大随机堆积（`place_precursors`），位置连续（§6.8）；每个位点有自己的无场断键
+    激活能 E_A,i，体现非晶里键环境的差别（ADR-063）。
     """
 
     positions: np.ndarray  # (M, 3) 位点坐标 [m]
+    activation_energy: np.ndarray  # (M,) 各位点的无场断键激活能 E_A,i [J]
 
     def __len__(self) -> int:
         return int(self.positions.shape[0])
@@ -238,23 +239,32 @@ class Precursors:
     def converted(self, index: int) -> "Precursors":
         """第 `index` 个位点断键、原地变成新空位之后剩下的位点：只去掉它自己。其余位点离它本来就
         ≥ min_separation，都还能放下新空位。"""
-        return Precursors(np.delete(self.positions, index, axis=0))
+        return Precursors(np.delete(self.positions, index, axis=0), np.delete(self.activation_energy, index))
 
 
-def place_precursors(device: DeviceConfig, defects: np.ndarray, rng: np.random.Generator) -> Precursors:
-    """t = 0 的前驱位点（§6.1，ADR-052/055）。
+def place_precursors(
+    device: DeviceConfig,
+    defects: np.ndarray,
+    activation_energy: float,
+    activation_tail: float,
+    rng: np.random.Generator,
+) -> Precursors:
+    """t = 0 的前驱位点（§6.1，ADR-052/055/063）。
 
     前驱位点不设浓度，由最小间隔 d = min_separation 决定（取 ZrO₂ 的 O–O 间距）：在可采样窗口
     [0,Lx)×[0,Ly)×[d, Lz−d]（与 `generate_defects` 的电极避让相同）里做最大随机堆积（`_maximal_packing`），
     位点两两之间、位点与初始缺陷 `defects`（坐标 (N, 3)）之间都 ≥ d，且窗口里再也放不下一个位点。
-    d = 0.26 nm 时密度约 4.3×10²² cm⁻³。
+    d = 0.26 nm 时密度约 4.3×10²² cm⁻³。铺完之后每个位点抽自己的无场断键激活能 E_A,i = E_A − E₀·X_i
+    （`activation_energy` = E_A 是上限，`activation_tail` = E₀，X_i 服从单位指数分布）：低 E_A 一侧的位点数按
+    exp[(E − E_A)/E₀] 衰减，位点铺满时生成数 N ∝ t^(k_BT/E₀)。随机数的消耗与 E₀ 的取值无关。
     """
     standoff = _global_standoff(device)
     if not standoff > 0.0:
         raise ValueError("前驱位点按 min_separation 堆积，min_separation_nm 必须为正")
     if device.Lz - 2.0 * standoff <= 0.0:
         raise ValueError("min_separation 约束下 z 方向没有可放置新空位的区间")
-    return Precursors(_maximal_packing(device, standoff, defects, rng))
+    positions = _maximal_packing(device, standoff, defects, rng)
+    return Precursors(positions, activation_energy - activation_tail * rng.standard_exponential(positions.shape[0]))
 
 
 # 一个格子切成 8 个子格时各子格的下角（以子格边长为单位）
@@ -375,7 +385,7 @@ def generation_rates(
 
     `transport` 是当前缺陷集合上的内层输运稳态（`solve_transport`）：导体划分、陷阱的平均场占据与能级、工作点与
     泊松求解器。电势由 `_conductor_potential` 给出：陷阱随占据变的电荷 q·(Z − p)（放在缺陷处）与固定电荷 q_fix
-    （放在固定电荷处）和外加偏压一起解泊松方程；导电簇（r_c 取 `tddb.percolation_distance`）是等电位的导体：接电极的
+    （放在固定电荷处）和外加偏压一起解泊松方程；导电簇（按离域判据连边，`conducting_clusters`）是等电位的导体：接电极的
     保持导体电势（ADR-054/060），悬空的保持总电荷、电势待定（ADR-056）。各位点在这份电势上求值，取法同引擎处理
     真实陷阱：前驱能级 E = B − e·φ(x) − E_t1，R4 的 c_MP 用局域场。
 
@@ -383,7 +393,7 @@ def generation_rates(
     - **陷阱项**（`_trap_capture`）：近旁已占据陷阱经陷阱间通道 p·R7 送给前驱的电子（式 T5 的陷阱来源，
       ADR-039）。接电极导体的空位按所在处费米能级占满（p = 1）的电子源计入；其余陷阱（含悬空导电簇的成员）按平均场
       占据计入，能级取同一份电势（引擎的平均场能级加上悬空导电簇等电位带来的电势改变）；
-    - **P_bb**：E_A 全部位点相同（ADR-053）；场是泊松解的场在标准差 `tddb.field_averaging_width` 的 Gaussian
+    - **P_bb**：用位点自己的 E_A,i（ADR-063）；场是泊松解的场在标准差 `tddb.field_averaging_width` 的 Gaussian
       窗口上的平均（宏观场，ADR-043）。Lorentz 关系 (2+k)/3 针对在 Lorentz 球上近似均匀的宏观场，带电缺陷亚纳米
       近旁的点电荷场不满足这个前提。
 
@@ -420,7 +430,7 @@ def generation_rates(
         np.where(member, 1.0, transport.occupancy), temperature,
     )
     p_bb = bond_break_probability(
-        tddb.activation_energy, tddb.dipole_moment, material.kappa, np.linalg.norm(local[:, 4:7], axis=1),
+        precursors.activation_energy, tddb.dipole_moment, material.kappa, np.linalg.norm(local[:, 4:7], axis=1),
         temperature,
     )
     return GenerationRates(electrode, trap, p_bb)
@@ -449,7 +459,7 @@ def _conductor_potential(transport: "TransportState") -> Tuple[np.ndarray, np.nd
     top = top_boundary_potential(inner.device, inner.sim.voltage)
     charge = q * (defects.charge_state - occupancy)
     conductor = np.bincount(labels, minlength=1)[labels] >= 2
-    conductor |= sides >= 0  # 单个空位离电极 < r_c 也接到电极
+    conductor |= sides >= 0  # 单个空位离电极小于自身离域距离也接到电极
     members = np.flatnonzero(conductor)
     if members.size == 0:
         rho = solver.deposit(
@@ -659,24 +669,40 @@ def distance_clusters(positions: np.ndarray, device: DeviceConfig, distance: flo
     return connected_components(graph, directed=False)[1]
 
 
-def conducting_clusters(positions: np.ndarray, device: DeviceConfig, distance: float) -> np.ndarray:
-    """各缺陷所在的导电簇接到哪一侧电极（§6.3，ADR-054），返回 (N,)：−1 不接电极，0 接负极，1 接正极，
+def conducting_clusters(
+    defects: DefectEnsemble, device: DeviceConfig, transfer_integral: float
+) -> Tuple[np.ndarray, np.ndarray]:
+    """导电簇与各簇接哪侧电极（§6.3，ADR-054/064），返回 (编号 (N,), 接哪侧 (N,))：−1 不接电极，0 接负极，1 接正极，
     2 两侧都接（贯穿通路）。
 
-    O 空位（初始缺陷与生成空位是同一物种）间距 < `distance`（连通距离 r_c）连成导电簇，xy 取最小镜像；离电极
-    平面 < r_c 的空位接到该电极，它所在的整个导电簇随之接到该电极。
+    按电子离域判据连边：空位 a、b 之间的转移积分 t₀·exp[−r_ab·(1/r_D,a + 1/r_D,b)/2]（`transfer_integral` = t₀，随距离的衰减
+    与 R6 的几何因子相同）的两倍大于重组能 λ_ab = S_a·ℏω_a + S_b·ℏω_b 时，电子在两者之间离域，两者属于同一个导电簇；xy 取
+    最小镜像。空位离电极平面的距离小于它自身的离域距离 r_D·ln[t₀/(S·ℏω)]（与同种空位成对的判据相同）时接到该电极，所在的
+    整个导电簇随之接上。
     """
-    labels = distance_clusters(positions, device, distance)
-    z = positions[:, 2]
-    negative = np.isin(labels, labels[z < distance])
-    positive = np.isin(labels, labels[device.Lz - z < distance])
-    return np.where(negative & positive, 2, np.where(negative, 0, np.where(positive, 1, -1)))
+    n = len(defects)
+    if n == 0:
+        return np.zeros(0, dtype=int), np.zeros(0, dtype=int)
+    relaxation = defects.huang_rhys * defects.phonon_energy  # 每个空位的弛豫能 S·ℏω
+    reach = defects.r_D * np.log(transfer_integral / relaxation)  # 自身离域距离，≤ 0 时不与任何空位或电极连通
+    cutoff = float(np.max(defects.r_D)) * float(np.log(transfer_integral / np.min(relaxation)))  # 任一对离域距离的上界
+    labels = np.arange(n)
+    if cutoff > 0.0 and n > 1:
+        pairs = neighbor_pairs(defects.positions, device.Lx, device.Ly, cutoff)
+        overlap = 0.5 * pairs.r * (1.0 / defects.r_D[pairs.a] + 1.0 / defects.r_D[pairs.b])
+        keep = overlap < np.log(2.0 * transfer_integral / (relaxation[pairs.a] + relaxation[pairs.b]))
+        graph = coo_matrix((np.ones(int(keep.sum())), (pairs.a[keep], pairs.b[keep])), shape=(n, n))
+        labels = connected_components(graph, directed=False)[1]
+    z = defects.positions[:, 2]
+    negative = np.isin(labels, labels[z < reach])
+    positive = np.isin(labels, labels[device.Lz - z < reach])
+    return labels, np.where(negative & positive, 2, np.where(negative, 0, np.where(positive, 1, -1)))
 
 
 def conductor_gap(positions: np.ndarray, sides: np.ndarray, device: DeviceConfig) -> float:
     """负极侧导体（负极平面与接负极的导电簇）到正极侧导体（正极平面与接正极的导电簇）的最短距离 [m]（ADR-054）。
 
-    `sides` 取 `conducting_clusters` 的结果。有贯穿通路时为 0；否则不小于连通距离 r_c，降到 r_c 以下即连通。
+    `sides` 取 `conducting_clusters` 的结果。有贯穿通路时为 0；否则是两侧导体之间还没离域连通的最短距离。
     """
     if np.any(sides == 2):
         return 0.0
@@ -719,7 +745,7 @@ class ConductorLayout:
     占据线性变：e = `induced` − `response`·(p − Z)。
     """
 
-    labels: np.ndarray  # (N,) r_c 下的导电簇编号（`distance_clusters`）
+    labels: np.ndarray  # (N,) 导电簇编号（`conducting_clusters`）
     sides: np.ndarray  # (N,) 导电簇接哪侧电极（`conducting_clusters`）
     traps: np.ndarray  # (F,) 输运里的陷阱（`sides` = −1，含悬空导电簇的成员）在全体缺陷里的编号
     members: np.ndarray  # (M,) 接电极导体的成员编号
@@ -741,7 +767,7 @@ def conductor_layout(
     coupling: "IncrementalCoupling",
     solver: PoissonSolver,
     voltage: float,
-    percolation_distance: float,
+    transfer_integral: float,
 ) -> ConductorLayout:
     """导体划分（`conducting_clusters`）与导体静电（`ConductorLayout`，ADR-060）。
 
@@ -751,8 +777,7 @@ def conductor_layout(
     """
     device = solver.device
     positions = defects.positions
-    labels = distance_clusters(positions, device, percolation_distance)
-    sides = conducting_clusters(positions, device, percolation_distance)
+    labels, sides = conducting_clusters(defects, device, transfer_integral)
     members, traps = np.flatnonzero(sides >= 0), np.flatnonzero(sides < 0)
     share = np.where(sides[members] == 2, positions[members, 2] / device.Lz, sides[members].astype(float))
     top = top_boundary_potential(device, voltage)
@@ -1128,7 +1153,10 @@ def initial_state(config: Config) -> TDDBState:
     （`place_precursors`），之后的生成事件接着用这个流。"""
     rng = np.random.default_rng(config.simulation.seed)
     defects = generate_defects(config.device, rng)
-    precursors = place_precursors(config.device, defects.positions, rng)
+    tddb = config.tddb
+    precursors = place_precursors(
+        config.device, defects.positions, tddb.activation_energy, tddb.activation_energy_tail, rng
+    )
     return TDDBState(
         defects=defects,
         n_initial=len(defects),
@@ -1155,6 +1183,7 @@ def save_state(state: TDDBState, path: str) -> None:
         occupancy=np.full(0, np.nan) if state.occupancy is None else state.occupancy,
         has_occupancy=state.occupancy is not None,
         precursor_positions=state.precursors.positions,
+        precursor_activation_energy=state.precursors.activation_energy,
         temperature=state.temperature,
         breakdown_time=np.nan if state.breakdown_time is None else state.breakdown_time,
         steps_after_breakdown=state.steps_after_breakdown,
@@ -1176,7 +1205,7 @@ def load_state(path: str) -> TDDBState:
             birth_time=data["birth_time"],
             time=float(data["time"]),
             occupancy=data["occupancy"] if bool(data["has_occupancy"]) else None,
-            precursors=Precursors(data["precursor_positions"]),
+            precursors=Precursors(data["precursor_positions"], data["precursor_activation_energy"]),
             temperature=data["temperature"],
             breakdown_time=None if np.isnan(breakdown_time) else breakdown_time,
             steps_after_breakdown=int(data["steps_after_breakdown"]),
@@ -1224,7 +1253,7 @@ def run_tddb(
                 precursors=precursors, temperature=temperature, breakdown_time=breakdown_time,
                 steps_after_breakdown=steps_after_breakdown, rng=copy.deepcopy(rng),
             ))
-        layout = conductor_layout(defects, coupling, solver, sim.voltage, tddb.percolation_distance)
+        layout = conductor_layout(defects, coupling, solver, sim.voltage, tddb.transfer_integral)
         step = _steady_state(config, layout, defects, coupling, solver, occupancy, temperature)
         transport, mf = step.transport, step.transport.result
         occupancy = transport.occupancy

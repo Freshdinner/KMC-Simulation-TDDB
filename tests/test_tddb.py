@@ -7,17 +7,18 @@
 - G = 0 时 I(t) 恒定，且逐位等于同一初始实现下的稳态结果（等温与开热反馈都成立）；
 - 每步的强耦合簇与对当前缺陷集合新建 `KMCSimulation` 的分簇相同，终态电流与对终态缺陷
   从头求解的稳态一致；
-- 离散前驱位点（§6.1，ADR-052/055）：t = 0 在可采样窗口里做最小间隔 min_separation 的最大随机堆积，位点两两之间、
-  与初始缺陷之间都 ≥ min_separation，且再也放不下一个位点；新空位落在某个位点上，只用掉这一个位点；
+- 离散前驱位点（§6.1，ADR-052/055/063）：t = 0 在可采样窗口里做最小间隔 min_separation 的最大随机堆积，位点两两之间、
+  与初始缺陷之间都 ≥ min_separation，且再也放不下一个位点；每个位点的 E_A,i 从上限 E_A 往下按指数尾抽取；新空位落在某个位点上，只用掉这一个位点；
 - 每个位点的生成速率 G_i = R_1e,i·P_bb,i：电极项逐点求值时等于引擎在该点放一个前驱参数陷阱时的两侧 R2 + R4（含空间
   电荷），插值表与逐点求值的差别在表的精度内（ADR-055）；陷阱项等于对全部已占据陷阱的直接求和（截断误差
-  ≤ `_TRAP_TERM_FLOOR`），P_bb 取配置的 E_A（全部位点相同，ADR-053）与 Gaussian 平均场；三项都按位点处的局域温度求值；
+  ≤ `_TRAP_TERM_FLOOR`），P_bb 取位点自己的 E_A,i（指数尾，ADR-063）与 Gaussian 平均场；三项都按位点处的局域温度求值；
 - P_bb 未饱和时 E_A 整体平移只改时间标尺；Gillespie 按速率选位点；
 - 局域温度（§6.6，ADR-060）：逐缺陷温度全取工作点温度时引擎逐位不变；不均匀时每个缺陷的电极速率取它自己的温度，
   陷阱间跃迁的 MA 因子取两端平均；
 - 热反馈（§6.6、§8.4，ADR-060）：输运按缺陷处的局域温度求值，与热方程迭代到缺陷处温度的变化 ≤ 0.01 K；生成率取同一份
   温度场，下一步从这份温度场起；
-- 导电簇与击穿判据（§6.3，ADR-054/056/060）：间距 < r_c 的空位连成导电簇，离电极 < r_c 的接到该电极；接电极的导电簇
+- 导电簇与击穿判据（§6.3，ADR-054/056/060/064）：转移积分的两倍大于重组能的空位对连成导电簇，离电极小于自身离域距离的
+  空位接到该电极；接电极的导电簇
   在输运里是导体：陷阱之间的等效耦合与背景让陷阱处电势等于直接解泊松方程的结果，导体与近旁陷阱按陷阱间通道的形式
   交换电子、细致平衡；导体与对面电极之间的间隙隧穿按 R1 的能量积分；生成率的电势里接电极的导体保持导体电势、并作为
   所在处费米能级占满的电子源进陷阱项，悬空导电簇自身等电位、总电荷守恒；第一条出现贯穿通路的记录给出 t_BD，
@@ -97,17 +98,26 @@ Q = constants.elementary_charge
 E_ANGSTROM = Q * constants.angstrom
 
 
-def _tddb(**overrides) -> TDDBConfig:
+def _transfer_integral(r_c: float) -> float:
+    """让测试材料里 E_D = 1.15 eV 的空位（r_D 相同、S·ℏω 相同）离域距离正好是 `r_c` 的转移积分前因子 t₀：
+    两个这样的空位间距 < r_c 时连通、离电极 < r_c 时接上（ADR-064）。"""
+    material = make_device().stack.single_material
+    r_D = float(localization_radius(np.array([1.15 * EV]), material.m_di)[0])
+    return material.huang_rhys * material.phonon_energy * float(np.exp(r_c / r_D))
+
+
+def _tddb(r_c=0.4e-9, **overrides) -> TDDBConfig:
     params = dict(
         activation_energy=4.0 * EV,
+        activation_energy_tail=0.0,
         precursor_ionization_energy=1.15 * EV,
         precursor_relaxation_energy=1.0 * EV,
         dipole_moment=7.1 * E_ANGSTROM,
         field_averaging_width=0.5e-9,
         max_generated_vacancies=4,
         stop_time=1.0e4,
-        # r_c 小于 min_separation（0.5 nm）：空位之间、空位与电极都连不上，没有导电簇，也不会击穿
-        percolation_distance=0.4e-9,
+        # 离域距离 r_c 小于 min_separation（0.5 nm）：空位之间、空位与电极都连不上，没有导电簇，也不会击穿
+        transfer_integral=_transfer_integral(r_c),
     )
     params.update(overrides)
     return TDDBConfig(**params)
@@ -130,7 +140,7 @@ def _transport(config, defects=None, temperature=None):
     defects = KMCSimulation(config).defects if defects is None else defects
     solver = PoissonSolver(config.device, config.simulation.grid)
     coupling = IncrementalCoupling.build(solver, defects.positions, defects.field_side)
-    layout = conductor_layout(defects, coupling, solver, config.simulation.voltage, config.tddb.percolation_distance)
+    layout = conductor_layout(defects, coupling, solver, config.simulation.voltage, config.tddb.transfer_integral)
     if temperature is None:
         temperature = np.full(len(defects), config.simulation.temperature)
     return solve_transport(config, layout, defects, coupling, solver, temperature)
@@ -257,9 +267,9 @@ def test_local_temperature_enters_each_defect_and_each_pair():
 def _conductor_config():
     """r_c = 1.2 nm、3×10¹⁹ cm⁻³：两侧都有接电极的导电簇。三分之一的缺陷带与之重合的固定电荷 −e，一个接电极导体的成员带
     离开它 0.6 nm 的固定电荷 −e（导体背景里单独补上的那部分）。"""
-    config = _config(concentration_cm3=3.0e19, percolation_distance=1.2e-9)
+    config = _config(concentration_cm3=3.0e19, r_c=1.2e-9)
     defects = KMCSimulation(config).defects
-    sides = conducting_clusters(defects.positions, config.device, config.tddb.percolation_distance)
+    _, sides = conducting_clusters(defects, config.device, config.tddb.transfer_integral)
     member = int(np.flatnonzero(sides == 0)[0])
     fixed = np.where(np.arange(len(defects)) % 3 == 0, -Q, 0.0)
     offset = np.zeros((len(defects), 3))
@@ -358,7 +368,7 @@ def test_gap_tunneling_follows_the_R1_integral_on_the_gap_path():
     （`r1_electrode_electrode`，从负极导带底积起，ADR-061）在这条路径上的值，势垒取输运不动点的三维电势，面积取
     `gap_tunneling_area`。总电流是各路径之和乘 e，各成员的放热是自己那条路径的 eU 倍；顶端成员的路径最短、尖端前方电势
     降得快，比身后的成员大得多。间隙从 1 nm 拉大到 2 nm 时电流变小。"""
-    config = _config(concentration_cm3=3.0e18, percolation_distance=0.3e-9)
+    config = _config(concentration_cm3=3.0e18, r_c=0.3e-9)
     config = replace(config, simulation=replace(config.simulation, voltage=3.6, grid=replace(config.simulation.grid, nx=80, ny=80, nz=80)))
     device, area, voltage = config.device, config.tddb.gap_tunneling_area, 3.6
     material = device.stack.single_material
@@ -402,7 +412,7 @@ def test_gap_tunneling_follows_the_R1_integral_on_the_gap_path():
 def test_gap_tunneling_counts_a_mutual_pair_of_tips_once():
     """接负极与接正极的两列空位上下相对、间隙 1 nm：顶端两个成员互为最近，这条路径只算一次、放热两端各一半；接负极的其余
     成员连到对面最近的接正极成员（底端），接正极的其余成员从对面最近的接负极成员（顶端）连上来（ADR-060）。"""
-    config = _config(concentration_cm3=3.0e18, percolation_distance=0.3e-9)
+    config = _config(concentration_cm3=3.0e18, r_c=0.3e-9)
     config = replace(config, simulation=replace(config.simulation, voltage=3.6, grid=replace(config.simulation.grid, nx=80, ny=80, nz=80)))
     device, area, voltage = config.device, config.tddb.gap_tunneling_area, 3.6
     material = device.stack.single_material
@@ -595,7 +605,7 @@ def test_precursors_fill_the_sampling_window():
     device = config.device
     defects = KMCSimulation(config).defects.positions
     d = _global_standoff(device)
-    positions = place_precursors(device, defects, np.random.default_rng(7)).positions
+    positions = place_precursors(device, defects, 4.0 * EV, 0.0, np.random.default_rng(7)).positions
     assert np.all((positions[:, 2] >= d) & (positions[:, 2] <= device.Lz - d))
     assert np.all((positions[:, :2] >= 0.0) & (positions[:, :2] < [device.Lx, device.Ly]))
 
@@ -612,19 +622,37 @@ def test_precursors_fill_the_sampling_window():
     nearest = np.minimum(sites.query(probes)[0], cKDTree(np.mod(defects, box), boxsize=box).query(probes)[0])
     assert nearest.max() < d
 
-    assert np.array_equal(place_precursors(device, defects, np.random.default_rng(7)).positions, positions)
+    assert np.array_equal(place_precursors(device, defects, 4.0 * EV, 0.0, np.random.default_rng(7)).positions, positions)
     flat = make_device(defects=make_defect_config(concentration_cm3=3.0e19, min_separation=0.0))
     with pytest.raises(ValueError):
-        place_precursors(flat, defects, np.random.default_rng(7))
+        place_precursors(flat, defects, 4.0 * EV, 0.0, np.random.default_rng(7))
+
+
+def test_precursor_activation_energies_follow_the_exponential_tail():
+    """E_A 指数尾（ADR-063）：每个位点 E_A,i = E_A − E₀·X_i，X_i 服从单位指数分布。全部 ≤ E_A，(E_A − E_A,i)/E₀ 的均值与
+    标准差都接近 1、分位数与指数分布一致；同一个随机数流下位点坐标与 E₀ 无关，E₀ = 0 时全部取 E_A。"""
+    config = _config(concentration_cm3=3.0e19)
+    device = config.device
+    defects = KMCSimulation(config).defects.positions
+    upper, tail = 1.6 * EV, 0.086 * EV
+    sites = place_precursors(device, defects, upper, tail, np.random.default_rng(7))
+    x = (upper - sites.activation_energy) / tail
+    assert len(sites) > 10000 and np.all(x >= 0.0)
+    assert np.mean(x) == pytest.approx(1.0, abs=0.03) and np.std(x) == pytest.approx(1.0, abs=0.03)
+    np.testing.assert_allclose(np.quantile(x, [0.5, 0.9, 0.99]), -np.log([0.5, 0.1, 0.01]), rtol=0.05)
+    flat = place_precursors(device, defects, upper, 0.0, np.random.default_rng(7))
+    assert np.array_equal(flat.positions, sites.positions) and np.all(flat.activation_energy == upper)
 
 
 def test_converted_precursor_is_the_only_site_taken_out():
     """断键的位点用掉，其余位点原样保留、顺序不变：位点两两之间本来就 ≥ min_separation（ADR-055）。"""
     positions = 1e-9 * np.arange(15.0).reshape(5, 3)
-    precursors = Precursors(positions)
+    activation = EV * np.array([1.0, 1.1, 1.2, 1.3, 1.4])
+    precursors = Precursors(positions, activation)
     left = precursors.converted(2)
     assert len(left) == 4 and len(precursors) == 5
     assert np.array_equal(left.positions, positions[[0, 1, 3, 4]])
+    assert np.array_equal(left.activation_energy, activation[[0, 1, 3, 4]])
 
 
 def test_each_birth_converts_one_precursor_site(trajectory):
@@ -672,7 +700,7 @@ def _sites_near_sources(transport, rng, n_near=40, n_uniform=40, sources=None):
                           rng.uniform(standoff, device.Lz - standoff)])
         if _admissible(device, positions, point):
             points.append(point)
-    return Precursors(np.array(points))
+    return Precursors(np.array(points), np.full(len(points), 4.0 * EV))
 
 
 def _probe(config, inner, occupancy, positions):
@@ -697,7 +725,7 @@ def test_electrode_term_and_bond_breaking_match_engine_probe(monkeypatch, width)
     一个前驱参数陷阱时的两侧 R2 + R4；局域电势、局域场都含当前占据下的空间电荷。引擎的 R4 用 12 个声子项，这里把
     前驱的声子项数也设成 12 再逐项对拍。一组位点一起求值时走插值表（ADR-055），与逐点求值相比按生成率加权的相对
     误差 ≤ 10⁻³、ΣG 的相对误差 ≤ 10⁻³。三分之一的缺陷带与之重合的固定电荷 −e，另有一个离开缺陷 0.6 nm：生成率的
-    泊松源项（固定电荷放在各自的位置）与引擎的静电背景一致（ADR-048）。P_bb 用配置的 E_A（全部位点相同，ADR-053），
+    泊松源项（固定电荷放在各自的位置）与引擎的静电背景一致（ADR-048）。P_bb 用位点自己的 E_A,i（指数尾，ADR-063），
     场取泊松解在 Gaussian 窗口上的平均（ADR-043），窗口宽度 0 时就是引擎在探针处读到的局域场。"""
     monkeypatch.setattr(tddb_module, "_PRECURSOR_N_PHONON", _N_PHONON)
     config = _config(concentration_cm3=3.0e19, field_averaging_width=width)
@@ -711,10 +739,12 @@ def test_electrode_term_and_bond_breaking_match_engine_probe(monkeypatch, width)
     transport = _transport(config, replace(defects, fixed_charge=fixed, fixed_charge_offset=offset))
     inner, occupancy = transport.sim, transport.occupancy
     # 铺满窗口的位点每 60 个取一个，约 290 个
-    precursors = Precursors(place_precursors(config.device, inner.defects.positions, np.random.default_rng(5)).positions[::60])
+    full = place_precursors(config.device, inner.defects.positions, tddb.activation_energy, 0.2 * EV, np.random.default_rng(5))
+    precursors = Precursors(full.positions[::60], full.activation_energy[::60])
     rates = generation_rates(transport, tddb, precursors)
     single = np.array([
-        generation_rates(transport, tddb, Precursors(point[None, :])).electrode[0] for point in precursors.positions
+        generation_rates(transport, tddb, Precursors(point[None, :], activation[None])).electrode[0]
+        for point, activation in zip(precursors.positions, precursors.activation_energy)
     ])
 
     extended, occ, probe = _probe(config, inner, occupancy, precursors.positions)
@@ -739,8 +769,9 @@ def test_electrode_term_and_bond_breaking_match_engine_probe(monkeypatch, width)
         bond_field = np.linalg.norm(solver.interpolate(mean, precursors.positions), axis=-1)
         assert not np.allclose(bond_field, field[probe])
     p_bb = bond_break_probability(
-        tddb.activation_energy, tddb.dipole_moment, material.kappa, bond_field, config.simulation.temperature
+        precursors.activation_energy, tddb.dipole_moment, material.kappa, bond_field, config.simulation.temperature
     )
+    assert np.ptp(precursors.activation_energy) > 0.2 * EV
     np.testing.assert_allclose(rates.bond_breaking, p_bb, rtol=1e-9)
 
 
@@ -798,7 +829,7 @@ def test_generation_rates_follow_local_temperature():
     temperature = inner.solver.interpolate(field, precursors.positions)
     assert not np.allclose(local.rates, base.rates)
     for i in (0, 17, 39, 40, len(precursors) - 1):
-        single = Precursors(precursors.positions[i:i + 1])
+        single = Precursors(precursors.positions[i:i + 1], precursors.activation_energy[i:i + 1])
         alone = generation_rates(transport, tddb, single, field)
         uniform = generation_rates(transport, tddb, single, np.full(shape, temperature[i]))
         for name in GenerationRates._fields:
@@ -903,29 +934,64 @@ def test_distance_clusters_link_defects_closer_than_the_cutoff():
     assert distance_clusters(np.zeros((0, 3)), device, 0.9e-9).size == 0
 
 
+def _vacancies(device, positions, ED=1.15 * EV):
+    """`positions` 处的一组 O 空位（测试材料，能级 `ED`）。"""
+    ED = np.broadcast_to(np.asarray(ED, dtype=float), (len(positions),)).copy()
+    return DefectEnsemble.uniform(
+        positions, ED, device.stack.single_material, band_reference=float(device.layer_band_references()[0]),
+        charge_state=1.0,
+    )
+
+
 def test_conducting_clusters_join_vacancies_and_electrodes_closer_than_r_c():
-    """导电簇（ADR-054）：间距 < r_c 的空位连边（xy 最小镜像），离电极平面 < r_c 的空位接到该电极，整个簇随之接上；两侧
-    都接即贯穿通路。导体间隙是负极侧导体（负极平面与接负极的簇）到正极侧导体的最短距离，有贯穿通路时为 0。"""
+    """导电簇（ADR-054/064）：离域距离为 r_c 的同种空位间距 < r_c 时连边（xy 最小镜像），离电极平面 < r_c 的空位接到该电极，
+    整个簇随之接上；两侧都接即贯穿通路。导体间隙是负极侧导体（负极平面与接负极的簇）到正极侧导体的最短距离，有贯穿通路时为 0。"""
     device = make_device()  # 20×20×8 nm
     z = np.linspace(0.6e-9, 7.4e-9, 10)  # 相邻间距 0.756 nm，两端离电极 0.6 nm
     x = np.where(np.arange(10) % 2 == 0, 19.9e-9, 0.1e-9)  # 横向来回跨过周期边界，最小镜像下只差 0.2 nm
     chain = np.column_stack([x, np.full(10, 10e-9), z])
-    sides = conducting_clusters(chain, device, 0.9e-9)
-    assert np.all(sides == 2) and conductor_gap(chain, sides, device) == 0.0
+    t9, t7 = _transfer_integral(0.9e-9), _transfer_integral(0.7e-9)
+    labels, sides = conducting_clusters(_vacancies(device, chain), device, t9)
+    assert np.all(sides == 2) and np.all(labels == labels[0]) and conductor_gap(chain, sides, device) == 0.0
 
     broken = np.delete(chain, 5, axis=0)  # 去掉中间一个：下半段接负极、上半段接正极，间隙是断口两端的距离
-    sides = conducting_clusters(broken, device, 0.9e-9)
+    _, sides = conducting_clusters(_vacancies(device, broken), device, t9)
     assert sides.tolist() == [0] * 5 + [1] * 4
     gap = conductor_gap(broken, sides, device)
     assert gap == pytest.approx(np.linalg.norm(broken[4] - broken[5]), rel=1e-12) and gap >= 0.9e-9
 
-    sides = conducting_clusters(chain, device, 0.7e-9)  # r_c 小于链上间距：只剩两端各自接电极
-    assert sides.tolist() == [0] + [-1] * 8 + [1]
+    labels, sides = conducting_clusters(_vacancies(device, chain), device, t7)  # 离域距离小于链上间距：只剩两端各自接电极
+    assert sides.tolist() == [0] + [-1] * 8 + [1] and np.unique(labels).size == 10
     across = np.linalg.norm(minimum_image_delta(chain[9] - chain[0], device.Lx, device.Ly))
     assert conductor_gap(chain, sides, device) == pytest.approx(across, rel=1e-12)
-    assert conducting_clusters(chain[4:5], device, 0.9e-9).tolist() == [-1]
+    assert conducting_clusters(_vacancies(device, chain[4:5]), device, t9)[1].tolist() == [-1]
     assert conductor_gap(chain[4:5], np.array([-1]), device) == device.Lz
-    assert conducting_clusters(np.zeros((0, 3)), device, 0.9e-9).size == 0
+    assert conducting_clusters(_vacancies(device, np.zeros((0, 3))), device, t9)[1].size == 0
+
+
+def test_conducting_clusters_follow_the_delocalization_criterion():
+    """离域判据（ADR-064）：空位 a、b 的转移积分 t₀·exp[−r·(1/r_D,a + 1/r_D,b)/2] 的两倍大于 (S_a + S_b)·ℏω 时连通，能级不同
+    （r_D 不同）的一对按两者的平均衰减常数取连通距离；接电极按自身离域距离 r_D·ln[t₀/(S·ℏω)]。2t₀ 不超过重组能时没有边，
+    贴着电极的空位也不接电极。"""
+    device = make_device()
+    material = device.stack.single_material
+    relaxation = material.huang_rhys * material.phonon_energy
+    t0 = 0.5 * EV
+    ED = np.array([1.15, 0.9]) * EV
+    r_D = localization_radius(ED, material.m_di)
+    pair = 2.0 * np.log(t0 / relaxation) / (1.0 / r_D[0] + 1.0 / r_D[1])
+    assert r_D[0] * np.log(t0 / relaxation) < pair < r_D[1] * np.log(t0 / relaxation)
+    for r, linked in ((0.999 * pair, True), (1.001 * pair, False)):
+        positions = np.array([[10e-9, 10e-9, 3e-9], [10e-9, 10e-9, 3e-9 + r]])
+        labels, sides = conducting_clusters(_vacancies(device, positions, ED), device, t0)
+        assert (labels[0] == labels[1]) == linked and np.all(sides == -1)
+    reach = r_D[0] * np.log(t0 / relaxation)
+    near = np.array([[10e-9, 10e-9, 0.999 * reach], [5e-9, 5e-9, device.Lz - 1.001 * reach]])
+    assert conducting_clusters(_vacancies(device, near), device, t0)[1].tolist() == [0, -1]
+    weak = 0.99 * relaxation  # 2t₀ < 2S·ℏω：不离域
+    touching = np.array([[10e-9, 10e-9, 0.01e-9], [10e-9, 10e-9, 0.02e-9]])
+    labels, sides = conducting_clusters(_vacancies(device, touching), device, weak)
+    assert labels[0] != labels[1] and np.all(sides == -1)
 
 
 def test_conductors_are_equipotential_and_electrode_conductors_supply_electrons_at_the_fermi_level():
@@ -935,7 +1001,7 @@ def test_conductors_are_equipotential_and_electrode_conductors_supply_electrons_
     改变。陷阱项把接电极的成员当作所在处费米能级（负极 0、正极 −eU）占满（p = 1）的电子源，其余陷阱（含悬空导电簇的成员）
     按平均场占据、能级取同一份电势；P_bb 的场取这份电势的 Gaussian 平均。没有导电簇时电势就是只放缺陷电荷的解。三分之一的
     缺陷带与之重合的固定电荷 −e，另有一个离开缺陷 0.6 nm。"""
-    config = _config(concentration_cm3=3.0e19, percolation_distance=1.2e-9)
+    config = _config(concentration_cm3=3.0e19, r_c=1.2e-9)
     tddb, device = config.tddb, config.device
     material = device.stack.single_material
     defects = KMCSimulation(config).defects
@@ -985,7 +1051,7 @@ def test_conductors_are_equipotential_and_electrode_conductors_supply_electrons_
         assert carried[inside].sum() == pytest.approx(electrons[conductor][inside].sum(), rel=1e-8, abs=1e-8)
         assert not np.allclose(carried[inside], electrons[conductor][inside], atol=1e-3)
 
-    plain_config = replace(config, tddb=replace(tddb, percolation_distance=0.1e-9))
+    plain_config = replace(config, tddb=replace(tddb, transfer_integral=_transfer_integral(0.1e-9)))
     plain = _transport(plain_config, defects)
     assert plain.layout.members.size == 0
     plain_phi, zero = tddb_module._conductor_potential(plain)
@@ -1034,7 +1100,7 @@ def test_breakdown_at_start_when_the_initial_defects_already_span_the_film():
     """初始缺陷已经连成贯穿通路（r_c = 4 nm）：t_BD = 0，击穿后不再跑（post_breakdown_steps = 0）时轨迹停在 t = 0。这条记录
     的电流 = 同一实现的内层输运电流 + 间隙隧穿 + 细丝的 G₀·V（G₀ = 2e²/h ≈ 77.5 µS），细丝功率 G₀·V² 平分到贯穿通路的
     空位上、记进介质功率，不求生成率（NaN），导体间隙为 0（ADR-054/060）。"""
-    config = _config(concentration_cm3=3.0e19, percolation_distance=4.0e-9)
+    config = _config(concentration_cm3=3.0e19, r_c=4.0e-9)
     result = run_tddb(config)
     steady = _transport(config)
     voltage = config.simulation.voltage
@@ -1062,9 +1128,9 @@ def test_breakdown_time_and_steps_after_breakdown(monkeypatch):
     间隙隧穿 + 细丝，进度回调拿到的是总电流密度；只有最后一条不求生成率。I-t 拟合的缺省窗口到 t_BD 为止、只用内层输运
     电流。r_c = 1.95 nm 时初始缺陷还没连通（阈值 2.017 nm），第 3 次生成接通。"""
     config = _config(
-        seed=1, concentration_cm3=3.0e19, percolation_distance=1.95e-9, max_generated_vacancies=12, post_breakdown_steps=2
+        seed=1, concentration_cm3=3.0e19, r_c=1.95e-9, max_generated_vacancies=12, post_breakdown_steps=2
     )
-    device, r_c = config.device, config.tddb.percolation_distance
+    device, r_c, t0 = config.device, 1.95e-9, config.tddb.transfer_integral
     calls, reported = [], []
     original = tddb_module.solve_transport
 
@@ -1078,12 +1144,12 @@ def test_breakdown_time_and_steps_after_breakdown(monkeypatch):
 
     assert result.stop_reason == "breakdown" and result.end_time == result.time[-1]
     assert len(calls) == len(reported) == result.time.size
-    spanning = np.array([np.any(conducting_clusters(d.positions, device, r_c) == 2) for d, _ in calls])
+    spanning = np.array([np.any(conducting_clusters(d, device, t0)[1] == 2) for d, _ in calls])
     first = int(np.argmax(spanning))
     assert result.n_generated[first] == 3 and result.breakdown_time == result.time[first]
     assert np.array_equal(spanning, np.arange(len(calls)) >= first) and len(calls) == first + 3
     for k, (defects, transport) in enumerate(calls):
-        sides = conducting_clusters(defects.positions, device, r_c)
+        _, sides = conducting_clusters(defects, device, t0)
         assert result.conductor_gap[k] == conductor_gap(defects.positions, sides, device)
         assert result.filament_current[k] == (_QUANTUM_CONDUCTANCE * config.simulation.voltage if spanning[k] else 0.0)
         assert result.transport_current[k] == transport.result.current
@@ -1238,7 +1304,7 @@ def test_cli_tddb_writes_csv_and_figure(tmp_path, capsys):
             "activation_energy_eV": 4.0, "precursor_ionization_energy_eV": 1.15,
             "precursor_relaxation_energy_eV": 1.0, "dipole_moment_eA": 7.1, "field_averaging_width_nm": 0.5,
             "max_generated_vacancies": 2, "stop_time_s": 1.0e4,
-            "percolation_distance_nm": 0.4,
+            "activation_energy_tail_eV": 0.0, "transfer_integral_eV": _transfer_integral(0.4e-9) / EV,
             "thermal_conductivity_W_mK": 1.0,
         },
     }

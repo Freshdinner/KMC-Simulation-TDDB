@@ -9,6 +9,17 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。实测数据与方案对�
 
 #### TDDB 阶段
 
+- **E_A 恢复分布（指数尾），导电簇改按电子离域判据连边**（ADR-063、ADR-064，`config.py`、`io.py`、`rates/generation.py`、`tddb.py`、
+  `zro2_tddb.yaml`；式 T2，§6.1、§6.3）。
+  1. 每个前驱位点 E_A,i = E_A − E₀·X_i（X_i 服从单位指数分布），E_A 是上限（仍 1.6 eV），新配置项 `activation_energy_tail_eV`（E₀ = 0.086 eV）；
+     `Precursors` 存逐位点的 E_A,i，P_bb 逐位点求值，续跑状态多存一列（ADR-063 之前的存档不能续跑）。
+  2. 空位 a、b 之间转移积分 t₀·exp[−r·(1/r_D,a + 1/r_D,b)/2] 的两倍大于 (S_a + S_b)·ℏω₀ 时连成导电簇，离电极平面小于自身离域距离
+     r_D·ln[t₀/(S·ℏω₀)] 时接电极；`percolation_distance_nm` 删去（写了报错），新配置项 `transfer_integral_eV`（t₀ = 0.5 eV，E_D = 1.15 eV 时 0.42 nm）。
+     `conducting_clusters(defects, device, t₀)` 返回 (导电簇编号, 接哪侧)，`conductor_layout` 的最后一个参数改为 t₀。
+  **为什么**：用户定（E_t1 不作标定参数）。t = 0 速率谱估算：位点铺满后全部取同一个 E_A 时 N ∝ t（α = 1.00），指数尾 E₀ = 0.086 eV 时 α = 0.30
+  全程不变；r_c = 0.3 nm 与铺点间距 0.26 nm 太接近，结果对 r_c 不稳定（ADR-056）。results/ 下引用 `percolation_distance` 的历史脚本不再能直接运行。
+  **测试**：新增指数尾统计、离域判据（能级不同的一对、接电极、不离域）两项，原 r_c 测试改用等效的 t₀；`pytest tests/ -v` 317 passed（单进程串行）。
+
 - **E_A 取 1.6 eV，应力时间上限放到 10⁹ s，并做 3.6 V 验收**（ADR-062，`examples/zro2_tddb.yaml`；式 T2；验收在 `results/10.17/accept/`，
   代码 afd302c）。E_A 由 1.30 eV 改为 1.6 eV，有效势垒 0.70 → 1.0 eV，25 °C 下生成率乘 exp(−0.3 eV/k_BT) = 8.5×10⁻⁶；`stop_time_s` 由 10⁴ s
   改为 10⁹ s，原上限只够生成约 5–30 个空位。

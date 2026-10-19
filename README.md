@@ -510,23 +510,25 @@ TDDB 阶段（规格见 `PROJECT_CONTEXT_TDDB.md`，决策记录见 `docs/adr/td
 |---|---|---|
 | `grid` | 200/200/80（hx = hy = 0.25 nm，hz = 0.1 nm） | 0.5–0.9 nm 间距空位对的库仑能与 hx = 0.2 nm 相差 ≤ 3.6%，默认盒子的 1.56 nm 步长算低 30–57%；t=0 本底的系综均值变化 < 1%（ADR-032） |
 | `ensemble.count` | 30 | I-t 系综平均与 t_BD 的 Weibull 拟合用（Phase 5）；原按 20 × 20 nm 小盒子的散布定（ADR-026） |
-| `min_separation_nm` | 0.26 | ZrO₂ 的 O–O 间距；前驱位点按它铺满，r_c = 0.3 nm 时紧挨着的空位才能连通（ADR-055）。hx = 0.25 nm 网格上 0.26 nm 间距空位对的库仑能单对相差 −9% ～ +21%（0.5 nm 以上 ≤ 3.5%） |
+| `min_separation_nm` | 0.26 | ZrO₂ 的 O–O 间距；前驱位点按它铺满（ADR-055）。hx = 0.25 nm 网格上 0.26 nm 间距空位对的库仑能单对相差 −9% ～ +21%（0.5 nm 以上 ≤ 3.5%） |
 
 侧向尺寸原为 20 × 20 nm 小盒子（10 个初始缺陷）。小盒子里 t=0 电流几乎由一个贴负极的缺陷承载，3.6 V 下
 σ(log₁₀J) = 1.18，50 × 50 nm 下 0.35（ADR-050），默认盒子因此改为 50 × 50 nm（ADR-051）。
 
 顶层 `tddb` 段放 TDDB 缺陷生成、热反馈与击穿判据参数，由 `io.py` 读成 `Config.tddb`（SI 单位），
 整段省略即纯漏电流仿真（`Config.tddb = None`）。字段在用到它的阶段逐个加入，现在有十一个，除 k_TH、间隙隧穿面积与
-击穿后步数外都必须给出（前驱位点不设浓度，写了 `precursor_concentration_cm3` 直接报错，ADR-055）：
+击穿后步数外都必须给出（前驱位点不设浓度，写了 `precursor_concentration_cm3` 直接报错，ADR-055；连通距离改为离域判据，写了
+`percolation_distance_nm` 直接报错，ADR-064）：
 
 ```yaml
 tddb:
-  activation_energy_eV: 1.6              # E_A：无场下形成 Frenkel 对的激活能，全部前驱位点相同（式 T2，必须为正，ADR-053）
+  activation_energy_eV: 1.6              # E_A：无场下形成 Frenkel 对的激活能分布的上限（式 T2，必须为正，ADR-063）
+  activation_energy_tail_eV: 0.086       # E₀：E_A 指数尾宽度，E_A,i = E_A − E₀·X_i（必须 ≥ 0，0 = 全部取 E_A，ADR-063）
   precursor_ionization_energy_eV: 1.15   # E_t1：前驱能级相对局部导带底的深度（必须为正）
   precursor_relaxation_energy_eV: 1.0    # E_rel1：第一次电子俘获导致键断裂、O 空位形成的弛豫能（必须为正）
   dipole_moment_eA: 1.0                  # p₀：前驱有效偶极矩均值 [e·Å]（必须 ≥ 0，取 0 即关掉场加速）
   field_averaging_width_nm: 0.5          # P_bb 宏观场的 Gaussian 平均窗口 σ（必须 ≥ 0，取 0 即局域场，ADR-043）
-  percolation_distance_nm: 0.3           # r_c：导电通路连通距离，负极侧与正极侧导电簇连通即击穿（必须为正，ADR-054/055）
+  transfer_integral_eV: 0.5              # t₀：空位间转移积分前因子，按电子离域判据连成导电簇（必须为正，ADR-064）
   thermal_conductivity_W_mK: 2.0         # k_TH：热导率（式 T14，必须为正）；省略即等温
   gap_tunneling_area_nm2: 0.0676         # 导体与对面电极间隙隧穿的有效面积，每个导体成员一份（必须为正，缺省 (0.26 nm)²，ADR-060）
   post_breakdown_steps: 20               # 击穿判据触发后再跑的生成步数（≥ 0 的整数，缺省 0 = 击穿即停，ADR-060）
@@ -540,9 +542,10 @@ E_t1 取与 O 空位预设相同的值。E_rel1 是第一次电子俘获导致 O
 弛豫能（论文 SiO₂ 里对应 Si-O 键，取 1.5 eV），只用于空位生成的计算——E_rel1/ℏω₀ 作为 R_1e
 多声子线型的参数——与电子输运用的材料 `huang_rhys_S` 无关，现在暂取 1.0 eV（ADR-030）。p₀ = 1 eÅ 时
 3.6 V / 8 nm 下场加速项 p₀·(2+κ)/3·E 压低 0.6 eV，有效势垒对电压的斜率 0.167 eV/V（25 °C 下 P_bb 每伏约 2.8 个数量级），
-只由 p₀ 定。E_A = 1.6 eV（全部前驱相同，ADR-053、ADR-062），有效势垒 1.0 eV，标定待定；应力时间上限放到 10⁹ s，由空位数或机时上限决定停在哪里。k_TH 取 2 W/(m·K)（ADR-040）。前驱位点不设浓度：按缺陷段的
-`min_separation_nm`（0.26 nm）在可采样窗口里铺满，约 4.3×10²² cm⁻³，50 × 50 nm 盒子约 80 万个（ADR-055）。r_c 取 0.3 nm（ADR-054/055），
-只有紧挨着的空位连通。
+只由 p₀ 定。E_A 是分布上限 1.6 eV（ADR-062），每个位点 E_A,i = E_A − E₀·X_i（X_i 服从单位指数分布，E₀ = 0.086 eV，ADR-063），
+位点铺满时 N ∝ t^(k_BT/E₀)（25 °C 下指数 0.30），E_A 上限的标定待定；应力时间上限放到 10⁹ s，由空位数或机时上限决定停在哪里。k_TH 取 2 W/(m·K)（ADR-040）。前驱位点不设浓度：按缺陷段的
+`min_separation_nm`（0.26 nm）在可采样窗口里铺满，约 4.3×10²² cm⁻³，50 × 50 nm 盒子约 80 万个（ADR-055）。导电簇按电子离域判据连边
+（ADR-064）：t₀ = 0.5 eV 时 E_D = 1.15 eV 的空位离域距离 0.42 nm。
 生成率场加速项里的相对介电常数 k 直接取材料的 `kappa`，前驱的 ℏω₀ 取材料的 `phonon_energy_eV`，都不另设
 配置项。
 
@@ -615,7 +618,8 @@ G_i = R_1e·P_bb（`generation_rates`）：R_1e = 两侧电极 R2 + R4 + 近旁�
 幂律阶段升温不明显，已有轨迹 ≤ 0.09 K；接电极导电簇的尖端逼近对面电极时间隙隧穿给出热点（20×20 nm 测试体系上间隙 2 / 0.4 nm 时
 尖端 351 / 1546 K，ADR-061），贯穿通路形成后电流集中到通路上（`temperature.md` 报道的 > 1000 K，ADR-059）。
 
-**击穿判据**（§6.3，ADR-054/060）：O 空位间距 < r_c（`percolation_distance_nm`）连成导电簇，离电极平面 < r_c 的接到该电极；负极侧
+**击穿判据**（§6.3，ADR-054/060/064）：O 空位 a、b 之间转移积分 t₀·exp[−r·(1/r_D,a + 1/r_D,b)/2] 的两倍大于重组能 (S_a + S_b)·ℏω₀
+时连成导电簇（`transfer_integral_eV`），离电极平面小于自身离域距离 r_D·ln[t₀/(S·ℏω₀)] 的接到该电极；负极侧
 与正极侧导电簇连通即击穿，第一条这样的记录给出 t_BD（`breakdown_time`）。贯穿通路按一个量子电导导通，电流加上细丝的 G₀·V
 （G₀ = 2e²/h，3.6 V 下 0.28 mA），功率 G₀·V²（约 1 mW）平分到通路的空位上，通路的电势与费米能级沿 z 从负极线性变到正极（均匀电阻）。
 之后再跑 `post_breakdown_steps` 步生成看趋势，最后一条不再求生成率。接电极的导电簇在生成率里保持导体电势、按所在处费米能级占满的
@@ -679,7 +683,8 @@ ADR-055 取消 N_T、前驱位点按 0.26 nm 铺满（约 80 万个）、r_c = 0
 t = 5.5–6.2 s）都没有击穿：J 从 0.28–0.90 升到 93–103 A/cm²，但接负极的导电簇只有贴界面的 1–5 个空位，新空位在 z ≈ 1–1.5 nm 铺成一层、
 再长出到 6.2–6.9 nm 的竖直细柱，柱里空位间距多在 0.3 nm 以上；I-t 双对数向上弯（n = 0.65–1.34）。ADR-056 让悬空导电簇也等电位之后，seed 1
 （`results/10.14/floating/`）在 r_c = 0.4 nm 下一根细柱先填上它与负极之间的缺口、接上负极，再在 10⁻⁹ s 内长到 6.66 nm（停时间隙 1.34 nm）；
-r_c = 0.3 / 0.35 nm 到 349–400 个空位仍没有接上负极，结果对 r_c 不稳定。
+r_c = 0.3 / 0.35 nm 到 349–400 个空位仍没有接上负极，结果对 r_c 不稳定。ADR-063/064 把 E_A 改为指数尾分布、导电簇改按电子离域判据
+连边（离域距离 0.42 nm），3.6 V 验收还没跑。
 Phase 3 的 15 条轨迹在 `results/9.30/tddb_phase3_*.csv`，ADR-037 的轨迹在 `results/9.30/phase4/`，ADR-041 的日志与 seed 2 的
 CSV / npz 在 `results/9.30/phase4_rerun/`，ADR-045 的逐步 CSV、快照、抽查与汇总图在 `results/10.03/rerun/`，ADR-046 的在
 `results/10.03/ext1000/`，ADR-048 的在 `results/10.09/`，ADR-051 的在 `results/10.09/accept50/`，ADR-055 的在 `results/10.13/dense_sites/`。
@@ -840,7 +845,7 @@ pytest tests/ -v      # 268 个测试，约 110 s
 | `test_stack_physics.py` | **变 κ 泊松 + 分段能带 + 界面单侧场**（Phase 3）：无电荷解析分压、串联电容 C/A=ε0/S_κ、面电荷电位移跳变 = σ、变系数离散残差、界面对齐校验、同材料多层退回单层求解器、响应互易；E_C 真实台阶与显式 ΔE_C 覆盖、V_bi = (B_c+ΣΔE_C−B_a)/q；界面单侧场按 κ 比跳变、`field_vectors_at` 按 field_side 选侧、体缺陷回归锚点 |
 | `test_kmc_consistency.py` | **各分量之和 = 总电流**（机制分解、缺陷分解两条）、可复现性、三个估计量互相印证、零偏压电流可忽略、跃迁通道只走 R7、**近邻表在保留对上与稠密 (N,N) 矩阵逐位相同且截掉的总速率在双精度噪声以下**、**R1 两项等于理想梯形势垒上的公式值且与 seed / 事件数无关** |
 | `test_defects.py` | 缺陷数 = 浓度×体积、最小距离（含到界面）、r_D 公式、高斯能级统计、界面富集轮廓与解析积分对比、近邻表与"稠密矩阵+掩码"逐位一致（强制走多块路径）、截断半径命中给定容差 |
-| `test_config_io.py` | 单位换算逐项核对、两种有效质量保持独立、势垒显式优先于推算、内建电势、默认扫描范围、两个示例配置的缺陷段同构；**新 schema 结构校验**（材料引用存在、层厚为正、interfaces 数量 = 层数-1）与**旧键拒绝**（顶层 `dielectric` / `defects`、`device.Lz_nm` 各自报错提示新写法）；**`tddb` 段**可省略、E_A / E_t1 / E_rel1 / p₀ / P_bb 平均窗口 σ / 空位数上限 / 应力时间上限 / r_c / k_TH（可省略即等温）的换算、取值检查与缺项报错，写了已取消的 `precursor_concentration_cm3` 报错，**`zro2_tddb.yaml` 与 `single_run.yaml` 的材料/缺陷/电极逐项相同**（缺陷的 min_separation 取 0.26 nm 除外）、横向网格 0.25 nm、前驱 E_t1 与 O 空位预设相同、E_rel1 单独取值、p₀ = 1 eÅ / E_A = 1.6 eV / k_TH = 2 W/(m·K) / r_c = 0.3 nm（ADR-024/028/030/032/035/040/053/054/055/062） |
+| `test_config_io.py` | 单位换算逐项核对、两种有效质量保持独立、势垒显式优先于推算、内建电势、默认扫描范围、两个示例配置的缺陷段同构；**新 schema 结构校验**（材料引用存在、层厚为正、interfaces 数量 = 层数-1）与**旧键拒绝**（顶层 `dielectric` / `defects`、`device.Lz_nm` 各自报错提示新写法）；**`tddb` 段**可省略、E_A / E_t1 / E_rel1 / p₀ / P_bb 平均窗口 σ / 空位数上限 / 应力时间上限 / E₀ / t₀ / k_TH（可省略即等温）的换算、取值检查与缺项报错，写了已取消的 `precursor_concentration_cm3`、`percolation_distance_nm` 报错，**`zro2_tddb.yaml` 与 `single_run.yaml` 的材料/缺陷/电极逐项相同**（缺陷的 min_separation 取 0.26 nm 除外）、横向网格 0.25 nm、前驱 E_t1 与 O 空位预设相同、E_rel1 单独取值、p₀ = 1 eÅ / E_A = 1.6 eV / E₀ = 0.086 eV / k_TH = 2 W/(m·K) / t₀ = 0.5 eV（ADR-024/028/030/032/035/040/055/062/063/064） |
 | `test_stack_schema.py` | `DielectricStack` 统一查询接口（`Lz` 求和、`single_material` / `bulk_defects` 在多材料/多层时抛错）、**单元素 layers 退化用例**（YAML 解析与直接构造的单层叠层逐位相同：确定性量 rtol ≤ 1e-12、同种子轨迹 rtol ≤ 1e-9）、ZAZ 三层 schema 完整解析、**ZAZ 端到端跑通并给出机制分解**（Phase 4 打通，各分量之和 = 总电流、按缺陷分解 + R1 = 总电流） |
 | `test_stack_rates.py` | **分段 WKB + 按材料取速率参数 + 分段 G_ab + 截断重推**（Phase 4）：WKB 逐段 m_di、界面双值台阶不插斜坡、R1 势垒顶落在 Al₂O₃、分段 G_ab 同质退回闭式且跨层用 Al₂O₃ 低质量（路径传播质量，F08）、ZAZ 里 R7 正反细致平衡（F02 事件能量差不变）、截断半径按最慢材料推（ADR-013/F05）、R8 逐缺陷取 ε_opt/ν、**三层同材料 + ΔE_C=0 的速率表（rtol ≤ 1e-12）与轨迹（rtol ≤ 1e-9）退回单层**（ADR-018） |
 | `test_pf_collection.py` | **F03 PF 收集概率**（Phase 5）：带偏压 Al₂O₃ 势垒（矩形/梯形/三角）的 WKB 与解析闭式一致、0≤P_A≤1 且随偏压单调、阻挡层检测、**位置感知**（负极侧穿层 P_A<1、正极侧立即收集 P_A=1，界面缺陷按宿主侧判定）、反偏收集电极翻转、R8_eff=P_A·R8 折进事件表、单层 P_A≡1 逐位退回 |

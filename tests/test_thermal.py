@@ -149,7 +149,7 @@ def test_conductor_exchange_heat_moves_to_the_members_and_energy_is_conserved():
 
     from kmc_leakage.rates import miller_abrahams_factor, r6_elastic_hop
 
-    config = _config(concentration_cm3=3.0e19, percolation_distance=1.2e-9)
+    config = _config(concentration_cm3=3.0e19, r_c=1.2e-9)
     transport = _transport(config)
     sim, result, heat = transport.sim, transport.result, transport.heat
     assert sim.conductors is not None and heat.conductor.size == transport.layout.members.size
