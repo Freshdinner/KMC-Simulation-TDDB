@@ -9,17 +9,20 @@ matplotlib 的 `Figure`，内部不调用 `plt.show()`——保存还是显示�
 
 能带按 docs 的势垒形状约定绘制：界面处画直线，**不画镜像力圆化**。
 
-图上文字一律用英文：matplotlib 在没有配置中文字体的机器上会把中文渲染成
-方框，这里不去改全局 rcParams，也就不依赖任何字体。
+出图样式（CLAUDE.md 可视化风格）：图上文字用 Times New Roman，公式用 stix 字形；
+多条图线用对比色区分；坐标轴框线与刻度线 1.5 pt。样式只在每个公开函数建图期间
+经 `rc_context` 生效，不改全局 rcParams。图上文字一律用英文。
 """
 
-from typing import List, Optional, Sequence, Tuple
+import functools
+from typing import Callable, Optional, Sequence, Tuple
 
 import numpy as np
+from matplotlib import rc_context
 from matplotlib.axes import Axes
 from matplotlib.backends.backend_agg import FigureCanvasAgg
-from matplotlib.cm import Blues, tab10
-from matplotlib.colors import Colormap, to_rgba
+from matplotlib.cm import tab10
+from matplotlib.colors import to_rgba
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from mpl_toolkits.mplot3d import Axes3D  # 同时注册 3d 投影
@@ -33,14 +36,26 @@ _NM = constants.nano
 _EV = constants.electron_volt
 _PER_CM2 = constants.centi ** 2  # A/m^2 -> A/cm^2
 
-# I-V / I-T 图只画总电流，行（I-V 的温度 / I-T 的电压）取 Blues 色系里的深浅。
-# 分机制的电流不上图，完整分解看 CSV。
-_TOTAL_CMAP = Blues
+# 出图样式：Times New Roman（本机没有时退到 matplotlib 自带的 STIX 衬线体），
+# 公式 stix，坐标轴框线与刻度线 1.5 pt。字体直接写具体名称：文字对象存下的是 family 名，
+# 调用方在 rc_context 之外 savefig 时也按这个名称找字体
+_STYLE = {
+    "font.family": ["Times New Roman", "STIXGeneral"],
+    "mathtext.fontset": "stix",
+    "axes.linewidth": 1.5,
+    "xtick.major.width": 1.5,
+    "xtick.minor.width": 1.5,
+    "ytick.major.width": 1.5,
+    "ytick.minor.width": 1.5,
+}
 
-# 行序在色系里的取样区间：浅 = 低温/低压，深 = 高温/高压。下限 0.50 是为了
-# 让最浅那档在白底上仍有 2.1:1 以上的对比度（再浅就快看不见了），上限留在
-# 0.95 而不是 1.0 是为了最深那档不糊成黑色。行数 n=1 时取区间中点。
-_SHADE_RANGE = (0.50, 0.95)
+# I-V / I-T 图只画总电流，行（I-V 的温度 / I-T 的电压）按蓝、红、绿、橙、紫……的对比色轮换；
+# 行数超过色数时换一种标记再轮一遍。分机制的电流不上图，完整分解看 CSV。
+_LINE_COLORS = [
+    "#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd",
+    "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#000000",
+]
+_LINE_MARKERS = ["o", "s", "^", "D"]
 
 # 叠层叠画用的两个颜色：界面缺陷（独立物种，单独标色）与层边界/界面位置
 _INTERFACE_DEFECT_COLOR = "#c00000"
@@ -55,11 +70,15 @@ _CLUSTER_COLORS = [tab10(i) for i in range(tab10.N) if i not in (0, 7)]
 _CLUSTER_ROW_START, _CLUSTER_ROW_STEP = 0.03, 0.035
 
 
-def _shades(cmap: Colormap, n: int) -> List[Tuple[float, float, float, float]]:
-    """一个色系里按行数取 n 档深浅，从浅到深。"""
-    lo, hi = _SHADE_RANGE
-    positions = np.linspace(lo, hi, n) if n > 1 else np.array([0.5 * (lo + hi)])
-    return [cmap(float(p)) for p in positions]
+def _styled(plot: Callable[..., Figure]) -> Callable[..., Figure]:
+    """公开绘图函数的装饰器：建图期间套用 `_STYLE`，出了函数 rcParams 原样恢复。"""
+
+    @functools.wraps(plot)
+    def wrapper(*args, **kwargs) -> Figure:
+        with rc_context(_STYLE):
+            return plot(*args, **kwargs)
+
+    return wrapper
 
 
 def _new_figure(figsize: Tuple[float, float]) -> Figure:
@@ -69,6 +88,7 @@ def _new_figure(figsize: Tuple[float, float]) -> Figure:
     return figure
 
 
+@_styled
 def plot_defect_distribution(
     device: DeviceConfig,
     defects: DefectEnsemble,
@@ -96,6 +116,7 @@ def plot_defect_distribution(
     return figure
 
 
+@_styled
 def plot_defect_clusters(
     device: DeviceConfig,
     defects: DefectEnsemble,
@@ -248,6 +269,7 @@ def _annotate_layers(
         )
 
 
+@_styled
 def plot_band_diagram(
     profile: BandProfile,
     defect_z: Optional[np.ndarray] = None,
@@ -313,12 +335,12 @@ def _current_curves(
 ) -> Figure:
     """一族总电流密度曲线：`rows` 的每一行画一条，纵轴取对数、换算成 A/cm²。
 
-    行序在 Blues 色系里取深浅（浅 = 低温/低压、深 = 高温/高压），见 `_SHADE_RANGE`。
+    行按 `_LINE_COLORS` 的对比色轮换，色数用完后换 `_LINE_MARKERS` 的下一种标记。
     给了 `errors`（与 `rows` 同形状）就画 ±errors 的竖直误差棒。
     """
     figure = _new_figure((7.0, 5.0))
     axes = figure.add_subplot(1, 1, 1)
-    palette = _shades(_TOTAL_CMAP, len(labels))
+    n_colors = len(_LINE_COLORS)
     for i, label in enumerate(labels):
         yerr = None if errors is None else np.asarray(errors[i], dtype=float) * _PER_CM2
         axes.errorbar(
@@ -326,9 +348,9 @@ def _current_curves(
             np.asarray(rows[i], dtype=float) * _PER_CM2,
             yerr=yerr,
             label=label,
-            color=palette[i],
+            color=_LINE_COLORS[i % n_colors],
             linestyle="-",
-            marker="o",
+            marker=_LINE_MARKERS[(i // n_colors) % len(_LINE_MARKERS)],
             ms=4.0,
             lw=1.5,
             elinewidth=1.0,
@@ -344,6 +366,7 @@ def _current_curves(
     return figure
 
 
+@_styled
 def plot_iv_curves(
     voltages: np.ndarray,
     temperatures: np.ndarray,
@@ -375,6 +398,7 @@ def plot_iv_curves(
     )
 
 
+@_styled
 def plot_current_transient(
     time: np.ndarray,
     current_density: np.ndarray,
@@ -409,7 +433,7 @@ def _draw_state_steps(axes: Axes, time: np.ndarray, values: np.ndarray, end_time
         edges = np.append(time[1:], end_time)
         axes.step(
             edges, np.append(values[1:], values[-1]), where="post",
-            color=_shades(_TOTAL_CMAP, 1)[0], lw=1.5, label="simulation",
+            color=_LINE_COLORS[0], lw=1.5, label="simulation",
         )
         axes.set_xscale("log")
 
@@ -439,6 +463,7 @@ def _draw_current_transient(
     return density
 
 
+@_styled
 def plot_stress_transient(
     time: np.ndarray,
     current_density: np.ndarray,
@@ -481,6 +506,7 @@ def plot_stress_transient(
     return figure
 
 
+@_styled
 def plot_it_curves(
     voltages: np.ndarray,
     temperatures: np.ndarray,

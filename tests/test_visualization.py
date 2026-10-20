@@ -56,13 +56,6 @@ def _scatters(axes):
     return sum(isinstance(item, PathCollection) for item in axes.collections)
 
 
-def _luminance(line):
-    """线条颜色的 sRGB 相对亮度，用来判断深浅方向（越小越深）。"""
-    rgb = np.array(to_rgb(line.get_color()))
-    linear = np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
-    return float(np.dot(linear, (0.2126, 0.7152, 0.0722)))
-
-
 @pytest.fixture
 def defects():
     return generate_defects(make_device(), np.random.default_rng(0))
@@ -448,12 +441,31 @@ def test_curves_show_only_the_total_current(plot):
 
 
 @pytest.mark.parametrize("plot", [plot_iv_curves, plot_it_curves])
-def test_rows_are_shaded_light_to_dark_in_blue(plot):
-    """行序（温度 / 电压）由 Blues 色系的深浅承担：逐行变深，浅 = 低、深 = 高。"""
+def test_rows_use_contrasting_colors(plot):
+    """行序（温度 / 电压）用对比色区分：前两行是蓝、红，主色通道不同。"""
     axes = plot(VOLTAGES, TEMPERATURES, DENSITY).axes[0]
-    for line in axes.lines:
-        assert int(np.argmax(to_rgb(line.get_color()))) == 2  # 蓝通道最大
-    shades = [_luminance(line) for line in axes.lines]
-    assert np.all(np.diff(shades) < 0.0), shades  # 逐行变暗
-    # 最浅那档在白底上仍看得见（对比度 ≥ 2:1 对应相对亮度 ≤ 0.475）
-    assert shades[0] <= 0.475
+    dominant = [int(np.argmax(to_rgb(line.get_color()))) for line in axes.lines]
+    assert dominant[:2] == [2, 0]  # 蓝通道最大、红通道最大
+
+
+def test_rows_beyond_palette_switch_marker():
+    """行数超过色数时颜色重复，靠换标记区分：任意两行的 (颜色, 标记) 不同。"""
+    temperatures = np.linspace(250.0, 450.0, 12)
+    density = np.outer(np.linspace(1.0, 2.0, 12), DENSITY[0])
+    axes = plot_iv_curves(VOLTAGES, temperatures, density).axes[0]
+    styles = {(line.get_color(), line.get_marker()) for line in axes.lines}
+    assert len(styles) == 12
+
+
+def test_figure_style_is_times_new_roman_with_thick_axes():
+    """出图样式：文字 Times New Roman、公式 stix、框线与刻度线 1.5 pt；全局 rcParams 不变。"""
+    import matplotlib
+
+    before = dict(matplotlib.rcParams)
+    axes = plot_iv_curves(VOLTAGES, TEMPERATURES, DENSITY).axes[0]
+    label = axes.xaxis.label
+    assert label.get_fontfamily()[0] == "Times New Roman"
+    assert label.get_fontproperties().get_math_fontfamily() == "stix"
+    assert all(spine.get_linewidth() == 1.5 for spine in axes.spines.values())
+    assert axes.xaxis.get_major_ticks()[0].tick1line.get_markeredgewidth() == 1.5
+    assert dict(matplotlib.rcParams) == before

@@ -16,8 +16,12 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。实测数据与方案对�
   150 s，峰值工作集 2.3–2.4 GB。出图 `it_accept.pdf/.png`、`path_accept.pdf/.png`（Nature 版式）。
   **为什么**：用户要求从头跑一遍并整理结果；两条并行控制内存。只跑数据与改文档，未改 `src/`。
 
-- **出图规则补充三条**（`CLAUDE.md` 可视化风格一节）：图上文字用 Times New Roman（公式用 stix），
-  多条图线用对比色区分，坐标轴框线与刻度线加粗到 1.5 pt。只改文档，未改代码，pytest 未涉及。
+- **出图规则补充三条，`visualization.py` 按此实现**（`CLAUDE.md` 可视化风格一节、`README.md` 可视化模块一节）：
+  图上文字用 Times New Roman（本机没有时用 STIXGeneral），公式用 stix，多条图线用对比色区分，坐标轴框线与刻度线 1.5 pt。
+  公开绘图函数经装饰器 `_styled` 在 `rc_context` 里建图，全局 rcParams 不变；`font.family` 直接写字体名，调用方在函数外
+  `savefig` 也嵌入 Times New Roman。I-V / I-T 的行从 `Blues` 深浅改为 10 色对比色轮换，超过 10 行换标记；I-t 阶梯线改用同一套蓝色。
+  **为什么**：用户要求统一出图风格。**测试**：原"Blues 逐行变深"测试换成对比色、超色数换标记、样式与 rcParams 不变三项；
+  `pytest tests/ -v` 319 passed。
 - **E_A 恢复分布（指数尾），导电簇改按电子离域判据连边**（ADR-063、ADR-064，`config.py`、`io.py`、`rates/generation.py`、`tddb.py`、
   `zro2_tddb.yaml`；式 T2，§6.1、§6.3）。
   1. 每个前驱位点 E_A,i = E_A − E₀·X_i（X_i 服从单位指数分布），E_A 是上限（仍 1.6 eV），新配置项 `activation_energy_tail_eV`（E₀ = 0.086 eV）；
