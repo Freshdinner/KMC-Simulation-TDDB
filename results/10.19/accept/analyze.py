@@ -148,7 +148,7 @@ for s in SEEDS:
     d = new[s]
     twin.plot(d["n_generated"], d["negative_front_nm"], color=COLORS[s], ls="--", lw=0.6)
 twin.set_ylabel("Front height (nm, dashed)")
-twin.set_ylim(0, 8)
+twin.set_ylim(0.25, 0.5)
 twin.spines["right"].set_visible(True)
 ax.legend(frameon=False, loc="upper left")
 
