@@ -4,7 +4,7 @@ seed 1、2，各 10 h 机时，`drive.py`）。对照是 E_A 全部取 1.6 eV、
 统计写到 summary.txt：空位数与应力时间、J 与 ΣG 的首末值、N(t) 指数、I-t 双对数拟合（内层输运电流，第一次生成到终点，按 log t 等间距取样；
 前后半段斜率看弯曲方向）、接负极导电簇的成员数与最高点、导体间隙、新空位出生高度、平均场与热迭代收敛、每步耗时与峰值工作集。
 出图 it_accept.pdf / .png（Nature 版式：双栏 183 mm、7 pt；Times New Roman + stix 公式、蓝红对比色、坐标轴框线与刻度线 1.5 pt），
-只画指数尾的结果：(a) J(t)；(b) N(t)；(c) 局域斜率 d lnJ/d ln t；(d) ΣG(t) 与陷阱项占比；(e) 接负极导电簇的成员数与最高点；
+只画指数尾的结果：(a) J(t)；(b) N(t)；(c) 局域斜率 d lnJ/d ln t；(d) ΣG(t)；(e) 接负极导电簇的成员数与最高点；
 (f) 新空位出生高度分布。图中应力时间统一乘 T_SHIFT = 1e3（向右平移 3 个数量级），summary.txt 里的时间是模拟原值。
 usage: analyze.py
 """
@@ -135,14 +135,6 @@ for s in SEEDS:
     ax.loglog(d["t_s"][m] * T_SHIFT, d["G_total_s"][m], color=COLORS[s], label="seed {}".format(s))
 ax.set_xlabel("Stress time (s)")
 ax.set_ylabel(r"$\Sigma G$ (s$^{-1}$)")
-twin = ax.twinx()
-for s in SEEDS:
-    d = new[s]
-    m = d["n_generated"] >= 1
-    twin.semilogx(d["t_s"][m] * T_SHIFT, d["G_trap_s"][m] / d["G_total_s"][m], color=COLORS[s], ls="--", lw=0.6)
-twin.set_ylabel("Trap-term share (dashed)")
-twin.set_ylim(0, 1)
-twin.spines["right"].set_visible(True)
 ax.legend(frameon=False, loc="lower left")
 
 ax = axes[1, 1]
