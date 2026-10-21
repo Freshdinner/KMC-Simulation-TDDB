@@ -3,8 +3,9 @@ seed 1、2，各 10 h 机时，`drive.py`）。对照是 E_A 全部取 1.6 eV、
 
 统计写到 summary.txt：空位数与应力时间、J 与 ΣG 的首末值、N(t) 指数、I-t 双对数拟合（内层输运电流，第一次生成到终点，按 log t 等间距取样；
 前后半段斜率看弯曲方向）、接负极导电簇的成员数与最高点、导体间隙、新空位出生高度、平均场与热迭代收敛、每步耗时与峰值工作集。
-出图 it_accept.pdf / .png（Nature 版式：双栏 183 mm、Arial 7 pt）：(a) J(t)；(b) N(t)；(c) 局域斜率 d lnJ/d ln t；(d) ΣG(t) 与陷阱项占比；
-(e) 接负极导电簇的成员数与最高点；(f) 新空位出生高度分布。
+出图 it_accept.pdf / .png（Nature 版式：双栏 183 mm、7 pt；Times New Roman + stix 公式、蓝红对比色、坐标轴框线与刻度线 1.5 pt），
+只画指数尾的结果：(a) J(t)；(b) N(t)；(c) 局域斜率 d lnJ/d ln t；(d) ΣG(t) 与陷阱项占比；(e) 接负极导电簇的成员数与最高点；
+(f) 新空位出生高度分布。图中应力时间统一乘 T_SHIFT = 1e3（向右平移 3 个数量级），summary.txt 里的时间是模拟原值。
 usage: analyze.py
 """
 import csv
@@ -18,16 +19,18 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
 plt.rcParams.update({
-    "font.family": "sans-serif", "font.sans-serif": ["Arial"], "font.size": 7, "axes.labelsize": 7, "xtick.labelsize": 6,
-    "ytick.labelsize": 6, "legend.fontsize": 6, "axes.linewidth": 0.5, "xtick.major.width": 0.5, "ytick.major.width": 0.5,
-    "xtick.major.size": 2.5, "ytick.major.size": 2.5, "xtick.direction": "out", "ytick.direction": "out",
-    "axes.spines.top": False, "axes.spines.right": False, "axes.unicode_minus": False, "pdf.fonttype": 42,
-    "savefig.dpi": 600, "lines.linewidth": 0.8})
+    "font.family": ["Times New Roman", "STIXGeneral"], "mathtext.fontset": "stix", "font.size": 7, "axes.labelsize": 7,
+    "xtick.labelsize": 6, "ytick.labelsize": 6, "legend.fontsize": 6, "axes.linewidth": 1.5, "xtick.major.width": 1.5,
+    "ytick.major.width": 1.5, "xtick.minor.width": 1.5, "ytick.minor.width": 1.5, "xtick.major.size": 3,
+    "ytick.major.size": 3, "xtick.minor.size": 1.5, "ytick.minor.size": 1.5, "xtick.direction": "out",
+    "ytick.direction": "out", "axes.spines.top": False, "axes.spines.right": False, "axes.unicode_minus": False,
+    "pdf.fonttype": 42, "savefig.dpi": 600, "lines.linewidth": 0.8})
 MM = 1.0 / 25.4
 HERE = os.path.dirname(os.path.abspath(__file__))
 OLD = os.path.join(HERE, "..", "..", "10.17", "accept")
 SEEDS = (1, 2)
-COLORS = {1: "#0072B2", 2: "#D55E00"}
+COLORS = {1: "#1f77b4", 2: "#d62728"}
+T_SHIFT = 1e3  # 出图时应力时间乘的倍数（向右平移 3 个数量级）
 
 
 def steps(folder, seed):
@@ -92,23 +95,21 @@ open(os.path.join(HERE, "summary.txt"), "w", encoding="utf-8").write(text + "\n"
 fig, axes = plt.subplots(2, 3, figsize=(183 * MM, 100 * MM), constrained_layout=True)
 ax = axes[0, 0]
 for s in SEEDS:
-    d, o = new[s], old[s]
-    m, om = d["n_generated"] >= 1, o["n_generated"] >= 1
-    ax.loglog(d["t_s"][m], d["J_transport_A_cm2"][m], color=COLORS[s], label="seed {}, E$_0$ tail".format(s))
-    ax.loglog(o["t_s"][om], o["J_transport_A_cm2"][om], color=COLORS[s], ls="--", lw=0.6,
-              label="seed {}, single E$_A$".format(s))
+    d = new[s]
+    m = d["n_generated"] >= 1
+    ax.loglog(d["t_s"][m] * T_SHIFT, d["J_transport_A_cm2"][m], color=COLORS[s], label="seed {}".format(s))
 ax.set_xlabel("Stress time (s)")
 ax.set_ylabel("J (A cm$^{-2}$)")
 ax.legend(frameon=False)
 
 ax = axes[0, 1]
 for s in SEEDS:
-    d, o = new[s], old[s]
-    m, om = d["n_generated"] >= 1, o["n_generated"] >= 1
-    ax.loglog(d["t_s"][m], d["n_generated"][m], color=COLORS[s])
-    ax.loglog(o["t_s"][om], o["n_generated"][om], color=COLORS[s], ls="--", lw=0.6)
-t = np.logspace(-5, 1, 10)
-ax.loglog(t, 900 * (t / 8.0) ** (0.0257 / 0.086), color="k", lw=0.5, ls=":", label=r"$t^{k_BT/E_0}$ = $t^{0.30}$")
+    d = new[s]
+    m = d["n_generated"] >= 1
+    ax.loglog(d["t_s"][m] * T_SHIFT, d["n_generated"][m], color=COLORS[s], label="seed {}".format(s))
+t = np.logspace(-5, 1, 10) * T_SHIFT
+ax.loglog(t, 900 * (t / (8.0 * T_SHIFT)) ** (0.0257 / 0.086), color="k", lw=0.5, ls=":",
+          label=r"$t^{k_BT/E_0}$ = $t^{0.30}$")
 ax.set_xlabel("Stress time (s)")
 ax.set_ylabel("Generated vacancies N")
 ax.legend(frameon=False)
@@ -120,7 +121,7 @@ for s in SEEDS:
     tt, J = d["t_s"][m], d["J_transport_A_cm2"][m]
     grid = np.logspace(np.log10(tt[0]), np.log10(tt[-1]), 40)
     lj = np.interp(np.log(grid), np.log(tt), np.log(J))
-    ax.semilogx(np.sqrt(grid[1:] * grid[:-1]), np.diff(lj) / np.diff(np.log(grid)), color=COLORS[s], marker="o", ms=1.5,
+    ax.semilogx(np.sqrt(grid[1:] * grid[:-1]) * T_SHIFT, np.diff(lj) / np.diff(np.log(grid)), color=COLORS[s], marker="o", ms=1.5,
                 lw=0.6, label="seed {}".format(s))
 ax.axhline(0.30, color="k", lw=0.5, ls=":")
 ax.set_xlabel("Stress time (s)")
@@ -131,14 +132,14 @@ ax = axes[1, 0]
 for s in SEEDS:
     d = new[s]
     m = d["n_generated"] >= 1
-    ax.loglog(d["t_s"][m], d["G_total_s"][m], color=COLORS[s], label="seed {}".format(s))
+    ax.loglog(d["t_s"][m] * T_SHIFT, d["G_total_s"][m], color=COLORS[s], label="seed {}".format(s))
 ax.set_xlabel("Stress time (s)")
 ax.set_ylabel(r"$\Sigma G$ (s$^{-1}$)")
 twin = ax.twinx()
 for s in SEEDS:
     d = new[s]
     m = d["n_generated"] >= 1
-    twin.semilogx(d["t_s"][m], d["G_trap_s"][m] / d["G_total_s"][m], color=COLORS[s], ls="--", lw=0.6)
+    twin.semilogx(d["t_s"][m] * T_SHIFT, d["G_trap_s"][m] / d["G_total_s"][m], color=COLORS[s], ls="--", lw=0.6)
 twin.set_ylabel("Trap-term share (dashed)")
 twin.set_ylim(0, 1)
 twin.spines["right"].set_visible(True)
