@@ -1,11 +1,15 @@
 """最小间隔 0.4 nm、t₀ = 2.0 eV（r_c = 0.65 nm）的 3.6 V 测试汇总（其余同 examples/zro2_tddb.yaml，seed 1、2，各 10 h 机时，`drive.py`）。
 对照是最小间隔 0.26 nm、t₀ = 0.5 eV（r_c = 0.42 nm）的同种子轨迹（`../../10.19/accept/`，ADR-063/064）。
 
-统计写到 summary.txt：空位数与应力时间、J 与 ΣG 的首末值、N(t) 指数、I-t 双对数拟合（内层输运电流，第一次生成到终点，按 log t 等间距取样；
-前后半段斜率看弯曲方向）、接负极导电簇的成员数与最高点、导体间隙、新空位出生高度、平均场与热迭代收敛、每步耗时与峰值工作集。
+应力时间 t < T_PRE = 0.1 s 的一段是 pre-stress 阶段（实验的 I-t 从 0.1 s 起），只在 summary.txt 里记生成的空位数与 J、ΣG 的首末值；
+t ≥ 0.1 s 是击穿前的幂律阶段，拟合与图线都只用这一段。时间原点不变（仍从应力开始计），0.1 s 这一点取此前最后一条记录的状态
+（两次生成之间状态不变）。
+
+统计写到 summary.txt：空位数与应力时间、pre-stress 阶段、幂律阶段里 J 与 ΣG 的首末值、N(t) 指数、I-t 双对数拟合（内层输运电流，按 log t
+等间距取样；前后半段斜率看弯曲方向）、接负极导电簇的成员数与最高点、导体间隙、幂律阶段新空位的出生高度、平均场与热迭代收敛、每步耗时与峰值工作集。
 出图 it_sep040.pdf / .png，版式同 `../../10.19/accept/it_accept`（Nature 版式：双栏 183 mm、7 pt；Times New Roman + stix 公式、蓝红对比色、
-坐标轴框线与刻度线 1.5 pt）：(a) J(t)；(b) N(t)；(c) 局域斜率 d lnJ/d ln t；(d) ΣG(t)；(e) 接负极导电簇的成员数与最高点；
-(f) 新空位出生高度分布。图中应力时间是模拟原值，不平移。
+坐标轴框线与刻度线 1.5 pt），只画幂律阶段：(a) J(t)；(b) N(t)；(c) 局域斜率 d lnJ/d ln t（log t 上每个数量级 4 个点）；(d) ΣG(t)；
+(e) 接负极导电簇的成员数与最高点；(f) 幂律阶段新空位的出生高度分布。图中应力时间是模拟原值，不平移。
 usage: analyze.py
 """
 import csv
@@ -30,6 +34,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 OLD = os.path.join(HERE, "..", "..", "10.19", "accept")
 SEEDS = (1, 2)
 COLORS = {1: "#1f77b4", 2: "#d62728"}
+T_PRE = 0.1  # pre-stress 阶段的终点 [s]
 
 
 def steps(folder, seed):
@@ -50,6 +55,14 @@ def log_fit(t, y):
     return p[0], r2
 
 
+def power_law_stage(d):
+    """幂律阶段（t ≥ T_PRE）的逐步数据：第一行是 t = T_PRE 时的状态，即此前最后一条记录（两次生成之间状态不变），时间改记 T_PRE。"""
+    i = int(np.searchsorted(d["t_s"], T_PRE, side="right")) - 1
+    stage = {k: v[i:].copy() for k, v in d.items()}
+    stage["t_s"][0] = T_PRE
+    return stage
+
+
 def stop_reason(seed):
     """日志最后一行 "done ..." 给出的停止原因；还在跑时记"运行中"。"""
     last = open(os.path.join(HERE, "logs", "run_s{}.log".format(seed)), encoding="utf-8").read().splitlines()[-1]
@@ -60,36 +73,42 @@ def stop_reason(seed):
     return last.split()[1] if last.startswith("done") else "运行中"
 
 
+def it_fit(stage):
+    """幂律阶段 I-t 的双对数拟合：(n, R², 前半段 n, 后半段 n)，前后半段在 log t 上对分。"""
+    t, J = stage["t_s"], stage["J_transport_A_cm2"]
+    n, r2 = log_fit(t, J)
+    half = np.sqrt(t[0] * t[-1])
+    return n, r2, log_fit(t[t <= half], J[t <= half])[0], log_fit(t[t >= half], J[t >= half])[0]
+
+
 new = {s: steps(HERE, s) for s in SEEDS}
 old = {s: steps(OLD, s) for s in SEEDS}
+stages = {s: power_law_stage(new[s]) for s in SEEDS}
 
 lines = []
 for s in SEEDS:
-    d = new[s]
-    m = d["n_generated"] >= 1
-    t, N, J = d["t_s"][m], d["n_generated"][m], d["J_transport_A_cm2"][m]
+    d, p = new[s], stages[s]
+    t, N, J = p["t_s"], p["n_generated"], p["J_transport_A_cm2"]
     nN, _ = log_fit(t, N)
-    nJ, r2 = log_fit(t, J)
-    half = np.sqrt(t[0] * t[-1])
-    n1, _ = log_fit(t[t <= half], J[t <= half])
-    n2, _ = log_fit(t[t >= half], J[t >= half])
+    nJ, r2, n1, n2 = it_fit(p)
     o = old[s]
-    om = o["n_generated"] >= 1
-    onJ, or2 = log_fit(o["t_s"][om], o["J_transport_A_cm2"][om])
-    G, Gt = d["G_total_s"], d["G_trap_s"]
-    z = d["birth_z_nm"][1:]
+    onJ, or2, on1, on2 = it_fit(power_law_stage(o))
+    G, Gt = p["G_total_s"], p["G_trap_s"]
+    z = p["birth_z_nm"][1:]
     steps_wall = np.diff(d["wall_s"])
     lines += [
         "== seed {}: {} 个空位，t = {:.3g} s（{}）".format(s, int(d["n_generated"][-1]), d["t_s"][-1], stop_reason(s)),
-        "  J {:.3g} -> {:.3g} A/cm2；ΣG {:.3g} -> {:.3g} 1/s（陷阱项占比 {:.2f} -> {:.2f}）".format(
-            J[0], J[-1], G[0], G[-1], Gt[0] / G[0], Gt[-1] / G[-1]),
+        "  pre-stress（t < {:g} s）：生成 {} 个空位；J {:.3g} -> {:.3g} A/cm2；ΣG {:.3g} -> {:.3g} 1/s".format(
+            T_PRE, int(N[0]), d["J_transport_A_cm2"][0], J[0], d["G_total_s"][0], G[0]),
+        "  幂律阶段（{:g} s 到终点）：J {:.3g} -> {:.3g} A/cm2；ΣG {:.3g} -> {:.3g} 1/s（陷阱项占比 {:.2f} -> {:.2f}）".format(
+            T_PRE, J[0], J[-1], G[0], G[-1], Gt[0] / G[0], Gt[-1] / G[-1]),
         "  N ∝ t^{:.2f}；I-t n = {:.2f}，R² = {:.3f}；前半段 n = {:.2f}，后半段 n = {:.2f}".format(nN, nJ, r2, n1, n2),
-        "  对照（最小间隔 0.26 nm、t₀ = 0.5 eV，10.19）：n = {:.2f}，R² = {:.3f}，{} 个空位用了 {:.3g} s".format(
-            onJ, or2, int(o["n_generated"][-1]), o["t_s"][-1]),
+        "  对照（最小间隔 0.26 nm、t₀ = 0.5 eV，10.19，同样从 {:g} s 起）：n = {:.2f}，R² = {:.3f}；前半段 n = {:.2f}，后半段 n = {:.2f}；"
+        "{} 个空位用了 {:.3g} s".format(T_PRE, onJ, or2, on1, on2, int(o["n_generated"][-1]), o["t_s"][-1]),
         "  接负极导电簇：成员 {} 个，最高点 {:.2f} nm；接正极 {} 个；导体间隙 {:.2f} nm；最大悬空导电簇 {} 个空位".format(
             int(d["n_negative_members"][-1]), d["negative_front_nm"].max(), int(d["n_positive_members"][-1]),
             d["gap_nm"].min(), int(d["max_floating"].max())),
-        "  出生高度：中位数 {:.2f} nm，90% 分位 {:.2f} nm，最高 {:.2f} nm；负极 0.6 nm 以内 {:.1%}，z > 2 nm {:.1%}".format(
+        "  幂律阶段出生高度：中位数 {:.2f} nm，90% 分位 {:.2f} nm，最高 {:.2f} nm；负极 0.6 nm 以内 {:.1%}，z > 2 nm {:.1%}".format(
             np.median(z), np.quantile(z, 0.9), z.max(), np.mean(z < 0.6), np.mean(z > 2.0)),
         "  缺陷处最高升温 {:.3f} K；间隙隧穿最大 {:.2g} A/cm2".format(d["T_defect_max_K"].max() - 298.15, d["J_gap_A_cm2"].max()),
         "  平均场：没收敛 {} 条，用牛顿法 {} 条；热迭代没收敛 {} 条".format(
@@ -104,20 +123,18 @@ open(os.path.join(HERE, "summary.txt"), "w", encoding="utf-8").write(text + "\n"
 fig, axes = plt.subplots(2, 3, figsize=(183 * MM, 100 * MM), constrained_layout=True)
 ax = axes[0, 0]
 for s in SEEDS:
-    d = new[s]
-    m = d["n_generated"] >= 1
-    ax.loglog(d["t_s"][m], d["J_transport_A_cm2"][m], color=COLORS[s], label="seed {}".format(s))
+    p = stages[s]
+    ax.loglog(p["t_s"], p["J_transport_A_cm2"], color=COLORS[s], label="seed {}".format(s))
 ax.set_xlabel("Stress time (s)")
 ax.set_ylabel("J (A cm$^{-2}$)")
 ax.legend(frameon=False)
 
 ax = axes[0, 1]
 for s in SEEDS:
-    d = new[s]
-    m = d["n_generated"] >= 1
-    ax.loglog(d["t_s"][m], d["n_generated"][m], color=COLORS[s], label="seed {}".format(s))
-end = new[SEEDS[0]]
-t = np.logspace(-5, np.log10(end["t_s"][-1]), 10)
+    p = stages[s]
+    ax.loglog(p["t_s"], p["n_generated"], color=COLORS[s], label="seed {}".format(s))
+end = stages[SEEDS[0]]
+t = np.logspace(np.log10(T_PRE), np.log10(end["t_s"][-1]), 10)
 ax.loglog(t, end["n_generated"][-1] * (t / end["t_s"][-1]) ** (0.0257 / 0.086), color="k", lw=0.5, ls=":",
           label=r"$t^{k_BT/E_0}$ = $t^{0.30}$")
 ax.set_xlabel("Stress time (s)")
@@ -126,10 +143,9 @@ ax.legend(frameon=False)
 
 ax = axes[0, 2]
 for s in SEEDS:
-    d = new[s]
-    m = d["n_generated"] >= 1
-    tt, J = d["t_s"][m], d["J_transport_A_cm2"][m]
-    grid = np.logspace(np.log10(tt[0]), np.log10(tt[-1]), 40)
+    p = stages[s]
+    tt, J = p["t_s"], p["J_transport_A_cm2"]
+    grid = 10.0 ** np.arange(np.log10(tt[0]), np.log10(tt[-1]), 0.25)
     lj = np.interp(np.log(grid), np.log(tt), np.log(J))
     ax.semilogx(np.sqrt(grid[1:] * grid[:-1]), np.diff(lj) / np.diff(np.log(grid)), color=COLORS[s], marker="o", ms=1.5,
                 lw=0.6, label="seed {}".format(s))
@@ -140,23 +156,22 @@ ax.legend(frameon=False)
 
 ax = axes[1, 0]
 for s in SEEDS:
-    d = new[s]
-    m = d["n_generated"] >= 1
-    ax.loglog(d["t_s"][m], d["G_total_s"][m], color=COLORS[s], label="seed {}".format(s))
+    p = stages[s]
+    ax.loglog(p["t_s"], p["G_total_s"], color=COLORS[s], label="seed {}".format(s))
 ax.set_xlabel("Stress time (s)")
 ax.set_ylabel(r"$\Sigma G$ (s$^{-1}$)")
 ax.legend(frameon=False, loc="lower left")
 
 ax = axes[1, 1]
 for s in SEEDS:
-    d = new[s]
-    ax.plot(d["n_generated"], d["n_negative_members"], color=COLORS[s], label="seed {}".format(s))
+    p = stages[s]
+    ax.plot(p["n_generated"], p["n_negative_members"], color=COLORS[s], label="seed {}".format(s))
 ax.set_xlabel("Generated vacancies N")
 ax.set_ylabel("Negative-conductor members")
 twin = ax.twinx()
 for s in SEEDS:
-    d = new[s]
-    twin.plot(d["n_generated"], d["negative_front_nm"], color=COLORS[s], ls="--", lw=0.6)
+    p = stages[s]
+    twin.plot(p["n_generated"], p["negative_front_nm"], color=COLORS[s], ls="--", lw=0.6)
 twin.set_ylabel("Front height (nm, dashed)")
 twin.spines["right"].set_visible(True)
 ax.legend(frameon=False, loc="upper left")
@@ -164,7 +179,7 @@ ax.legend(frameon=False, loc="upper left")
 ax = axes[1, 2]
 bins = np.arange(0.0, 8.01, 0.2)
 for s in SEEDS:
-    ax.hist(new[s]["birth_z_nm"][1:], bins=bins, histtype="step", color=COLORS[s], label="seed {}".format(s), lw=0.8)
+    ax.hist(stages[s]["birth_z_nm"][1:], bins=bins, histtype="step", color=COLORS[s], label="seed {}".format(s), lw=0.8)
 ax.set_xlabel("Birth height z (nm)")
 ax.set_ylabel("Count")
 ax.legend(frameon=False)
