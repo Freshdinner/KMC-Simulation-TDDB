@@ -6,7 +6,8 @@ E_A 上限 1.6 eV、E₀ = 0.086 eV、击穿后再跑 20 步、停在 3000 个�
 
 usage: drive.py SEED MAX_WALL_H [STATE_NPZ]
 
-MAX_WALL_H 是这条轨迹的机时上限 [h]：到点后在下一步开始时存续跑状态并退出（stop_reason = wall）。给了 STATE_NPZ 就从这个续跑状态
+MAX_WALL_H 是这条轨迹的机时上限 [h]：到点后在下一步开始时存续跑状态并退出（日志末行 "done wall"）。每步开始时还检查整机可用物理内存，
+不够下一步用时同样存状态并退出（"done memory"），把内存让给另一条轨迹。给了 STATE_NPZ 就从这个续跑状态
 接着跑（`tddb.load_state`，ADR-057），逐步数据写到 `steps_s{SEED}_from{NNNN}.csv`。由 `../../10.19/accept/drive.py` 改写：不改 `tddb.run_tddb`，
 在 tddb 模块的命名空间里包一层它每步调用的函数，在 `progress` 回调里追加一行 CSV：
 - `steps_s{SEED}.csv`：第 k 行是第 k 个空位出生后的稳态（k = 0 为 t = 0），总电流与内层输运 / 间隙隧穿 / 细丝三部分，ΣG 按电极项 / 陷阱项
@@ -42,6 +43,7 @@ nm = constants.nano
 per_cm2 = constants.centi ** 2  # A/m² -> A/cm²
 SEPARATION = 0.4 * nm  # min_separation
 TRANSFER_INTEGRAL = 2.0 * constants.electron_volt  # t₀
+MEMORY_RESERVE_MB = 1024.0  # 内存保护：可用物理内存至少留这么多给系统与另一条轨迹
 
 seed = int(sys.argv[1])
 max_wall = float(sys.argv[2]) * 3600.0
@@ -89,6 +91,22 @@ def working_set_mb():
     kernel32.K32GetProcessMemoryInfo.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong]
     kernel32.K32GetProcessMemoryInfo(kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb)
     return counters.WorkingSetSize / 2 ** 20, counters.PeakWorkingSetSize / 2 ** 20
+
+
+class _MemoryStatus(ctypes.Structure):
+    _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+
+def available_physical_mb():
+    """整机可用物理内存 [MB]（Windows）。"""
+    status = _MemoryStatus()
+    status.dwLength = ctypes.sizeof(status)
+    ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
+    return status.ullAvailPhys / 2 ** 20
 
 
 # ---- 包裹 run_tddb 每步调用的函数，抓这一步的状态 ----
@@ -146,8 +164,8 @@ birth_time = [] if resume is None else list(resume.birth_time[resume.n_initial:]
 start = time.time()
 
 
-class WallLimit(Exception):
-    pass
+class Stop(Exception):
+    """停跑：(原因 wall / memory, 生成空位数, 应力时间)。"""
 
 
 def save(tddb_state):
@@ -157,11 +175,17 @@ def save(tddb_state):
 
 
 def checkpoint(tddb_state):
-    """每 25 个空位（续跑起点除外）存一次这一步开始时的状态；机时到点时存状态并停跑。先写临时文件再替换。"""
+    """每 25 个空位（续跑起点除外）存一次这一步开始时的状态；机时到点，或整机可用物理内存不够下一步用时存状态并停跑。
+    下一步要用的内存按这个进程一步内的增量（峰值工作集 − 当前工作集）的 1.25 倍计，另留 MEMORY_RESERVE_MB 给系统与另一条轨迹。
+    先写临时文件再替换。"""
     n_generated = len(tddb_state.defects) - tddb_state.n_initial
     if time.time() - start > max_wall:
         save(tddb_state)
-        raise WallLimit(n_generated, tddb_state.time)
+        raise Stop("wall", n_generated, tddb_state.time)
+    current, peak = working_set_mb()
+    if available_physical_mb() < 1.25 * (peak - current) + MEMORY_RESERVE_MB:
+        save(tddb_state)
+        raise Stop("memory", n_generated, tddb_state.time)
     if n_generated % SNAPSHOT_EVERY or n_generated == resumed_at:
         return
     save(tddb_state)
@@ -228,9 +252,8 @@ def progress(n_generated, t, j):
 
 try:
     result = run_tddb(config, progress=progress, start=resume, checkpoint=checkpoint)
-except WallLimit as stop:
-    print("done wall n_generated={} t={:.6e} wall={:.0f} (state saved)".format(stop.args[0], stop.args[1], time.time() - start),
-          flush=True)
+except Stop as stop:
+    print("done {} n_generated={} t={:.6e} wall={:.0f} (state saved)".format(*stop.args, time.time() - start), flush=True)
     sys.exit(0)
 write_tddb_csv(result, os.path.join(HERE, "final_{}.csv".format(tag)))
 np.savez(os.path.join(HERE, "final_{}.npz".format(tag)), positions=result.defects.positions,

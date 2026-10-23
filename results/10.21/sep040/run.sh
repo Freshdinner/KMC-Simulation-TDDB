@@ -1,7 +1,7 @@
 #!/bin/sh
 # 最小间隔 0.4 nm、t₀ = 2.0 eV 的 3.6 V 测试（drive.py 在 examples/zro2_tddb.yaml 上改这两项，seed 1、2）。一个通道依次跑给定的种子，每条机时上限 MAX_WALL_H，
 # 到点存续跑状态 state_s{seed}.npz 后接下一个种子；两个通道并发（每条峰值工作集约 1.5 GB）。
-# 已有 state_s{seed}.npz 时续跑：先把它复制成 state_s{seed}_n{NNNN}.npz（NNNN 是上一段停下时的生成空位数，取自日志最后一条 "done wall"）
+# 已有 state_s{seed}.npz 时续跑：先把它复制成 state_s{seed}_n{NNNN}.npz（NNNN 是上一段停下时的生成空位数，取自日志最后一条 "done wall/memory"）
 # 作为续跑起点，逐步日志写到 logs/run_s{seed}_from{NNNN}.log；没有时从 t = 0 起跑，日志写到 logs/run_s{seed}.log。
 # 启动方式同 ../../10.14/floating/run.sh：经 WMI（Win32_Process.Create）启动，不在当前 shell 的进程树里；停跑按打印的 PID 用 taskkill /T。
 # usage: run.sh MAX_WALL_H SEED [SEED ...]
@@ -14,7 +14,7 @@ chain=""
 for seed in "$@"; do
   [ -n "$chain" ] && chain="$chain& "
   if [ -f "$HERE/state_s$seed.npz" ]; then
-    n=$(grep -h '^done wall' "$HERE"/logs/run_s$seed*.log | tail -n 1 | sed 's/.*n_generated=\([0-9]*\).*/\1/')
+    n=$(grep -h '^done .*n_generated=' "$HERE"/logs/run_s$seed*.log | tail -n 1 | sed 's/.*n_generated=\([0-9]*\).*/\1/')
     tag=$(printf '%04d' "$n")
     cp "$HERE/state_s$seed.npz" "$HERE/state_s${seed}_n$tag.npz"
     args="$seed $wall results\10.21\sep040\state_s${seed}_n$tag.npz"
