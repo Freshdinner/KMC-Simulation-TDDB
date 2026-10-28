@@ -42,7 +42,7 @@ from .trap_hopping import (
     r7_inelastic_hop,
     segmented_overlap_factor,
 )
-from .wkb import barrier_maximum, wkb_transmission
+from .wkb import barrier_maximum, wkb_path_weights, wkb_transmission, wkb_transmission_weighted
 
 __all__ = [
     "CaptureElectrode",
@@ -70,5 +70,7 @@ __all__ = [
     "single_electron_capture_rate",
     "supply_function",
     "trap_precursor_capture_rate",
+    "wkb_path_weights",
     "wkb_transmission",
+    "wkb_transmission_weighted",
 ]

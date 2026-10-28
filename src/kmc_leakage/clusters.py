@@ -99,20 +99,37 @@ def stationary_distribution_gth(Q: np.ndarray) -> np.ndarray:
     精度。只用 Q 的非对角元。链可约（某个组态到不了编号更小的组态）时退回
     最小二乘解。
     """
-    a = np.array(Q, dtype=float)
-    n = a.shape[0]
-    np.fill_diagonal(a, 0.0)
-    for k in range(n - 1, 0, -1):
-        s = a[k, :k].sum()
-        if not s > 0.0:
-            return _stationary_least_squares(np.asarray(Q, dtype=float))
-        a[:k, k] /= s
-        a[:k, :k] += np.outer(a[:k, k], a[k, :k])
-    pi = np.zeros(n)
-    pi[0] = 1.0
-    for k in range(1, n):
-        pi[k] = pi[:k] @ a[:k, k]
-    return pi / pi.sum()
+    return stationary_distributions_gth([Q])[0]
+
+
+def stationary_distributions_gth(generators: List[np.ndarray]) -> List[np.ndarray]:
+    """一组生成矩阵各自的稳态分布，逐个与 `stationary_distribution_gth` 相同（GTH 状态约化法，可约的链退回最小二乘解）。
+
+    同样大小的矩阵叠成 (B, n, n) 一起约化，每一步对整批做同一个运算，省掉逐个矩阵逐个状态的循环开销。
+    """
+    distributions: List[np.ndarray] = [np.zeros(0)] * len(generators)
+    sizes = np.array([np.shape(Q)[0] for Q in generators], dtype=int)
+    for n in np.unique(sizes):
+        group = np.flatnonzero(sizes == n)
+        a = np.array([generators[i] for i in group], dtype=float)
+        diagonal = np.arange(n)
+        a[:, diagonal, diagonal] = 0.0
+        reducible = np.zeros(group.size, dtype=bool)
+        for k in range(n - 1, 0, -1):
+            s = a[:, k, :k].sum(axis=1)
+            reducible |= ~(s > 0.0)
+            a[:, :k, k] /= np.where(s > 0.0, s, 1.0)[:, None]
+            a[:, :k, :k] += a[:, :k, k, None] * a[:, k, None, :k]
+        pi = np.zeros((group.size, n))
+        pi[:, 0] = 1.0
+        for k in range(1, n):
+            pi[:, k] = np.einsum("bi,bi->b", pi[:, :k], a[:, :k, k])
+        pi /= pi.sum(axis=1, keepdims=True)
+        for b, i in enumerate(group):
+            distributions[i] = (
+                _stationary_least_squares(np.asarray(generators[i], dtype=float)) if reducible[b] else pi[b]
+            )
+    return distributions
 
 
 def cluster_generator(

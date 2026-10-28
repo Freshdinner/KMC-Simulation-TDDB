@@ -120,7 +120,9 @@ from .rates import (
     r6_elastic_hop,
     r8_pf_emission,
     segmented_overlap_factor,
+    wkb_path_weights,
     wkb_transmission,
+    wkb_transmission_weighted,
 )
 
 # 四类统计口径（见 docs/rate_equations.md 的机制对照表）
@@ -138,6 +140,8 @@ _TRAP_PATH_POINTS = 65  # 电极↔陷阱 WKB 路径采样点
 _R1_PATH_POINTS = 129  # R1 全膜厚 WKB 路径采样点
 _R1_ENERGY_POINTS = 128  # R1 能量积分点数（[0, 阈值] 与阈值以上各自；费米能级以下同间距）
 _PF_BARRIER_POINTS = 257  # F03 阻挡层 PF 收集势垒的 WKB 采样点
+# 电极速率块按行分块求（`_electrode_blocks`）：每块的行数，块内 R4/R5 的 (行, 声子数, 路径点) 临时数组约 13 MB
+_RATE_CHUNK = 2048
 # 强耦合簇（ADR-022，模块文档说明 5）：跃迁速率 ≥ 此比例 × 两端电极交换速率较小者即连边。
 # t2_2nm 叠层三个实现 × 三个工况实测：取 1e-3 时每个实现 10–14 个多陷阱簇、最大 6 个陷阱
 _CLUSTER_COUPLING = 1e-3
@@ -474,6 +478,10 @@ class _Cluster:
     out_cols: np.ndarray
     out_member: np.ndarray
     out_target: np.ndarray
+    # (S·流入对数,)、(S·流出对数,)：(S, 对数) 的按组态速率展平后各项落在 (S, k) 表展平后的哪一格（组态 s、成员
+    # in_member / out_member），按成员求和用 np.bincount
+    in_slots: np.ndarray
+    out_slots: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -602,6 +610,9 @@ class KMCSimulation:
         self._iface_node_idx, self._delta_Ec = _interface_step_nodes(device, self._z_nodes)
         self._m_di_path_negative = stack.m_di_at(self._path_negative)
         self._m_di_path_positive = stack.m_di_at(self._path_positive)
+        # WKB 积分权重（梯形权重乘 √(2·m_di)）：路径与隧穿质量都固定，一次算好，每步只做开方与加权求和
+        self._wkb_weights_negative = wkb_path_weights(self._path_negative, self._m_di_path_negative)
+        self._wkb_weights_positive = wkb_path_weights(self._path_positive, self._m_di_path_positive)
 
         # R1：不经过任何缺陷，势垒剖面就是零空间电荷的理想（分段）梯形，与占据组态
         # 无关——按公式求值一次，run() 末尾直接加到结果上
@@ -709,19 +720,24 @@ class KMCSimulation:
         in_cols = np.flatnonzero(inward[selected])
         out_cols = np.flatnonzero(outward[selected])
         a_sel, b_sel = pairs.a[selected], pairs.b[selected]
+        in_member, out_member = local[b_sel[in_cols]], local[a_sel[out_cols]]
+        k = members.size
+        state_offset = (np.arange(2 ** k) * k)[:, None]
         return _Cluster(
             members=members,
-            states=enumerate_occupations(members.size),
+            states=enumerate_occupations(k),
             pairs=selected,
             intra_cols=intra_cols,
             intra_a=local[a_sel[intra_cols]],
             intra_b=local[b_sel[intra_cols]],
             in_cols=in_cols,
-            in_member=local[b_sel[in_cols]],
+            in_member=in_member,
             in_source=a_sel[in_cols],
             out_cols=out_cols,
-            out_member=local[a_sel[out_cols]],
+            out_member=out_member,
             out_target=b_sel[out_cols],
+            in_slots=(state_offset + in_member[None, :]).ravel(),
+            out_slots=(state_offset + out_member[None, :]).ravel(),
         )
 
     def _defect_host_layers(self) -> np.ndarray:
@@ -935,26 +951,6 @@ class KMCSimulation:
         phi_bar = self._phi_bar_applied + self._phi_bar_fixed + weight @ self.coupling.phi_bar
         return phi, np.linalg.norm(field, axis=0), phi_bar
 
-    def _electrostatics_batch(
-        self, occ_states: np.ndarray
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """`_electrostatics` 的批量形式：`occ_states` 形状 (S, N)，每行一个组态。
-
-        返回 (S, N) 的电势与电场大小、(S, nz+1) 的横向平均电势剖面，叠加方式与
-        权重口径同 `_electrostatics`。簇内条件稳态一次算完簇内全部组态用。
-        """
-        coupling = self.coupling
-        weight = occ_states.astype(float) - self.defects.charge_state
-        phi = self._phi_applied_at + self._phi_fixed_at + weight @ coupling.phi_matrix - weight * coupling.phi_self
-        field = (
-            self._field_applied_at[:, None, :]
-            + self._field_fixed_at[:, None, :]
-            + np.matmul(weight, coupling.field_matrix)
-            - weight[None, :, :] * coupling.field_self[:, None, :]
-        )
-        phi_bar = self._phi_bar_applied + self._phi_bar_fixed + weight @ coupling.phi_bar
-        return phi, np.linalg.norm(field, axis=0), phi_bar
-
     def _path_barriers(self, band: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """全部电极→缺陷路径上的势垒剖面 (负极侧, 正极侧)，形状 (N, 路径点)。
 
@@ -991,7 +987,33 @@ class KMCSimulation:
         速率走同一套公式；其余五块不受影响。
 
         温度逐行取缺陷处的值。有接电极的导体时（`Conductors`），陷阱与导体成员的交换按成员所在电极侧并进 R2/R3 块。
+
+        行数超过 `_RATE_CHUNK` 时按 `_RATE_CHUNK` 行一块求（`_electrode_block_rows`），各行互不相关，结果与一次求完
+        相同；R4/R5 的 (行, 声子数, 路径点) 临时数组每块约 13 MB，峰值内存不随行数增长。
         """
+        rows = energy.shape[0]
+        if rows <= _RATE_CHUNK:
+            return self._electrode_block_rows(energy, field, barrier_c, barrier_a, idx, weights)
+        index = np.arange(rows) if idx is None else np.asarray(idx)
+        blocks = np.empty((_N_BLOCKS, rows))
+        for start in range(0, rows, _RATE_CHUNK):
+            part = slice(start, start + _RATE_CHUNK)
+            blocks[:, part] = self._electrode_block_rows(
+                energy[part], field[part], barrier_c[part], barrier_a[part], index[part], weights
+            )
+        return blocks
+
+    def _electrode_block_rows(
+        self,
+        energy: np.ndarray,
+        field: np.ndarray,
+        barrier_c: np.ndarray,
+        barrier_a: np.ndarray,
+        idx: Optional[np.ndarray],
+        weights: Optional[np.ndarray],
+    ) -> np.ndarray:
+        """`_electrode_blocks` 的一块行，参数口径相同。WKB 透射用 `_prepare` 里算好的路径积分权重
+        （`wkb_transmission_weighted`），与对路径直接做梯形积分（`wkb_transmission`）是同一个值。"""
         device = self.device
         defects = self.defects
 
@@ -1007,14 +1029,14 @@ class KMCSimulation:
         # R4/R5 的 c_MP 常数因子（含局域场 F²）：用物种质量与物种带隙，两侧电极共用
         coupling = multiphonon_coupling(pick(defects.r_D), field, pick(defects.band_gap), m_di)
 
-        for side, (path, barrier, m_di_path, electrode, fermi, bottom) in enumerate(
+        for side, (wkb_weights, barrier, electrode, fermi, bottom) in enumerate(
             (
-                (pick(self._path_negative), barrier_c, pick(self._m_di_path_negative), device.negative, self._fermi_negative, self._band_bottom[0]),
-                (pick(self._path_positive), barrier_a, pick(self._m_di_path_positive), device.positive, self._fermi_positive, self._band_bottom[1]),
+                (pick(self._wkb_weights_negative), barrier_c, device.negative, self._fermi_negative, self._band_bottom[0]),
+                (pick(self._wkb_weights_positive), barrier_a, device.positive, self._fermi_positive, self._band_bottom[1]),
             )
         ):
             # --- R2 / R3：弹性隧穿（陷阱能级处的单一能量） ---
-            transmission = wkb_transmission(path, barrier, energy, m_di_path)
+            transmission = wkb_transmission_weighted(wkb_weights, barrier, energy)
             f_electrode = fermi_dirac(energy, fermi, temperature)
             E1 = energy - bottom
             blocks[_B_R2C + side] = r2_elastic_capture(
@@ -1026,9 +1048,7 @@ class KMCSimulation:
 
             # --- R4 / R5：多声子跃迁（对 p 求和，E_p = E + p·ℏω） ---
             energies_p = energy[:, None] + phonon_offsets
-            transmission_p = wkb_transmission(
-                path[:, None, :], barrier[:, None, :], energies_p, m_di_path[:, None, :]
-            )
+            transmission_p = wkb_transmission_weighted(wkb_weights[:, None, :], barrier[:, None, :], energies_p)
             f_p = fermi_dirac(energies_p, fermi, temperature[:, None])
             dos_p = free_electron_dos(energies_p - bottom, electrode.effective_mass)
             blocks[_B_R4C + side] = r4_multiphonon_capture(
@@ -1191,43 +1211,49 @@ class KMCSimulation:
         """全部强耦合簇在环境占据 `occf` 下、簇内每个组态的能级与速率表（ADR-022）。
 
         每个簇枚举簇内 2^k 个组态，按组态的真实电荷分布重算簇成员的电极速率和与簇有关的
-        跃迁速率，簇外占据固定为 `occf`。所有簇的全部组态拼在一起做一次静电叠加、一次
-        电极速率计算，省掉逐簇调用的开销。`weights` 给出时另按它再算一遍电极速率块
-        （`_electrode_blocks` 的同名参数），放进 `weighted`。
+        跃迁速率，簇外占据固定为 `occf`。组态只在簇成员上与 `occf` 不同，静电按低秩增量叠加：先按 `occf` 叠加
+        一次全体缺陷处的电势、电场与横向平均剖面（口径同 `_electrostatics`），组态 s 再加上成员占据之差
+        Δ = s − occf[成员] 乘耦合矩阵的成员行，成员处的自作用同样多扣 Δ 的那份，与逐个组态整体叠加相同。电场只在
+        成员处求（电极速率只用成员的场）。所有簇的全部组态拼在一起做一次电极速率计算，省掉逐簇调用的开销。
+        `weights` 给出时另按它再算一遍电极速率块（`_electrode_blocks` 的同名参数），放进 `weighted`。
         """
-        defects = self.defects
+        defects, coupling = self.defects, self.coupling
         clusters = self._clusters
         if not clusters:
             return []
 
-        # 全部簇的全部组态按簇拼成 (R, N)；簇 c 占第 row_start[c] 起的 2^k 行
-        occ_states = np.concatenate(
-            [np.repeat(occf[None, :], c.states.shape[0], axis=0) for c in clusters]
+        weight = occf.astype(float) - defects.charge_state
+        phi_base = self._phi_applied_at + self._phi_fixed_at + weight @ coupling.phi_matrix - weight * coupling.phi_self
+        field_base = (
+            self._field_applied_at + self._field_fixed_at + weight @ coupling.field_matrix - weight * coupling.field_self
         )
-        row_start = np.cumsum([0] + [c.states.shape[0] for c in clusters])
-        for c, start, stop in zip(clusters, row_start[:-1], row_start[1:]):
-            occ_states[start:stop, c.members] = c.states
-        phi_at, field_at, phi_bar = self._electrostatics_batch(occ_states)
-        energy = trap_levels(defects.band_reference, phi_at, defects.ED)  # (R, N)
-        band = conduction_band_edge(self.device, self._z_nodes, phi_bar)  # (R, nz+1)
-        z_aug, band_aug = _band_nodes_with_steps(
-            self._z_nodes, band, self._iface_node_idx, self._delta_Ec
-        )
+        phi_bar_base = self._phi_bar_applied + self._phi_bar_fixed + weight @ coupling.phi_bar
 
-        # 簇成员的电极速率：每个 (组态行, 成员) 一行，按簇、组态、成员的顺序排列。
-        # 电极→成员的路径势垒同 _path_barriers（界面双值已在上面一次补好）
-        rows, idx, barrier_c, barrier_a = [], [], [], []
-        for c, start, stop in zip(clusters, row_start[:-1], row_start[1:]):
-            path_c, path_a = self._path_negative[c.members], self._path_positive[c.members]
-            for r in range(start, stop):
-                barrier_c.append(np.interp(path_c.ravel(), z_aug, band_aug[r]).reshape(path_c.shape))
-                barrier_a.append(np.interp(path_a.ravel(), z_aug, band_aug[r]).reshape(path_a.shape))
-            rows.append(np.repeat(np.arange(start, stop), c.members.size))
-            idx.append(np.tile(c.members, stop - start))
-        rows, idx = np.concatenate(rows), np.concatenate(idx)
+        # 每个簇：组态 s 下全部陷阱的能级 (S, N)；簇成员的电极速率每个 (组态, 成员) 一行，按簇、组态、成员的顺序排列，
+        # 场取成员处的值，电极→成员的路径势垒同 _path_barriers（界面双值逐簇一次补好）
+        energies, field_at, barrier_c, barrier_a = [], [], [], []
+        for c in clusters:
+            members = c.members
+            delta = c.states - occf[members]  # (S, k)
+            phi = phi_base + delta @ coupling.phi_matrix[members]
+            phi[:, members] -= delta * coupling.phi_self[members]
+            field = (
+                field_base[:, None, members]
+                + np.matmul(delta, coupling.field_matrix[:, members][:, :, members])
+                - delta * coupling.field_self[:, None, members]
+            )  # (3, S, k)
+            energies.append(trap_levels(defects.band_reference, phi, defects.ED))
+            field_at.append(np.linalg.norm(field, axis=0).ravel())
+            band = conduction_band_edge(self.device, self._z_nodes, phi_bar_base + delta @ coupling.phi_bar[members])
+            z_aug, band_aug = _band_nodes_with_steps(self._z_nodes, band, self._iface_node_idx, self._delta_Ec)
+            path_c, path_a = self._path_negative[members], self._path_positive[members]
+            for row in band_aug:
+                barrier_c.append(np.interp(path_c.ravel(), z_aug, row).reshape(path_c.shape))
+                barrier_a.append(np.interp(path_a.ravel(), z_aug, row).reshape(path_a.shape))
+        idx = np.concatenate([np.tile(c.members, c.states.shape[0]) for c in clusters])
         rate_inputs = (
-            energy[rows, idx],
-            field_at[rows, idx],
+            np.concatenate([e[:, c.members].ravel() for e, c in zip(energies, clusters)]),
+            np.concatenate(field_at),
             np.concatenate(barrier_c),
             np.concatenate(barrier_a),
             idx,
@@ -1237,21 +1263,22 @@ class KMCSimulation:
 
         tables = []
         offset = 0
-        for c, start, stop in zip(clusters, row_start[:-1], row_start[1:]):
+        for c, e in zip(clusters, energies):
             n_states, k = c.states.shape
             columns = slice(offset, offset + n_states * k)
             offset += n_states * k
 
             # 与簇有关的跃迁速率，终态能级扣掉出发陷阱电子的库仑贡献（同 _hop_rates）
             sel = c.pairs
-            e = energy[start:stop]
             hop = self._hop_geometric[sel] * miller_abrahams_factor(
                 e[:, self._pairs.a[sel]], e[:, self._pairs.b[sel]] - self._hop_U_ab[sel], self._pair_temperature[sel]
             )  # (S, P)
-            hop_in = np.zeros((n_states, k))
-            hop_out = np.zeros((n_states, k))
-            np.add.at(hop_in.T, c.in_member, (occf[c.in_source] * hop[:, c.in_cols]).T)
-            np.add.at(hop_out.T, c.out_member, ((1.0 - occf[c.out_target]) * hop[:, c.out_cols]).T)
+            hop_in = np.bincount(
+                c.in_slots, (occf[c.in_source] * hop[:, c.in_cols]).ravel(), n_states * k
+            ).reshape(n_states, k)
+            hop_out = np.bincount(
+                c.out_slots, ((1.0 - occf[c.out_target]) * hop[:, c.out_cols]).ravel(), n_states * k
+            ).reshape(n_states, k)
             tables.append(
                 _ClusterTable(
                     cluster=c,

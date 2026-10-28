@@ -27,6 +27,7 @@ from scipy import constants
 from conftest import M_E, make_config, make_defect_config, make_device, make_material
 from test_fast_traps import _three_trap_sim
 from test_master_equation import _two_trap_sim
+from kmc_leakage import kmc as kmc_module
 from kmc_leakage import mean_field
 from kmc_leakage.config import DeviceConfig, DielectricStack, ElectrodeMaterial
 from kmc_leakage.defects import DefectEnsemble, layer_bulk_defects, localization_radius, minimum_image_delta
@@ -305,6 +306,34 @@ def test_empty_device_is_r1_only():
     assert result.by_defect.shape == (0,)
     assert result.by_mechanism["tat"] == 0.0 and result.by_mechanism["pf"] == 0.0
     assert result.current == pytest.approx(sum(sim._r1_current), rel=1e-15) and result.current > 0.0
+
+
+def test_cluster_tables_equal_configuration_by_configuration_rates(split, monkeypatch):
+    """簇内组态表（`KMCSimulation._cluster_tables`）：能级与成员的电极速率块（静电按低秩增量叠加）等于把这个组态
+    整体代进 `_trap_state` 后求的值；跃迁的流入 / 流出总速率等于逐对累加；电极速率按小块求（`_RATE_CHUNK`）与
+    一次求完相同。"""
+    sim, result = split
+    p = result.occupancy
+    tables = sim._cluster_tables(p)
+    pairs = sim._pairs
+    for table in tables:
+        c = table.cluster
+        for s, state in enumerate(c.states):
+            occupancy = p.copy()
+            occupancy[c.members] = state
+            energy, field, barrier_c, barrier_a = sim._trap_state(occupancy)
+            assert table.energy[s] == pytest.approx(energy, rel=1e-12, abs=1e-12 * EV)
+            blocks = sim._electrode_blocks(
+                energy[c.members], field[c.members], barrier_c[c.members], barrier_a[c.members], c.members
+            )
+            assert table.block[:, s, :] == pytest.approx(blocks, rel=1e-12, abs=0.0)
+            hop_in = np.zeros(c.members.size)
+            for col, member in zip(c.in_cols, c.in_member):
+                hop_in[member] += p[pairs.a[c.pairs[col]]] * table.hop[s, col]
+            assert table.hop_in[s] == pytest.approx(hop_in, rel=1e-13)
+    monkeypatch.setattr(kmc_module, "_RATE_CHUNK", 7)
+    for whole, chunked in zip(tables, sim._cluster_tables(p)):
+        assert chunked.block == pytest.approx(whole.block, rel=1e-14, abs=0.0)
 
 
 def test_current_is_continuous_across_split_components(split):

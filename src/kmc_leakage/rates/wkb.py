@@ -31,6 +31,30 @@ def wkb_transmission(
     return np.exp(-exponent)
 
 
+def wkb_path_weights(z: np.ndarray, m_di: np.ndarray) -> np.ndarray:
+    """路径各样点的 WKB 积分权重 w_k：梯形公式的权重乘 √(2·m_di,k)，形状同 `z`（`m_di` 广播到它）。
+
+    `wkb_transmission` 的梯形值 ∫√(2·m_di·(U − E)) dz 就是 Σ_k w_k·√(U_k − E)₊。路径与隧穿质量在几何上固定时
+    （KMC 的电极 → 缺陷路径），权重只算一次，之后每次求透射只做开方与加权求和（`wkb_transmission_weighted`）。
+    """
+    z = np.asarray(z, dtype=float)
+    step = 0.5 * np.diff(z, axis=-1)
+    weights = np.zeros(z.shape)
+    weights[..., :-1] += step
+    weights[..., 1:] += step
+    return weights * np.sqrt(2.0 * np.broadcast_to(np.asarray(m_di, dtype=float), z.shape))
+
+
+def wkb_transmission_weighted(weights: np.ndarray, barrier: np.ndarray, energy: np.ndarray) -> np.ndarray:
+    """WKB 透射系数 exp[−(2/ℏ)·|Σ_k w_k·√(U_k − E)₊|]，权重 `weights` 取 `wkb_path_weights`，与 `wkb_transmission` 是
+    同一个梯形值。`energy` 加一个路径维后与 `barrier`、`weights` 广播。"""
+    forbidden = barrier - np.asarray(energy, dtype=float)[..., None]
+    np.maximum(forbidden, 0.0, out=forbidden)
+    np.sqrt(forbidden, out=forbidden)
+    forbidden *= weights
+    return np.exp(-2.0 / constants.hbar * np.abs(forbidden.sum(axis=-1)))
+
+
 def barrier_maximum(barrier: np.ndarray) -> float:
     """势垒沿隧穿路径的最高点能量 E_barrier,max [J]。
 

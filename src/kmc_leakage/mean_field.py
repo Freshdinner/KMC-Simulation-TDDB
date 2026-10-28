@@ -63,7 +63,7 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 import numpy as np
 from scipy import constants
 
-from .clusters import cluster_flux, cluster_generator, stationary_distribution_gth
+from .clusters import cluster_flux, cluster_generator, stationary_distributions_gth
 from .defects import minimum_image_delta, neighbor_pairs
 from .kmc import (
     _B_R2A,
@@ -196,7 +196,7 @@ def mean_field_rates(
     hop_in = np.bincount(b, hop * p[a] * (cluster_of[a] < 0), n)
     hop_out = np.bincount(a, hop * (1.0 - p[b]) * (cluster_of[b] < 0), n)
 
-    tables, distributions = [], []
+    tables, generators = [], []
     for table in sim._cluster_tables(p, weights):
         c = table.cluster
         members, states, e = c.members, c.states, table.energy
@@ -216,21 +216,27 @@ def mean_field_rates(
             e[:, members[c.out_member[target_free]]], energy[c.out_target[target_free]], temperature[cols[target_free]]
         )
         n_states, k = states.shape
-        member_in = np.zeros((n_states, k))
-        member_out = np.zeros((n_states, k))
-        np.add.at(member_in.T, c.in_member, (p[c.in_source] * rate[:, c.in_cols]).T)
-        np.add.at(member_out.T, c.out_member, ((1.0 - p[c.out_target]) * rate[:, c.out_cols]).T)
-        table = replace(table, hop=rate, hop_in=member_in, hop_out=member_out)
+        member_in = np.bincount(c.in_slots, (p[c.in_source] * rate[:, c.in_cols]).ravel(), n_states * k)
+        member_out = np.bincount(c.out_slots, ((1.0 - p[c.out_target]) * rate[:, c.out_cols]).ravel(), n_states * k)
+        table = replace(table, hop=rate, hop_in=member_in.reshape(n_states, k), hop_out=member_out.reshape(n_states, k))
 
         capture_positive, capture_other, escape_positive, pf, escape_other = _cluster_generator_rates(table)
-        pi = stationary_distribution_gth(
+        generators.append(
             cluster_generator(
                 states, capture_positive + capture_other, escape_positive + pf + escape_other,
                 c.intra_a, c.intra_b, rate[:, c.intra_cols],
             )
         )
+        tables.append(table)
+
+    # 各簇的簇内稳态分布 π（同样大小的簇一起约化）
+    distributions = stationary_distributions_gth(generators)
+    for table, pi in zip(tables, distributions):
+        c, rate = table.cluster, table.hop
+        source_free = cluster_of[c.in_source] < 0
+        target_free = cluster_of[c.out_target] < 0
         # 孤立一侧：同一组按组态的速率按 π 求平均（跳往成员要成员空，成员跳出要成员占据）
-        occupied = states.astype(float)
+        occupied = c.states.astype(float)
         cols = c.in_cols[source_free]
         hop_out += np.bincount(
             c.in_source[source_free], pi @ ((1.0 - occupied[:, c.in_member[source_free]]) * rate[:, cols]), n
@@ -239,8 +245,6 @@ def mean_field_rates(
         hop_in += np.bincount(
             c.out_target[target_free], pi @ (occupied[:, c.out_member[target_free]] * rate[:, cols]), n
         )
-        tables.append(table)
-        distributions.append(pi)
 
     return MeanFieldRates(
         energy=energy,

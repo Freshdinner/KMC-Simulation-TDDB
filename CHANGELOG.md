@@ -9,6 +9,15 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。实测数据与方案对�
 
 #### TDDB 阶段
 
+- **平均场求 F 提速（ADR-065）**：`kmc.py` 簇内组态的静电改按低秩增量叠加（组态只在簇成员上与环境占据不同，加上成员占据之差乘耦合
+  矩阵的成员行，删去 `_electrostatics_batch`），电极速率块按 2048 行分块求、WKB 用预先算好的路径积分权重（`rates/wkb.py` 新增
+  `wkb_path_weights`、`wkb_transmission_weighted`），簇边界跃迁求和由 `np.add.at` 改为 `np.bincount`；`mean_field.py` 与 `clusters.py`
+  的簇内稳态分布按簇大小成批做 GTH 约化（`stationary_distributions_gth`）。weak_tip 两个续跑状态（1010 / 1060 个缺陷）上每次求 F
+  5.40 / 5.16 → 1.60 / 1.62 s，输运–热稳态 125 / 190 → 36 / 61 s，峰值工作集 2.6 / 2.5 → 1.0 / 0.9 GB；占据、电流、生成率与改动前
+  相对差 ≤ 3×10⁻¹³，seed 2 续跑 5 步的断键位点与时刻逐位相同（`results/10.28/a14_check/`）。
+  **为什么**：weak_tip 每步要 2–4 min，剖析（`results/10.28/mf_profile/`）显示时间几乎全在簇内组态的电极速率与静电叠加上，WKB 的临时
+  数组让每次求 F 峰值内存多出 2.3 GB，两条轨迹并发时触发内存保护。`pytest tests/ -v` 322 passed（新增 3 项）。
+
 - **E_A 高斯分布均值 1.60 eV（σ = 0.15 eV）的 3.6 V 测试（seed 1、2）**（`results/10.25/ea160/`，代码 1f310ba，`src/` 未改）。
   由 `results/10.24/sigma15` 只把 E_A 均值 1.45 → 1.60 eV。两条并发跑到第 667 / 668 个空位（t = 1572 / 1853 s，机时约 3 h）时内存保护
   停跑，之后在一个通道里依次续跑到击穿：seed 1 / 2 在第 718 / 867 个空位、t_BD = 1700 / 3185 s，击穿后 20 条记录都跑满（续跑机时

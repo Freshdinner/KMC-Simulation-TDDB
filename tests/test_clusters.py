@@ -17,6 +17,7 @@ from kmc_leakage.clusters import (
     coupling_strength,
     enumerate_occupations,
     stationary_distribution_gth,
+    stationary_distributions_gth,
 )
 from kmc_leakage.kmc import _B_R2A, _B_R2C, _B_R3A, _B_R3C, _B_R8, KMCSimulation
 from kmc_leakage.master_equation import stationary_distribution
@@ -89,6 +90,25 @@ def test_gth_keeps_componentwise_accuracy_on_stiff_chain():
     weights = np.concatenate([[1.0], np.cumprod(up / down)])
     expected = weights / weights.sum()
     assert stationary_distribution_gth(Q) == pytest.approx(expected, rel=1e-12)
+
+
+def test_batched_gth_equals_one_matrix_at_a_time():
+    """一组大小不一的生成矩阵一起约化（`stationary_distributions_gth`）与逐个约化相同；其中可约的链（从吸收态回不去）
+    单独退回最小二乘解。"""
+    rng = np.random.default_rng(5)
+    generators = []
+    for n in (4, 8, 4, 2, 8, 3):
+        Q = rng.uniform(0.0, 1.0, size=(n, n)) * 10.0 ** rng.uniform(-6.0, 6.0, size=(n, n))
+        np.fill_diagonal(Q, 0.0)
+        Q[np.diag_indices(n)] = -Q.sum(axis=1)
+        generators.append(Q)
+    absorbing = np.array([[-1.0, 1.0, 0.0], [0.0, -2.0, 2.0], [0.0, 0.0, 0.0]])  # 2 是吸收态
+    generators.append(absorbing)
+    batched = stationary_distributions_gth(generators)
+    for Q, pi in zip(generators, batched):
+        assert pi == pytest.approx(stationary_distributions_gth([Q])[0], rel=1e-14)
+        assert np.allclose(pi @ Q, 0.0, atol=1e-9 * np.abs(Q).max())
+    assert batched[-1] == pytest.approx([0.0, 0.0, 1.0], abs=1e-12)
 
 
 # --------------------------------------------------------------------------

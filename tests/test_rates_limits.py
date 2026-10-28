@@ -31,7 +31,9 @@ from kmc_leakage.rates import (
     r8_pf_emission,
     richardson_schottky_current_density,
     supply_function,
+    wkb_path_weights,
     wkb_transmission,
+    wkb_transmission_weighted,
 )
 from kmc_leakage.rates.pf_emission import pf_bracket
 
@@ -67,6 +69,21 @@ def test_wkb_above_barrier_is_unity_and_direction_independent():
     forward = wkb_transmission(z, barrier, np.array(0.2 * EV), M_DI)
     backward = wkb_transmission(z[::-1], barrier[::-1], np.array(0.2 * EV), M_DI)
     assert forward == pytest.approx(backward, rel=1e-12)
+
+
+def test_weighted_wkb_equals_trapezoid_on_the_path():
+    """预先算好路径权重的 WKB（`wkb_path_weights` + `wkb_transmission_weighted`）与对路径直接做梯形积分相同：
+    非等距路径、逐点隧穿质量、反向路径、一组能量（含高过势垒的）按路径维广播。"""
+    rng = np.random.default_rng(3)
+    z = np.sort(rng.uniform(0.0, 3e-9, 40))
+    m_di = M_DI * (1.0 + 0.5 * np.sin(z / 1e-9))
+    barrier = 2.0 * EV * (1.0 - z / 4e-9) + 0.1 * EV * np.cos(z / 0.3e-9)
+    energy = np.linspace(0.0, 2.2, 7) * EV
+    for path, mass, band in ((z, m_di, barrier), (z[::-1], m_di[::-1], barrier[::-1])):
+        expected = wkb_transmission(path, band, energy, mass)
+        got = wkb_transmission_weighted(wkb_path_weights(path, mass), band, energy)
+        assert got == pytest.approx(expected, rel=1e-12)
+    assert wkb_transmission_weighted(wkb_path_weights(z, m_di), barrier, energy)[-1] == 1.0
 
 
 def test_wkb_triangular_barrier_converges_to_analytic():
