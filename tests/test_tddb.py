@@ -38,6 +38,7 @@ from scipy import constants
 from scipy.spatial import cKDTree
 
 from conftest import make_config, make_defect_config, make_device
+from kmc_leakage import mean_field
 from kmc_leakage import tddb as tddb_module
 from kmc_leakage.config import GridConfig, TDDBConfig
 from kmc_leakage.defects import (
@@ -70,10 +71,12 @@ from kmc_leakage.rates import (
 )
 from kmc_leakage.tddb import (
     _QUANTUM_CONDUCTANCE,
+    CarriedJacobian,
     GenerationRates,
     IncrementalCoupling,
     Precursors,
     _draw_generation,
+    _remap_jacobian,
     conducting_clusters,
     conductor_gap,
     conductor_layout,
@@ -156,8 +159,8 @@ def trajectory():
     calls, generations = [], []
     original_mf, original_rates = tddb_module.solve_mean_field, tddb_module.generation_rates
 
-    def recording(sim, occupancy=None):
-        result = original_mf(sim, occupancy)
+    def recording(sim, occupancy=None, jacobian=None, refresh=None):
+        result = original_mf(sim, occupancy, jacobian, refresh)
         calls.append((sim, None if occupancy is None else occupancy.copy(), result))
         return result
 
@@ -876,8 +879,8 @@ def test_thermal_feedback_iterates_local_temperature_to_self_consistency(monkeyp
     calls, temperature_fields = [], []
     original_transport, original_rates = tddb_module.solve_transport, tddb_module.generation_rates
 
-    def recording_transport(config, layout, defects, coupling, solver, temperature, occupancy=None):
-        result = original_transport(config, layout, defects, coupling, solver, temperature, occupancy)
+    def recording_transport(config, layout, defects, coupling, solver, temperature, occupancy=None, jacobian=None):
+        result = original_transport(config, layout, defects, coupling, solver, temperature, occupancy, jacobian)
         calls.append((defects, temperature.copy(), result))
         return result
 
@@ -1134,8 +1137,8 @@ def test_breakdown_time_and_steps_after_breakdown(monkeypatch):
     calls, reported = [], []
     original = tddb_module.solve_transport
 
-    def recording(config, layout, defects, coupling, solver, temperature, occupancy=None):
-        result = original(config, layout, defects, coupling, solver, temperature, occupancy)
+    def recording(config, layout, defects, coupling, solver, temperature, occupancy=None, jacobian=None):
+        result = original(config, layout, defects, coupling, solver, temperature, occupancy, jacobian)
         calls.append((defects, result))
         return result
 
@@ -1215,6 +1218,48 @@ def test_resuming_from_a_checkpoint_continues_the_same_trajectory(tmp_path):
     np.testing.assert_allclose(resumed.generation_rate, full.generation_rate[2:], rtol=1e-8)
     np.testing.assert_allclose(resumed.defect_temperature, full.defect_temperature[2:], rtol=1e-12)
     np.testing.assert_allclose(resumed.temperature_at_defects, full.temperature_at_defects, rtol=1e-12)
+
+
+def test_remap_jacobian_keeps_entries_between_surviving_traps():
+    """沿用的 Jacobian 排到新的陷阱上（ADR-066）：两次都是陷阱的缺陷之间照搬，离开的陷阱的行列去掉，新出现的陷阱的行列取
+    −I、列在要重求的列表里。"""
+    previous = np.array([0, 2, 3, 5])
+    matrix = np.arange(16.0).reshape(4, 4)
+    remapped, refresh = _remap_jacobian(CarriedJacobian(matrix, previous), np.array([0, 3, 5, 6]))
+    expected = -np.eye(4)
+    expected[:3, :3] = matrix[np.ix_([0, 2, 3], [0, 2, 3])]
+    assert np.array_equal(remapped, expected) and refresh.tolist() == [3]
+
+
+def test_newton_jacobian_is_carried_to_the_next_step(monkeypatch):
+    """外层每次输运求解把平均场牛顿法的 Jacobian 交给下一次（ADR-066，开热反馈）：Anderson 只给 2 次、第一次求解就走
+    牛顿法，之后每次都带着上一次的 Jacobian 直接走牛顿法，新生空位的列标为要重求；轨迹与每次都从头求解的相同（同样的空位
+    位置，时刻与电流只差收敛判据以内的误差），求 F 的总次数更少。"""
+    monkeypatch.setattr(mean_field, "_ANDERSON_MAX_ITER", 2)
+    config = _config(seed=1, concentration_cm3=3.0e19, max_generated_vacancies=4, thermal_conductivity=2.0)
+    calls = []
+    original = tddb_module.solve_mean_field
+
+    def recording(sim, occupancy=None, jacobian=None, refresh=None):
+        calls.append((sim.n_defects, None if jacobian is None else jacobian.shape, refresh))
+        return original(sim, occupancy, jacobian, refresh)
+
+    monkeypatch.setattr(tddb_module, "solve_mean_field", recording)
+    carried = run_tddb(config)
+    monkeypatch.setattr(tddb_module, "carried_jacobian", lambda transport: None)
+    fresh = run_tddb(config)
+
+    n_calls = int(carried.thermal_iterations.sum())
+    assert calls[0][1] is None and len(calls) == n_calls + int(fresh.thermal_iterations.sum())
+    assert all(shape == (n, n) for n, shape, _ in calls[1:n_calls])
+    step_starts = np.cumsum(carried.thermal_iterations)[:-1]  # 每个外层步的第一次求解：多了一个新生空位
+    assert all(calls[k][2].size == 1 for k in step_starts)
+    assert all(refresh is None for _, _, refresh in calls[n_calls:])
+    assert np.all(carried.converged) and np.all(fresh.converged)
+    assert np.array_equal(carried.defects.positions, fresh.defects.positions)
+    np.testing.assert_allclose(carried.time, fresh.time, rtol=1e-8)
+    np.testing.assert_allclose(carried.current, fresh.current, rtol=1e-8)
+    assert carried.iterations.sum() < fresh.iterations.sum()
 
 
 def test_draw_generation_picks_sites_by_rate():

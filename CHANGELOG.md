@@ -9,6 +9,17 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。实测数据与方案对�
 
 #### TDDB 阶段
 
+- **平均场牛顿法的 Jacobian 沿用到下一步，Anderson 提前改用牛顿法（ADR-066）**：`mean_field.solve_mean_field` 返回牛顿法最后用的
+  Jacobian（`MeanFieldResult.jacobian`），给了 Jacobian 时不做 Anderson、直接从热启动初值走牛顿法，只在起点重求新缺陷的列
+  （`_newton` 的 `jacobian` / `refresh`，`_jacobian_columns`）；Anderson 按最近 10 次的残差下降率外推、到 50 次上限也收敛不了就提前停下
+  （`_anderson_too_slow`）。`tddb.py` 在输运求解之间传递 Jacobian（`CarriedJacobian`、`carried_jacobian`、`_remap_jacobian`，
+  `solve_transport` / `_steady_state` 新增 `jacobian` 参数），续跑时从头求。seed 1 第 1225 个空位起 8 条记录：第一条求 F 154 → 121 次，
+  之后 6 条 10–17 次、每步 28–43 s（原来约 150 次、350–440 s），1 条沿用的 Jacobian 走不动、364 次 800 s；与原轨迹电流相对差 ≤ 5×10⁻¹¹
+  （`results/10.28/newton_carry/`）。
+  **为什么**：weak_tip seed 1 后期 Anderson 每步用满 50 次再改用牛顿法。不动点处 F 的 Jacobian 模 ≥ 0.6 的特征值从第 1000 个空位的 8 个
+  增到第 1225 个的 19 个，慢方向几乎全在被簇大小上限切开的强耦合分量上，5 步历史的 Anderson 压不住（`results/10.28/newton_diag/`）。
+  `pytest tests/ -v` 326 passed（新增 4 项）。
+
 - **平均场求 F 提速（ADR-065）**：`kmc.py` 簇内组态的静电改按低秩增量叠加（组态只在簇成员上与环境占据不同，加上成员占据之差乘耦合
   矩阵的成员行，删去 `_electrostatics_batch`），电极速率块按 2048 行分块求、WKB 用预先算好的路径积分权重（`rates/wkb.py` 新增
   `wkb_path_weights`、`wkb_transmission_weighted`），簇边界跃迁求和由 `np.add.at` 改为 `np.bincount`；`mean_field.py` 与 `clusters.py`

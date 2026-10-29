@@ -845,6 +845,30 @@ def _take(defects: DefectEnsemble, index: np.ndarray) -> DefectEnsemble:
     return DefectEnsemble(**{item.name: getattr(defects, item.name)[index] for item in fields(DefectEnsemble)})
 
 
+class CarriedJacobian(NamedTuple):
+    """上一次输运求解里平均场牛顿法最后用的 ∂G/∂x（ADR-066），交给下一次求解作初始 Jacobian。"""
+
+    matrix: np.ndarray  # (F, F) 按那次的陷阱排列
+    traps: np.ndarray  # (F,) 那次的陷阱在全体缺陷里的编号（升序；缺陷只在末尾追加，编号跨步不变）
+
+
+def carried_jacobian(transport: "TransportState") -> Optional[CarriedJacobian]:
+    """这次求解的 Jacobian；平均场只用了 Anderson 混合时为 None。"""
+    matrix = transport.result.jacobian
+    return None if matrix is None else CarriedJacobian(matrix, transport.layout.traps)
+
+
+def _remap_jacobian(carried: CarriedJacobian, traps: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """把沿用的 Jacobian 排到这次的陷阱 `traps` 上，返回 (矩阵, 要重求的列)：两次都是陷阱的缺陷之间照搬，新出现的陷阱
+    （新生空位，或离开导体的缺陷）的行列取 −I（与别的缺陷无关时 G = ln p̂ − x 对自身的导数），交给牛顿法在起点处重求它们的列。"""
+    kept = np.isin(traps, carried.traps)
+    new = np.flatnonzero(kept)
+    old = np.searchsorted(carried.traps, traps[kept])
+    matrix = -np.eye(traps.size)
+    matrix[np.ix_(new, new)] = carried.matrix[np.ix_(old, old)]
+    return matrix, np.flatnonzero(~kept)
+
+
 def solve_transport(
     config: Config,
     layout: ConductorLayout,
@@ -853,10 +877,12 @@ def solve_transport(
     solver: PoissonSolver,
     temperature: np.ndarray,
     occupancy: Optional[np.ndarray] = None,
+    jacobian: Optional[CarriedJacobian] = None,
 ) -> TransportState:
     """内层输运稳态（§6.2，ADR-060）：陷阱上建 `KMCSimulation`，求簇级平均场不动点与式 T13 的放热。
 
     `temperature` 是各缺陷处的温度 (N,)；`occupancy` 是全体缺陷的占据初值 (N,)，只用陷阱那部分热启动，缺省从全空起。
+    `jacobian` 是上一次求解的 Jacobian（`carried_jacobian`），给了就排到这次的陷阱上，平均场直接走牛顿法（ADR-066）。
     有接电极的导体时，陷阱之间用消去成员后的等效耦合，导体的背景与交换通道由 `kmc.Conductors` 带进引擎；没有导体时
     就是在全体缺陷上建引擎，与漏电流侧逐位相同。
     """
@@ -883,7 +909,8 @@ def solve_transport(
         temperature=temperature[traps],
         conductors=conductors,
     )
-    result = solve_mean_field(sim, None if occupancy is None else occupancy[traps])
+    matrix, refresh = (None, None) if jacobian is None else _remap_jacobian(jacobian, traps)
+    result = solve_mean_field(sim, None if occupancy is None else occupancy[traps], matrix, refresh)
     p = result.occupancy
     full = np.empty(len(defects))
     potential = np.empty(len(defects))
@@ -1014,16 +1041,19 @@ def _steady_state(
     solver: PoissonSolver,
     occupancy: Optional[np.ndarray],
     temperature: np.ndarray,
+    jacobian: Optional[CarriedJacobian] = None,
 ) -> _Step:
     """输运与热迭代自洽（§6.6、§8.4，ADR-060）。
 
     从缺陷处温度 `temperature` (N,) 与占据 `occupancy` 起，求内层输运、间隙隧穿与细丝的放热，解稳态热方程得到温度场，
     取它在缺陷处的值作为下一次输运的温度，直到变化 ≤ `_THERMAL_TOLERANCE`。迭代 `_THERMAL_MAX_ITERATIONS` 次仍不收敛
-    （热失控）时返回最后一次，`converged` 记假。没有 k_TH 时温度固定，只求一次。
+    （热失控）时返回最后一次，`converged` 记假。没有 k_TH 时温度固定，只求一次。`jacobian` 是上一次输运求解的 Jacobian
+    （ADR-066），每次输运求解后换成这次的。
     """
     tddb, sim = config.tddb, config.simulation
     for iteration in range(1, _THERMAL_MAX_ITERATIONS + 1):
-        transport = solve_transport(config, layout, defects, coupling, solver, temperature, occupancy)
+        transport = solve_transport(config, layout, defects, coupling, solver, temperature, occupancy, jacobian)
+        jacobian = carried_jacobian(transport)
         gap_current, gap_heat = gap_tunneling(transport, temperature, tddb.gap_tunneling_area)
         filament_current, filament_heat = filament(layout, sim.voltage)
         heat = np.empty(len(defects))
@@ -1245,6 +1275,7 @@ def run_tddb(
     coupling = IncrementalCoupling.build(solver, defects.positions, defects.field_side)
     thermal = tddb.thermal_conductivity is not None
     records: List[dict] = []
+    jacobian: Optional[CarriedJacobian] = None  # 上一步平均场牛顿法的 Jacobian（ADR-066），续跑时从头求
 
     while True:
         if checkpoint is not None:
@@ -1254,8 +1285,9 @@ def run_tddb(
                 steps_after_breakdown=steps_after_breakdown, rng=copy.deepcopy(rng),
             ))
         layout = conductor_layout(defects, coupling, solver, sim.voltage, tddb.transfer_integral)
-        step = _steady_state(config, layout, defects, coupling, solver, occupancy, temperature)
+        step = _steady_state(config, layout, defects, coupling, solver, occupancy, temperature, jacobian)
         transport, mf = step.transport, step.transport.result
+        jacobian = carried_jacobian(transport)
         occupancy = transport.occupancy
         # §6.3（ADR-054/060）：负极侧与正极侧导电簇连通即击穿；之后再跑 post_breakdown_steps 步，最后一条不再求生成率
         if breakdown_time is not None:

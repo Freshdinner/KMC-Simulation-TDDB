@@ -11,6 +11,8 @@
   （膜体内致密的空位网络）现在收敛；
 - 分组有限差分 Jacobian（ADR-058）：同一组的缺陷两两间距 > 1.25·L_z，全部缺陷各属一组；与逐列有限差分相对差 ≤ 5%，
   作牛顿迭代矩阵时线性收敛因子 ≤ 0.1；
+- 牛顿法的 Jacobian 交给下一次求解（ADR-066）：直接走牛顿法、不重求完整的 Jacobian，收敛到同一个不动点；Anderson
+  外推到上限也收敛不了时提前改用牛顿法；
 - 按机制、按缺陷分解之和 = 总电流；无缺陷时只剩 R1；
 - 电流连续（ADR-038）：强耦合分量被切开的致密体系上，负极净注入 = 正极净收集；
 - 零偏压平衡（ADR-038）：逐陷阱平均场里每一对陷阱的正反向通量相等（KMC 的 −U_ab 口径做不到）；
@@ -260,6 +262,48 @@ def test_newton_takes_over_when_anderson_stops(clustered, monkeypatch):
     assert result.iterations > len(mean_field._jacobian_groups(sim))  # 至少求过一次有限差分 Jacobian
     assert result.occupancy == pytest.approx(reference.occupancy, rel=1e-8, abs=1e-14)
     assert result.current == pytest.approx(reference.current, rel=1e-8)
+
+
+def test_carried_jacobian_goes_straight_to_newton(clustered, monkeypatch):
+    """沿用上一次求解的 Jacobian（ADR-066）：Anderson 自己收敛时不返回 Jacobian；牛顿法求解返回它最后用的 Jacobian。
+    交给下一次求解后不做 Anderson 混合、直接走牛顿法，从偏离不动点的初值收敛到同一个不动点，不重求完整的 Jacobian；
+    其中一列换成 −I 的那一列并标为要重求，同样收敛。"""
+    sim, reference = clustered
+    assert reference.jacobian is None
+    with monkeypatch.context() as patch:
+        patch.setattr(mean_field, "_ANDERSON_MAX_ITER", 2)
+        newton = solve_mean_field(sim)
+    assert newton.converged and newton.jacobian.shape == (sim.n_defects, sim.n_defects)
+    n_groups = len(mean_field._jacobian_groups(sim))
+    start = np.clip(reference.occupancy * np.exp(0.05 * np.sin(np.arange(sim.n_defects))), 0.0, 1.0)
+    k = int(sim.cluster_members[0][0])
+    stale = newton.jacobian.copy()
+    stale[:, k] = 0.0
+    stale[k, k] = -1.0
+    for jacobian, refresh in ((newton.jacobian, None), (stale, np.array([k]))):
+        result = solve_mean_field(sim, start, jacobian, refresh)
+        assert result.converged and result.newton_steps > 0 and result.iterations < n_groups
+        assert result.jacobian is not None
+        assert result.occupancy == pytest.approx(reference.occupancy, rel=1e-8, abs=1e-14)
+        assert result.current == pytest.approx(reference.current, rel=1e-8)
+
+
+def test_anderson_hands_over_early_when_it_cannot_reach_the_tolerance(monkeypatch):
+    """Anderson 按最近 10 次的平均下降率外推，到 `_ANDERSON_MAX_ITER` 次还到不了 `_TOL` 就提前改用牛顿法（ADR-066）。
+    ADR-046 what-if 的状态上 Anderson 不收敛：牛顿法 0 步时求 F 的次数（Anderson + 初值 1 次 + p̂(0) 与它的起点 2 次）
+    少于上限。"""
+    cap = mean_field._ANDERSON_MAX_ITER
+    assert not mean_field._anderson_too_slow([1.0] * 9, 1.0, 11)  # 历史不满 10 次不判
+    halving = [1e-2 * 0.5 ** k for k in range(10)]
+    assert not mean_field._anderson_too_slow(halving, 1e-2 * 0.5 ** 10, 12)  # 再 17 次到 _TOL
+    slow = [1e-3 * 0.9 ** k for k in range(10)]
+    assert mean_field._anderson_too_slow(slow, 1e-3 * 0.9 ** 10, 12)  # 再约 150 次
+    assert mean_field._anderson_too_slow([1e-3] * 10, 1e-3, 12)  # 不下降
+
+    sim, start = _whatif_state()
+    monkeypatch.setattr(mean_field, "_NEWTON_MAX_STEPS", 0)
+    result = solve_mean_field(sim, start)
+    assert not result.converged and result.iterations - 3 < cap
 
 
 def test_grouped_jacobian_is_close_enough_for_newton(clustered):
