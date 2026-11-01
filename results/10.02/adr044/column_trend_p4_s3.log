@@ -1,7 +1,0 @@
-p4_s3 column step 0.2500 nm: sum_G_cells=7.85890e+06 wall=2.1s
-p4_s3 column step 0.2000 nm: sum_G_cells=8.81646e+06 wall=2.4s
-p4_s3 column step 0.1600 nm: sum_G_cells=8.27685e+06 wall=2.6s
-p4_s3 column step 0.1250 nm: sum_G_cells=8.75284e+06 wall=4.2s
-p4_s3 column step 0.1000 nm: sum_G_cells=8.23091e+06 wall=5.6s
-p4_s3 column step 0.0800 nm: sum_G_cells=8.07958e+06 wall=8.1s
-p4_s3 column step 0.0625 nm: sum_G_cells=8.15893e+06 wall=12.4s

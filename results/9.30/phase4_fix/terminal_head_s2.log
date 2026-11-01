@@ -1,2 +1,0 @@
-head seed=2 U=3.00 N=410 J=3.565690e-01 A/cm2 conv=True it=8 | cathode_in=-2.0523e+09 anode_out=8.9021e+06 /s | P_diel=-7.4673e-11 P_cat=1.0141e-10 P_an=4.7785e-12 sum=3.1516e-11 W  U*I_trap=4.2788e-12 W  sum/UI=7.36564 diel/UI=-17.45 | clusters=47 max=8 largest=139 split=11 wall=87s
-head seed=2 U=0.00 N=410 J=1.434393e-06 A/cm2 conv=True it=13 | cathode_in=-1.9961e+07 anode_out=3.5811e+01 /s | P_diel=-1.7306e-12 P_cat=2.2518e-12 P_an=7.6101e-18 sum=5.2115e-13 W  U*I_trap=0.0000e+00 W  sum/UI=nan diel/UI=nan | clusters=49 max=8 largest=136 split=10 wall=102s

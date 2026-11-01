@@ -1,5 +1,0 @@
-z_i=4.00 nm ED=1.15 eV  ref G=3.647443e-01 /s  rel. error: default -7.65e-04, dr/2 -1.92e-04, polar48 -7.67e-04, az48 -7.65e-04
-z_i=4.00 nm ED=1.45 eV  ref G=3.578315e-03 /s  rel. error: default -4.91e-03, dr/2 -1.23e-03, polar48 -5.22e-03, az48 -4.91e-03
-z_i=0.80 nm ED=1.15 eV  ref G=3.642825e-01 /s  rel. error: default -7.73e-04, dr/2 -1.94e-04, polar48 -7.69e-04, az48 -7.73e-04
-z_i=0.80 nm ED=1.45 eV  ref G=3.578312e-03 /s  rel. error: default -4.91e-03, dr/2 -1.23e-03, polar48 -5.22e-03, az48 -4.91e-03
-z_i=0.62 nm ED=0.90 eV  ref G=6.007375e-01 /s  rel. error: default -9.54e-04, dr/2 -2.39e-04, polar48 -9.52e-04, az48 -9.54e-04

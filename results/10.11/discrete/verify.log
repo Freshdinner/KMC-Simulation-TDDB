@@ -1,8 +1,0 @@
-A. 332 sites (60 near occupied traps); electrode term vs engine probe R2+R4: max rel err 6.33e-14, median 3.77e-15; R_1e,electrode range 6.35e-21 – 9.42e+07 1/s
-   trap term vs direct sum over all occupied traps: max |diff| 1.04e-04 1/s (floor 1e-12); max rel err where > 1e-6 1/s 2.03e-10 (226 sites); trap term on near sites 3.48e+03 – 1.80e+10 1/s, electrode term there 6.34e+00 – 8.44e+07 1/s
-B. default config seed 1: N_T·V = 1750.0, 1747 sites kept (3 within 0.5 nm of the 60 initial defects); E_A mean 1.3019 eV, std 0.0970 eV
-   J0 = 0.541 A/cm2; sum G = 10.4 1/s (electrode 1.0000, trap 1.63e-05); generation_rates wall 2.11 s
-   z 0.5–1.0 nm:  121 sites, share of sum G 0.267, max G 0.537 1/s
-   z 1.0–1.5 nm:  130 sites, share of sum G 0.724, max G 1.62 1/s
-   z 1.5–2.0 nm:  117 sites, share of sum G 0.008, max G 0.0664 1/s
-   z 2.0–7.5 nm: 1379 sites, share of sum G 0.000, max G 1.68e-05 1/s

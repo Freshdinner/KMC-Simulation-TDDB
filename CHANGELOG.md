@@ -9,6 +9,10 @@ pytest 是否通过。格式与约定见 `CLAUDE.md`。实测数据与方案对�
 
 #### TDDB 阶段
 
+- **`results/` 不再入库**：`.gitignore` 加入 `/results/`，并用 `git rm -r --cached results` 取消跟踪已入库的 1739 个文件，本地文件保留，
+  历史提交里仍可找回。文档与 ADR 中引用的 `results/...` 路径此后只指向本地文件。
+  **为什么**：仿真结果与分析产物体量大、改动频繁，只留在本地。未改代码，未跑 pytest。
+
 - **平均场牛顿法的 Jacobian 沿用到下一步，Anderson 提前改用牛顿法（ADR-066）**：`mean_field.solve_mean_field` 返回牛顿法最后用的
   Jacobian（`MeanFieldResult.jacobian`），给了 Jacobian 时不做 Anderson、直接从热启动初值走牛顿法，只在起点重求新缺陷的列
   （`_newton` 的 `jacobian` / `refresh`，`_jacobian_columns`）；Anderson 按最近 10 次的残差下降率外推、到 50 次上限也收敛不了就提前停下

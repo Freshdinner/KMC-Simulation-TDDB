@@ -1,4 +1,0 @@
-state_s1_rc040.npz: 360 defects, 64 Jacobian groups
-grouped : 86 s, evaluations 138, newton steps 18, residual 2.7e-11, converged True, J 102.2988324 A/cm2
-column  : 266 s, evaluations 434, newton steps 18, residual 2.0e-11, converged True, J 102.2988324 A/cm2
-relative difference: current 1.4e-12, occupancy max 3.3e-11
